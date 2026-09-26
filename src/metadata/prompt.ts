@@ -1,0 +1,33 @@
+import type { StationCandidate } from "../stations/types";
+
+export function buildGeminiPrompt(transcription: string, candidates: readonly StationCandidate[]): string {
+  const stationCandidates = candidates.map(({ station, score }) => ({
+    name: station.name,
+    kana: station.kana,
+    lineName: station.lineName,
+    prefecture: station.prefecture,
+    prevStation: station.prevStation,
+    nextStation: station.nextStation,
+    score: Number(score.toFixed(3)),
+  }));
+  return `これは日本の鉄道駅構内放送の文字起こしです。
+
+明示されている情報のみ抽出してください。知識による補完は禁止です。
+例えば「根室行き」だからといって、路線名を花咲線と推測してはいけません。
+駅名・路線名・種別・行先・時刻・番線などは、文字起こしから十分判断できる場合のみ返してください。
+ASR誤認識を修正する場合も、文脈上かなり確実な場合に限定してください。
+departureTime / arrivalTime は HH:MM。時刻が明示されていなければ null です。
+summaryは15文字程度の日本語で、文学的な文章ではなく放送内容を端的に表現してください。
+例: 次は西和田 / 釧路到着 / 13時25分発 / 3番線接近 / ワンマン乗降案内
+
+stationCandidates は駅マスタ data/stations.csv から検索した候補です。
+駅名を自由生成しないでください。
+stationCandidates の候補と文字起こしが十分一致すると判断できる場合のみ、候補の正式な name を station として返してください。
+十分な候補がない場合は null を返してください。
+候補の lineName / prevStation / nextStation は判断材料として利用できますが、それだけを根拠に駅名を推測してはいけません。
+ASRに軽微な読み間違い・表記揺れがある場合は、候補との音韻的類似性が十分高ければ正式名称へ正規化して構いません。
+normalizedTranscriptionには、確実な軽微補正だけを反映した全文を返してください。rawを書き換える用途には使いません。
+
+入力:
+${JSON.stringify({ transcription, stationCandidates })}`;
+}
