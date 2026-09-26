@@ -1,0 +1,29 @@
+{
+  "name": "mitsubachi-ai-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:dry-run": "wrangler deploy --dry-run --outdir .wrangler-dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "stations:sql": "tsx scripts/import-stations.ts",
+    "discord:register": "tsx scripts/register-discord-commands.ts"
+  },
+  "dependencies": {
+    "hono": "^4.9.8",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.8.69",
+    "@types/node": "^24.5.2",
+    "typescript": "^5.9.2",
+    "tsx": "^4.20.6",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.40.2"
+  },
+  "packageManager": "pnpm@10.17.1"
+}
