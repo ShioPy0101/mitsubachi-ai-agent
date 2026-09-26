@@ -1,6 +1,6 @@
 # mitsubachi-ai-agent
 
-Cloudflare Workers上で動作する、日本の鉄道駅構内放送向けDiscord Botです。`/platform audio:<attachment>` で音声を受け取り、Workers AI Whisperで文字起こしし、D1の駅マスタ候補とGemini structured outputでメタデータ化します。検索は `/platform-search query:<text>` です。
+Cloudflare Workers上で動作する、日本の鉄道駅構内放送向けDiscord Botです。`/platform-ai-agent audio:<attachment>` で音声を受け取り、Workers AI Whisperで文字起こしし、D1の駅マスタ候補とGemini structured outputでメタデータ化します。検索は `/platform-search query:<text>` です。
 
 ## Setup
 

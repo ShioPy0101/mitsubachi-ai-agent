@@ -10,7 +10,7 @@ External values cross runtime-validation adapters before reaching domain code. G
 
 ## Flow
 
-1. `/platform audio:<attachment>` validates the interaction signature and attachment, inserts a job idempotently by Interaction ID, enqueues `{ jobId }`, and immediately returns a deferred ephemeral ACK.
+1. `/platform-ai-agent audio:<attachment>` validates the interaction signature and attachment, inserts a job idempotently by Interaction ID, enqueues `{ jobId }`, and immediately returns a deferred ephemeral ACK.
 2. `/platform-search query:<text>` performs a bounded repository search and returns an immediate ephemeral response.
 3. The Queue consumer reloads the interaction attachment reference from its short-lived table, downloads it with a configured byte cap, transcribes it through Workers AI, generates station candidates from D1, parses metadata through Gemini structured JSON plus Zod, stores the clip, and sends an Interaction follow-up.
 4. Whisper success followed by Gemini failure is stored as `partial`; other terminal failures are `failed` after retry policy is exhausted.

@@ -1,6 +1,6 @@
 import { DiscordAttachmentSchema, DiscordInteractionSchema, type DiscordAttachment } from "./schemas";
 
-export const PLATFORM_COMMAND_NAME = "platform";
+export const PLATFORM_COMMAND_NAME = "platform-ai-agent";
 export const SEARCH_COMMAND_NAME = "platform-search";
 const attachmentOptionType = 11;
 

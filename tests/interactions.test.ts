@@ -11,7 +11,7 @@ const interaction = {
   guild_id: "300",
   channel_id: "400",
   data: {
-    name: "platform",
+    name: "platform-ai-agent",
     options: [{ name: "audio", type: 11, value: "500" }],
     resolved: {
       attachments: {
@@ -25,7 +25,7 @@ const interaction = {
   },
 };
 
-describe("/platform interaction", () => {
+describe("/platform-ai-agent interaction", () => {
   it("parses the required attachment into the interaction source", () => {
     const result = parseShioCommand(interaction);
     expect(result.ok).toBe(true);
@@ -36,8 +36,24 @@ describe("/platform interaction", () => {
   });
 
   it("rejects a missing attachment", () => {
-    const result = parseShioCommand({ ...interaction, data: { name: "platform", options: [] } });
+    const result = parseShioCommand({ ...interaction, data: { name: "platform-ai-agent", options: [] } });
     expect(result).toEqual({ ok: false, error: "audio添付は必須です。" });
+  });
+
+  it("rejects commands other than platform-ai-agent", () => {
+    const result = parseShioCommand({ ...interaction, data: { ...interaction.data, name: "platform" } });
+    expect(result).toEqual({ ok: false, error: "未対応のコマンドです。" });
+  });
+
+  it("uses the audio option value as the resolved attachment ID", () => {
+    const result = parseShioCommand({
+      ...interaction,
+      data: {
+        ...interaction.data,
+        options: [{ name: "audio", type: 11, value: "501" }],
+      },
+    });
+    expect(result).toEqual({ ok: false, error: "audio添付を読み取れませんでした。" });
   });
 
   it("rejects unsupported MIME or extension combinations", () => {

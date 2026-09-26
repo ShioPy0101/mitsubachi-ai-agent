@@ -1,6 +1,6 @@
 export const discordCommands = [
   {
-    name: "platform",
+    name: "platform-ai-agent",
     description: "駅放送の音声を解析・整理します",
     type: 1,
     options: [
