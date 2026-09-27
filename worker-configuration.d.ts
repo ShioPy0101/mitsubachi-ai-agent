@@ -6,7 +6,7 @@ interface __BaseEnv_Env {
 	AUDIO_JOBS: Queue;
 	AI: Ai;
 	MAX_AUDIO_BYTES: "26214400";
-	GEMINI_MODEL: "gemini-3.8-flash";
+	GEMINI_MODEL: "gemini-3.1-flash-lite";
 	DISCORD_BOT_TOKEN: string;
 	DISCORD_PUBLIC_KEY: string;
 	DISCORD_APPLICATION_ID: string;
