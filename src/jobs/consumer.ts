@@ -16,6 +16,23 @@ import type { AudioJob, AudioJobMessage } from "./types";
 const AudioJobMessageSchema = z.object({ jobId: z.string().uuid() });
 const terminalStatuses = new Set(["completed", "partial", "failed"]);
 
+function errorDetails(error: unknown): { errorName: string; errorMessage: string } {
+  if (error instanceof Error) return { errorName: error.name, errorMessage: error.message };
+  return { errorName: "UnknownError", errorMessage: String(error) };
+}
+
+async function runStage<T>(jobId: string, stage: string, operation: () => Promise<T>): Promise<T> {
+  console.info("audio_job_stage_started", { jobId, stage });
+  try {
+    const result = await operation();
+    console.info("audio_job_stage_completed", { jobId, stage });
+    return result;
+  } catch (error) {
+    console.error("audio_job_stage_failed", { jobId, stage, ...errorDetails(error) });
+    throw error;
+  }
+}
+
 function maxAudioBytes(env: Env): number {
   const parsed = Number(env.MAX_AUDIO_BYTES);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 25 * 1024 * 1024;
@@ -37,25 +54,70 @@ function attachmentFor(job: AudioJob): { id: string; filename: string; size: num
   };
 }
 
+async function editOriginalResponse(
+  job: AudioJob,
+  content: string,
+  callbacks: CallbackSecretsRepository,
+  discord: DiscordRestClient,
+  kind: "progress" | "result",
+): Promise<boolean> {
+  const callback = await runStage(job.id, "discord_callback_lookup", () => callbacks.get(job.id));
+  if (callback !== null && Date.parse(callback.expiresAt) > Date.now()) {
+    try {
+      const result = await discord.editOriginalResponse(callback.token, content);
+      if (result.ok) {
+        console.info("audio_job_discord_original_edited", { jobId: job.id, kind });
+        return true;
+      } else {
+        console.error("audio_job_discord_original_edit_failed", {
+          jobId: job.id, kind, status: result.status, responseBody: result.responseBody,
+        });
+      }
+    } catch (error) {
+      console.error("audio_job_discord_original_edit_failed", { jobId: job.id, kind, ...errorDetails(error) });
+    }
+  } else {
+    console.warn("audio_job_discord_callback_unavailable", {
+      jobId: job.id,
+      kind,
+      reason: callback === null ? "missing" : "expired",
+    });
+  }
+  return false;
+}
+
+async function updateProgress(
+  job: AudioJob,
+  content: string,
+  callbacks: CallbackSecretsRepository,
+  discord: DiscordRestClient,
+): Promise<void> {
+  try {
+    await editOriginalResponse(job, content, callbacks, discord, "progress");
+  } catch (error) {
+    console.error("audio_job_progress_update_failed", { jobId: job.id, ...errorDetails(error) });
+  }
+}
+
 async function notify(
   job: AudioJob,
   content: string,
   callbacks: CallbackSecretsRepository,
   discord: DiscordRestClient,
 ): Promise<void> {
-  const callback = await callbacks.get(job.id);
-  let followedUp = false;
-  if (callback !== null && Date.parse(callback.expiresAt) > Date.now()) {
+  const originalEdited = await editOriginalResponse(job, content, callbacks, discord, "result");
+  if (!originalEdited && job.source.channelId !== null) {
     try {
-      followedUp = await discord.followUp(callback.token, content);
-    } catch {
-      followedUp = false;
-    }
-  }
-  if (!followedUp && job.source.channelId !== null) {
-    try {
-      await discord.sendChannelMessage(job.source.channelId, content);
-    } catch {
+      const result = await discord.sendChannelMessage(job.source.channelId, content);
+      if (result.ok) {
+        console.info("audio_job_discord_channel_sent", { jobId: job.id });
+      } else {
+        console.error("audio_job_discord_channel_send_failed", {
+          jobId: job.id, status: result.status, responseBody: result.responseBody,
+        });
+      }
+    } catch (error) {
+      console.error("audio_job_discord_channel_send_failed", { jobId: job.id, ...errorDetails(error) });
       // The terminal state remains queryable even when Discord is temporarily unavailable.
     }
   }
@@ -73,41 +135,48 @@ async function processJob(job: AudioJob, env: Env): Promise<void> {
   const discord = new DiscordRestClient(env.DISCORD_BOT_TOKEN, env.DISCORD_APPLICATION_ID);
   const attachment = attachmentFor(job);
   await jobs.updateStatus(job.id, "transcribing");
-  const audio = await discord.downloadTemporaryAttachment(attachment, maxAudioBytes(env));
-  const transcription = await new CloudflareWhisperTranscriptionService(env.AI).transcribe({
-    audio, contentType: job.contentType, filename: job.originalFilename,
-  });
+  await updateProgress(job, "音声ファイルを取得しています…", callbacks, discord);
+  const audio = await runStage(job.id, "attachment_download", () =>
+    discord.downloadTemporaryAttachment(attachment, maxAudioBytes(env)));
+  await updateProgress(job, "音声を文字起こししています…", callbacks, discord);
+  const transcription = await runStage(job.id, "whisper_transcription", () =>
+    new CloudflareWhisperTranscriptionService(env.AI).transcribe({
+      audio, contentType: job.contentType, filename: job.originalFilename,
+    }));
   await jobs.updateStatus(job.id, "metadata_extracting");
+  await updateProgress(job, "文字起こしが完了しました。駅候補とメタデータを解析しています…", callbacks, discord);
   let candidates: Awaited<ReturnType<StationCandidateService["candidates"]>>;
   let extracted: Awaited<ReturnType<GeminiMetadataService["extract"]>>;
   try {
     const candidateService = new StationCandidateService(new D1StationsRepository(env.DB));
-    candidates = await candidateService.candidates(transcription.text);
-    extracted = await new GeminiMetadataService(env.GEMINI_API_KEY, env.GEMINI_MODEL).extract(transcription.text, candidates);
-  } catch {
+    candidates = await runStage(job.id, "station_candidates", () => candidateService.candidates(transcription.text));
+    extracted = await runStage(job.id, "gemini_metadata", () =>
+      new GeminiMetadataService(env.GEMINI_API_KEY, env.GEMINI_MODEL).extract(transcription.text, candidates));
+  } catch (error) {
+    console.warn("audio_job_metadata_partial", { jobId: job.id, ...errorDetails(error) });
     const filename = generateRailwayFilename(1, emptyMetadata, job.originalFilename);
-    await clips.save({
+    await runStage(job.id, "partial_clip_save", () => clips.save({
       jobId: job.id, clipIndex: 1, rawTranscription: transcription.text, normalizedTranscription: null,
       metadata: emptyMetadata,
       resolution: { stationName: null, candidateStationId: null, confidence: 0, source: "unresolved" },
       generatedFilename: filename, createdAt: new Date().toISOString(),
-    });
+    }));
     await jobs.updateStatus(job.id, "partial", "metadata_extraction_failed");
     await notify(job, `文字起こしは完了しましたが、メタデータ解析に失敗しました。\n\n「${transcription.text.slice(0, 1200)}」`, callbacks, discord);
-    await jobs.clearEphemeral(job.id);
+    await runStage(job.id, "ephemeral_cleanup", () => jobs.clearEphemeral(job.id));
     return;
   }
   const resolution = resolveStation(candidates, extracted.metadata.station);
   const metadata = { ...extracted.metadata, station: resolution.stationName };
   const filename = generateRailwayFilename(1, metadata, job.originalFilename);
-  await clips.save({
+  await runStage(job.id, "clip_save", () => clips.save({
     jobId: job.id, clipIndex: 1, rawTranscription: transcription.text,
     normalizedTranscription: extracted.normalizedTranscription, metadata, resolution,
     generatedFilename: filename, createdAt: new Date().toISOString(),
-  });
+  }));
   await jobs.updateStatus(job.id, "completed");
   await notify(job, formatAnalysisResult(metadata, transcription.text, filename), callbacks, discord);
-  await jobs.clearEphemeral(job.id);
+  await runStage(job.id, "ephemeral_cleanup", () => jobs.clearEphemeral(job.id));
 }
 
 export async function consumeAudioJobs(batch: MessageBatch<AudioJobMessage>, env: Env): Promise<void> {
@@ -115,32 +184,60 @@ export async function consumeAudioJobs(batch: MessageBatch<AudioJobMessage>, env
   const callbacks = new CallbackSecretsRepository(env.DB);
   const discord = new DiscordRestClient(env.DISCORD_BOT_TOKEN, env.DISCORD_APPLICATION_ID);
   for (const message of batch.messages) {
+    console.info("audio_job_message_received", { queueMessageId: message.id, attempt: message.attempts });
     const parsed = AudioJobMessageSchema.safeParse(message.body);
     if (!parsed.success) {
+      console.error("audio_job_message_invalid", { queueMessageId: message.id, attempt: message.attempts });
       message.ack();
       continue;
     }
     const job = await jobs.findById(parsed.data.jobId);
     if (job === null || terminalStatuses.has(job.status)) {
+      console.info("audio_job_message_skipped", {
+        jobId: parsed.data.jobId,
+        queueMessageId: message.id,
+        attempt: message.attempts,
+        reason: job === null ? "missing" : `terminal_${job.status}`,
+      });
       message.ack();
       continue;
     }
     try {
       await processJob(job, env);
+      console.info("audio_job_message_acked", { jobId: job.id, queueMessageId: message.id, attempt: message.attempts });
       message.ack();
     } catch (error) {
+      const details = errorDetails(error);
       if (error instanceof AttachmentUnavailableError) {
+        console.error("audio_job_attachment_terminal", {
+          jobId: job.id, queueMessageId: message.id, attempt: message.attempts, ...details,
+        });
         await jobs.updateStatus(job.id, "failed", "attachment_unavailable");
         await notify(job, formatFailure("attachment_unavailable"), callbacks, discord);
         await jobs.clearEphemeral(job.id);
+        console.info("audio_job_message_acked", { jobId: job.id, queueMessageId: message.id, attempt: message.attempts });
         message.ack();
       } else if (message.attempts < 5) {
+        const delaySeconds = Math.min(300, 2 ** message.attempts * 5);
+        console.error("audio_job_message_retried", {
+          jobId: job.id, queueMessageId: message.id, attempt: message.attempts, delaySeconds, ...details,
+        });
         await jobs.updateStatus(job.id, "queued", "transient_processing_error");
-        message.retry({ delaySeconds: Math.min(300, 2 ** message.attempts * 5) });
+        await updateProgress(
+          job,
+          `処理中に一時的なエラーが発生しました。再試行を待っています（次回 ${message.attempts + 1}/5）…`,
+          callbacks,
+          discord,
+        );
+        message.retry({ delaySeconds });
       } else {
+        console.error("audio_job_processing_terminal", {
+          jobId: job.id, queueMessageId: message.id, attempt: message.attempts, ...details,
+        });
         await jobs.updateStatus(job.id, "failed", "processing_failed");
         await notify(job, formatFailure("processing_failed"), callbacks, discord);
         await jobs.clearEphemeral(job.id);
+        console.info("audio_job_message_acked", { jobId: job.id, queueMessageId: message.id, attempt: message.attempts });
         message.ack();
       }
     }

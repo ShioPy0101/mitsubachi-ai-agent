@@ -4,8 +4,12 @@ import type { MetadataResult, MetadataService } from "./service";
 import type { StationCandidate } from "../stations/types";
 
 export class GeminiApiError extends Error {
-  constructor(readonly status: number) {
-    super(`Gemini request failed with HTTP ${status}`);
+  constructor(
+    readonly status: number,
+    readonly responseBody: string,
+  ) {
+    super(`Gemini request failed with HTTP ${status}: ${responseBody}`);
+    this.name = "GeminiApiError";
   }
 }
 
@@ -34,7 +38,9 @@ export class GeminiMetadataService implements MetadataService {
         }),
       },
     );
-    if (!response.ok) throw new GeminiApiError(response.status);
+    if (!response.ok) {
+      throw new GeminiApiError(response.status, (await response.text()).slice(0, 500));
+    }
     const envelope = GeminiResponseSchema.parse(await response.json());
     const text = envelope.candidates[0]?.content.parts[0]?.text;
     if (text === undefined) throw new Error("Gemini response did not contain JSON text");

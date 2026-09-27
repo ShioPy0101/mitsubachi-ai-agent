@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GeminiMetadataService } from "../src/metadata/gemini";
+import { GeminiApiError, GeminiMetadataService } from "../src/metadata/gemini";
 import { buildGeminiPrompt } from "../src/metadata/prompt";
 import { RailwayAnnouncementSchema } from "../src/metadata/schema";
 import { scoreStation } from "../src/stations/candidate-service";
@@ -50,5 +50,18 @@ describe("Gemini metadata boundary", () => {
     const service = new GeminiMetadataService("secret", "gemini-test", fetcher);
     const result = await service.extract("次はいすずがおかです", [scoreStation(station, "いすずがおか", {})]);
     expect(result.metadata.station).toBeNull();
+  });
+
+  it("preserves Gemini HTTP error details for consumer logs", async () => {
+    const fetcher = async (): Promise<Response> => new Response(
+      '{"error":{"message":"API key not valid"}}',
+      { status: 400 },
+    );
+    const service = new GeminiMetadataService("invalid", "gemini-test", fetcher);
+
+    await expect(service.extract("test", [])).rejects.toEqual(new GeminiApiError(
+      400,
+      '{"error":{"message":"API key not valid"}}',
+    ));
   });
 });
