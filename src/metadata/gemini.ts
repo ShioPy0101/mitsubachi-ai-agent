@@ -15,11 +15,13 @@ export class GeminiApiError extends Error {
 
 export type HttpFetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
+const defaultFetcher: HttpFetcher = (input, init) => fetch(input, init);
+
 export class GeminiMetadataService implements MetadataService {
   constructor(
     private readonly apiKey: string,
     private readonly model: string,
-    private readonly fetcher: HttpFetcher = fetch,
+    private readonly fetcher: HttpFetcher = defaultFetcher,
   ) {}
 
   async extract(transcription: string, stationCandidates: readonly StationCandidate[]): Promise<MetadataResult> {

@@ -2,6 +2,20 @@ import { describe, expect, it, vi } from "vitest";
 import { DiscordRestClient } from "../src/discord/rest-client";
 
 describe("DiscordRestClient", () => {
+  it("does not bind the global fetch function to the client instance", async () => {
+    const globalFetcher = vi.fn(function (this: unknown) {
+      expect(this).not.toBeInstanceOf(DiscordRestClient);
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+    vi.stubGlobal("fetch", globalFetcher);
+    try {
+      const client = new DiscordRestClient("bot-token", "application-id");
+      await expect(client.editOriginalResponse("interaction-token", "working")).resolves.toEqual({ ok: true });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("edits the deferred original interaction response", async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
     const client = new DiscordRestClient("bot-token", "application-id", fetcher);

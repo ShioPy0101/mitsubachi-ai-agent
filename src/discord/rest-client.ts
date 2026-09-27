@@ -1,5 +1,7 @@
 import type { DiscordAttachment } from "./schemas";
 
+const defaultFetcher: typeof fetch = (input, init) => fetch(input, init);
+
 export class AttachmentUnavailableError extends Error {
   constructor(
     readonly reason: "attachment_too_large" | "attachment_unavailable",
@@ -27,7 +29,7 @@ export class DiscordRestClient {
   constructor(
     private readonly botToken: string,
     private readonly applicationId: string,
-    private readonly fetcher: typeof fetch = fetch,
+    private readonly fetcher: typeof fetch = defaultFetcher,
   ) {}
 
   async downloadTemporaryAttachment(attachment: DiscordAttachment, maximumBytes: number): Promise<ArrayBuffer> {
