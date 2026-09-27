@@ -32,7 +32,6 @@ describe("Workers AI response adapter", () => {
     expect(ai.inputs).toEqual([{
       audio: "AA==",
       task: "transcribe",
-      language: "ja",
       vad_filter: true,
     }]);
   });

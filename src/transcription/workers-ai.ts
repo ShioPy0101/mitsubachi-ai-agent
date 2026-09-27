@@ -25,7 +25,6 @@ export class CloudflareWhisperTranscriptionService implements TranscriptionServi
     const output = await this.ai.run("@cf/openai/whisper-large-v3-turbo", {
       audio: encodeBase64(input.audio),
       task: "transcribe",
-      language: "ja",
       vad_filter: true,
     });
     const parsed = WorkersAiWhisperResponseSchema.parse(output);
