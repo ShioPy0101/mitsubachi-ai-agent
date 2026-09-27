@@ -10,7 +10,7 @@ import { generateRailwayFilename } from "../railway/filename";
 import type { RailwayAnnouncementMetadata } from "../railway/types";
 import { StationCandidateService } from "../stations/candidate-service";
 import { resolveStation } from "../stations/resolver";
-import { CloudflareWhisperTranscriptionService } from "../transcription/workers-ai";
+import { CloudflareWhisperTranscriptionService, combineTranscriptionPasses } from "../transcription/workers-ai";
 import { formatAudioJobAlert } from "./alerts";
 import type { AudioJob, AudioJobMessage } from "./types";
 
@@ -68,6 +68,13 @@ async function sendAlert(
 function maxAudioBytes(env: Env): number {
   const parsed = Number(env.MAX_AUDIO_BYTES);
   return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 25 * 1024 * 1024;
+}
+
+function whisperLanguages(env: Env): string[] {
+  const configured = env.WHISPER_LANGUAGES?.split(",")
+    .map((language) => language.trim().toLowerCase())
+    .filter((language) => /^[a-z]{2,3}$/u.test(language));
+  return configured !== undefined && configured.length > 0 ? [...new Set(configured)].slice(0, 4) : ["ja", "en"];
 }
 
 function attachmentFor(job: AudioJob): { id: string; filename: string; size: number; url: string; contentType: string | null; durationSecs: number | null } {
@@ -176,12 +183,17 @@ async function processJob(job: AudioJob, env: Env, attempt: number): Promise<voi
     audio = await runStage(job.id, "attachment_download", () =>
       discord.downloadTemporaryAttachment(attachment, maxAudioBytes(env)));
     await updateProgress(job, "音声を文字起こししています…", callbacks, discord);
-    const transcription = await runStage(job.id, "whisper_transcription", () =>
-      new CloudflareWhisperTranscriptionService(env.AI).transcribe({
-        audio: audio as ArrayBuffer, contentType: job.contentType, filename: job.originalFilename,
-      }));
-    transcriptionText = transcription.text;
-    await runStage(job.id, "transcription_checkpoint", () => jobs.saveTranscription(job.id, transcription.text));
+    const transcriptionInput = {
+      audio: audio as ArrayBuffer, contentType: job.contentType, filename: job.originalFilename,
+    };
+    const transcriptionPasses = await Promise.all(whisperLanguages(env).map(async (language) => {
+      const transcription = await runStage(job.id, `whisper_transcription_${language}`, () =>
+        new CloudflareWhisperTranscriptionService(env.AI, language).transcribe(transcriptionInput));
+      return { language, text: transcription.text };
+    }));
+    const combinedTranscription = combineTranscriptionPasses(transcriptionPasses);
+    transcriptionText = combinedTranscription;
+    await runStage(job.id, "transcription_checkpoint", () => jobs.saveTranscription(job.id, combinedTranscription));
   } else {
     console.info("audio_job_transcription_checkpoint_reused", { jobId: job.id, attempt });
     await updateProgress(job, "保存済みの文字起こしを再利用して、メタデータ解析を再開しています…", callbacks, discord);

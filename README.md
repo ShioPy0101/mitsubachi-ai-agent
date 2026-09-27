@@ -6,6 +6,7 @@ Cloudflare Workers上で動作する、日本の鉄道駅構内放送向けDisco
 
 1. `pnpm install`
 2. `wrangler.jsonc` のD1 `database_id` を実値に変更
+   - `WHISPER_LANGUAGES` は多言語文字起こしのpassをカンマ区切りで指定します（既定値: `ja,en`、最大4言語）。
 3. D1 database、`mitsubachi-audio-jobs` Queue、DLQを作成
 4. `pnpm wrangler secret put DISCORD_APPLICATION_ID`、`DISCORD_BOT_TOKEN`、`DISCORD_PUBLIC_KEY`、`GEMINI_API_KEY`
    - 任意: `pnpm wrangler secret put DISCORD_ALERT_CHANNEL_ID` を設定すると、処理エラーの詳細をそのDiscordチャンネルへ通知します。

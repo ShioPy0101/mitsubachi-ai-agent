@@ -29,6 +29,7 @@
   },
   "vars": {
     "MAX_AUDIO_BYTES": "26214400",
+    "WHISPER_LANGUAGES": "ja,en",
     "GEMINI_MODEL": "gemini-3.1-flash-lite"
   }
 }

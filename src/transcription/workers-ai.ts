@@ -19,12 +19,16 @@ function encodeBase64(buffer: ArrayBuffer): string {
 }
 
 export class CloudflareWhisperTranscriptionService implements TranscriptionService {
-  constructor(private readonly ai: WhisperAiRunner) {}
+  constructor(
+    private readonly ai: WhisperAiRunner,
+    private readonly language?: string,
+  ) {}
 
   async transcribe(input: TranscriptionInput): Promise<TranscriptionResult> {
     const output = await this.ai.run("@cf/openai/whisper-large-v3-turbo", {
       audio: encodeBase64(input.audio),
       task: "transcribe",
+      ...(this.language === undefined ? {} : { language: this.language }),
       vad_filter: true,
     });
     const parsed = WorkersAiWhisperResponseSchema.parse(output);
@@ -38,4 +42,11 @@ export class CloudflareWhisperTranscriptionService implements TranscriptionServi
       })),
     };
   }
+}
+
+export function combineTranscriptionPasses(passes: readonly { language: string; text: string }[]): string {
+  return passes
+    .filter(({ text }) => text.trim().length > 0)
+    .map(({ language, text }) => `[${language}]\n${text.trim()}`)
+    .join("\n\n");
 }
