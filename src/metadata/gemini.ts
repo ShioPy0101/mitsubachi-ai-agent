@@ -13,6 +13,10 @@ export class GeminiApiError extends Error {
   }
 }
 
+export function isRetryableGeminiError(error: unknown): boolean {
+  return !(error instanceof GeminiApiError) || error.status === 429 || error.status >= 500;
+}
+
 export type HttpFetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 const defaultFetcher: HttpFetcher = (input, init) => fetch(input, init);

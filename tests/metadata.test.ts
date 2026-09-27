@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { GeminiApiError, GeminiMetadataService } from "../src/metadata/gemini";
+import { GeminiApiError, GeminiMetadataService, isRetryableGeminiError } from "../src/metadata/gemini";
 import { buildGeminiPrompt } from "../src/metadata/prompt";
 import { RailwayAnnouncementSchema } from "../src/metadata/schema";
 import { scoreStation } from "../src/stations/candidate-service";
@@ -63,5 +63,13 @@ describe("Gemini metadata boundary", () => {
       400,
       '{"error":{"message":"API key not valid"}}',
     ));
+  });
+
+  it("retries temporary Gemini failures but not deterministic client errors", () => {
+    expect(isRetryableGeminiError(new GeminiApiError(503, "high demand"))).toBe(true);
+    expect(isRetryableGeminiError(new GeminiApiError(429, "rate limited"))).toBe(true);
+    expect(isRetryableGeminiError(new TypeError("network failure"))).toBe(true);
+    expect(isRetryableGeminiError(new GeminiApiError(404, "model unavailable"))).toBe(false);
+    expect(isRetryableGeminiError(new GeminiApiError(400, "invalid schema"))).toBe(false);
   });
 });

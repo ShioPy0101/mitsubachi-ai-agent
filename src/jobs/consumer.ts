@@ -5,7 +5,7 @@ import { JobsRepository } from "../db/jobs-repository";
 import { D1StationsRepository } from "../db/stations-repository";
 import { AttachmentUnavailableError, DiscordRestClient } from "../discord/rest-client";
 import { formatAnalysisResult, formatFailure } from "../discord/messages";
-import { GeminiMetadataService } from "../metadata/gemini";
+import { GeminiMetadataService, isRetryableGeminiError } from "../metadata/gemini";
 import { generateRailwayFilename } from "../railway/filename";
 import type { RailwayAnnouncementMetadata } from "../railway/types";
 import { StationCandidateService } from "../stations/candidate-service";
@@ -177,14 +177,14 @@ async function processJob(job: AudioJob, env: Env, attempt: number): Promise<voi
     }));
   await jobs.updateStatus(job.id, "metadata_extracting");
   await updateProgress(job, "文字起こしが完了しました。駅候補とメタデータを解析しています…", callbacks, discord);
-  let candidates: Awaited<ReturnType<StationCandidateService["candidates"]>>;
+  const candidateService = new StationCandidateService(new D1StationsRepository(env.DB));
+  const candidates = await runStage(job.id, "station_candidates", () => candidateService.candidates(transcription.text));
   let extracted: Awaited<ReturnType<GeminiMetadataService["extract"]>>;
   try {
-    const candidateService = new StationCandidateService(new D1StationsRepository(env.DB));
-    candidates = await runStage(job.id, "station_candidates", () => candidateService.candidates(transcription.text));
     extracted = await runStage(job.id, "gemini_metadata", () =>
       new GeminiMetadataService(env.GEMINI_API_KEY, env.GEMINI_MODEL).extract(transcription.text, candidates));
   } catch (error) {
+    if (isRetryableGeminiError(error)) throw error;
     console.warn("audio_job_metadata_partial", { jobId: job.id, ...errorDetails(error) });
     await sendAlert(env, discord, job.id, errorStage(error, "metadata_processing"), error, attempt);
     const filename = generateRailwayFilename(1, emptyMetadata, job.originalFilename);
