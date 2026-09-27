@@ -38,6 +38,11 @@ describe("Gemini metadata boundary", () => {
     expect(prompt).toContain("駅名を自由生成しないでください");
     expect(prompt).toContain('"name":"五十鈴ヶ丘"');
     expect(prompt).toContain("departureTime / arrivalTime は HH:MM");
+    expect(prompt).toContain("「鶴ヶ方面」→「敦賀方面」");
+    expect(prompt).toContain("梅田・なんば・天王寺方面、なかもず行");
+    expect(prompt).toContain("黄色い点字ブロック");
+    expect(prompt).toContain("案内ブロックが連続して完全に繰り返されている場合");
+    expect(prompt).toContain("時刻・番線・行先などが異なる繰り返しは削除しない");
   });
 
   it("drops a station returned outside the supplied candidates", async () => {
