@@ -11,10 +11,12 @@ import type { RailwayAnnouncementMetadata } from "../railway/types";
 import { StationCandidateService } from "../stations/candidate-service";
 import { resolveStation } from "../stations/resolver";
 import { CloudflareWhisperTranscriptionService } from "../transcription/workers-ai";
+import { formatAudioJobAlert } from "./alerts";
 import type { AudioJob, AudioJobMessage } from "./types";
 
 const AudioJobMessageSchema = z.object({ jobId: z.string().uuid() });
 const terminalStatuses = new Set(["completed", "partial", "failed"]);
+const errorStages = new WeakMap<object, string>();
 
 function errorDetails(error: unknown): { errorName: string; errorMessage: string } {
   if (error instanceof Error) return { errorName: error.name, errorMessage: error.message };
@@ -28,8 +30,38 @@ async function runStage<T>(jobId: string, stage: string, operation: () => Promis
     console.info("audio_job_stage_completed", { jobId, stage });
     return result;
   } catch (error) {
+    if (typeof error === "object" && error !== null) errorStages.set(error, stage);
     console.error("audio_job_stage_failed", { jobId, stage, ...errorDetails(error) });
     throw error;
+  }
+}
+
+function errorStage(error: unknown, fallback: string): string {
+  return typeof error === "object" && error !== null ? errorStages.get(error) ?? fallback : fallback;
+}
+
+async function sendAlert(
+  env: Env,
+  discord: DiscordRestClient,
+  jobId: string,
+  stage: string,
+  error: unknown,
+  attempt?: number,
+): Promise<void> {
+  const channelId = env.DISCORD_ALERT_CHANNEL_ID?.trim();
+  if (!channelId) return;
+  const details = errorDetails(error);
+  try {
+    const result = await discord.sendChannelMessage(channelId, formatAudioJobAlert({
+      jobId, stage, ...(attempt === undefined ? {} : { attempt }), ...details,
+    }));
+    if (!result.ok) {
+      console.error("audio_job_alert_failed", {
+        jobId, stage, status: result.status, responseBody: result.responseBody,
+      });
+    }
+  } catch (alertError) {
+    console.error("audio_job_alert_failed", { jobId, stage, ...errorDetails(alertError) });
   }
 }
 
@@ -128,7 +160,7 @@ const emptyMetadata: RailwayAnnouncementMetadata = {
   departureTime: null, arrivalTime: null, platform: null, nextStation: null, category: "other", summary: null,
 };
 
-async function processJob(job: AudioJob, env: Env): Promise<void> {
+async function processJob(job: AudioJob, env: Env, attempt: number): Promise<void> {
   const jobs = new JobsRepository(env.DB);
   const callbacks = new CallbackSecretsRepository(env.DB);
   const clips = new ClipsRepository(env.DB);
@@ -154,6 +186,7 @@ async function processJob(job: AudioJob, env: Env): Promise<void> {
       new GeminiMetadataService(env.GEMINI_API_KEY, env.GEMINI_MODEL).extract(transcription.text, candidates));
   } catch (error) {
     console.warn("audio_job_metadata_partial", { jobId: job.id, ...errorDetails(error) });
+    await sendAlert(env, discord, job.id, errorStage(error, "metadata_processing"), error, attempt);
     const filename = generateRailwayFilename(1, emptyMetadata, job.originalFilename);
     await runStage(job.id, "partial_clip_save", () => clips.save({
       jobId: job.id, clipIndex: 1, rawTranscription: transcription.text, normalizedTranscription: null,
@@ -203,11 +236,14 @@ export async function consumeAudioJobs(batch: MessageBatch<AudioJobMessage>, env
       continue;
     }
     try {
-      await processJob(job, env);
+      await processJob(job, env, message.attempts);
       console.info("audio_job_message_acked", { jobId: job.id, queueMessageId: message.id, attempt: message.attempts });
       message.ack();
     } catch (error) {
       const details = errorDetails(error);
+      if (error instanceof AttachmentUnavailableError || message.attempts === 1 || message.attempts >= 5) {
+        await sendAlert(env, discord, job.id, errorStage(error, "processing"), error, message.attempts);
+      }
       if (error instanceof AttachmentUnavailableError) {
         console.error("audio_job_attachment_terminal", {
           jobId: job.id, queueMessageId: message.id, attempt: message.attempts, ...details,

@@ -58,7 +58,7 @@ export class DiscordRestClient {
     const response = await this.fetcher(`https://discord.com/api/v10/channels/${channelId}/messages`, {
       method: "POST",
       headers: { Authorization: `Bot ${this.botToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, allowed_mentions: { parse: [] } }),
     });
     return apiResult(response);
   }

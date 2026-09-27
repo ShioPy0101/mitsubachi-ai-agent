@@ -12,6 +12,7 @@ interface __BaseEnv_Env {
 	DISCORD_APPLICATION_ID: string;
 	GEMINI_API_KEY: string;
 	DISCORD_DEV_GUILD_ID: string;
+	DISCORD_ALERT_CHANNEL_ID?: string;
 }
 declare namespace Cloudflare {
 	interface GlobalProps {
