@@ -29,7 +29,6 @@ export class D1StationsRepository implements StationRepository {
       FROM stations
       WHERE instr(?, normalized_name) > 0
          OR instr(?, normalized_kana) > 0
-         OR normalized_name LIKE '%' || ? || '%'
          OR normalized_kana LIKE ? || '%'
          OR (? IS NOT NULL AND line_name = ?)
          OR (? IS NOT NULL AND prefecture = ?)
@@ -41,7 +40,7 @@ export class D1StationsRepository implements StationRepository {
         abs(length(COALESCE(normalized_kana, normalized_name)) - length(?))
       LIMIT ?
     `).bind(
-      searchText, searchText, searchText, prefix,
+      searchText, searchText, prefix,
       context.lineName ?? null, context.lineName ?? null,
       context.prefecture ?? null, context.prefecture ?? null,
       context.previousStation ?? null, context.previousStation ?? null, context.previousStation ?? null,
