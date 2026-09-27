@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isSupportedAudioAttachment } from "../src/discord/attachments";
-import { deferredEphemeralResponse, parseShioCommand } from "../src/discord/interactions";
+import { deferredResponse, parseShioCommand } from "../src/discord/interactions";
 import { verifyDiscordSignature } from "../src/discord/signatures";
 
 const interaction = {
@@ -71,9 +71,9 @@ describe("/platform-ai-agent interaction", () => {
     })).toBe(false);
   });
 
-  it("creates the Discord deferred ephemeral ACK", async () => {
-    const response = deferredEphemeralResponse();
-    expect(await response.json()).toEqual({ type: 5, data: { flags: 64 } });
+  it("creates a public Discord deferred ACK", async () => {
+    const response = deferredResponse();
+    expect(await response.json()).toEqual({ type: 5 });
   });
 
   it("rejects malformed signatures", async () => {

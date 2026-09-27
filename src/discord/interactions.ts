@@ -42,8 +42,8 @@ export function parseShioCommand(input: unknown): CommandParseResult {
   };
 }
 
-export const deferredEphemeralResponse = (): Response =>
-  Response.json({ type: 5, data: { flags: 64 } });
+export const deferredResponse = (): Response =>
+  Response.json({ type: 5 });
 
 export const ephemeralErrorResponse = (content: string): Response =>
   Response.json({ type: 4, data: { content, flags: 64 } });

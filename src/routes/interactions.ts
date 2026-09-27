@@ -8,7 +8,7 @@ import {
 } from "../discord/schemas";
 import {
   SEARCH_COMMAND_NAME,
-  deferredEphemeralResponse,
+  deferredResponse,
   ephemeralErrorResponse,
   parseShioCommand,
 } from "../discord/interactions";
@@ -106,7 +106,7 @@ interactionRoutes.post("/interactions", async (context) => {
       },
       now.toISOString(),
     );
-    return deferredEphemeralResponse();
+    return deferredResponse();
   } catch {
     return ephemeralErrorResponse("処理を受け付けられませんでした。時間をおいて再実行してください。");
   }
