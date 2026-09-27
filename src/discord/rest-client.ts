@@ -16,6 +16,12 @@ export type DiscordApiResult =
   | { ok: true }
   | { ok: false; status: number; responseBody: string };
 
+export type DiscordFile = {
+  data: ArrayBuffer;
+  filename: string;
+  contentType: string | null;
+};
+
 async function apiResult(response: Response): Promise<DiscordApiResult> {
   if (response.ok) return { ok: true };
   return {
@@ -23,6 +29,24 @@ async function apiResult(response: Response): Promise<DiscordApiResult> {
     status: response.status,
     responseBody: (await response.text()).slice(0, 500),
   };
+}
+
+function messagePayload(content: string, file?: DiscordFile): { body: BodyInit; contentTypeHeader?: string } {
+  const payload = { content, allowed_mentions: { parse: [] } };
+  if (file === undefined) {
+    return { body: JSON.stringify(payload), contentTypeHeader: "application/json" };
+  }
+  const form = new FormData();
+  form.set("payload_json", JSON.stringify({
+    ...payload,
+    attachments: [{ id: 0, filename: file.filename }],
+  }));
+  form.set("files[0]", new File(
+    [file.data],
+    file.filename,
+    { type: file.contentType ?? "application/octet-stream" },
+  ));
+  return { body: form };
 }
 
 export class DiscordRestClient {
@@ -45,20 +69,24 @@ export class DiscordRestClient {
     return body;
   }
 
-  async editOriginalResponse(token: string, content: string): Promise<DiscordApiResult> {
+  async editOriginalResponse(token: string, content: string, file?: DiscordFile): Promise<DiscordApiResult> {
+    const payload = messagePayload(content, file);
     const response = await this.fetcher(`https://discord.com/api/v10/webhooks/${this.applicationId}/${token}/messages/@original`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content }),
+      ...(payload.contentTypeHeader === undefined ? {} : { headers: { "Content-Type": payload.contentTypeHeader } }),
+      body: payload.body,
     });
     return apiResult(response);
   }
 
-  async sendChannelMessage(channelId: string, content: string): Promise<DiscordApiResult> {
+  async sendChannelMessage(channelId: string, content: string, file?: DiscordFile): Promise<DiscordApiResult> {
+    const payload = messagePayload(content, file);
     const response = await this.fetcher(`https://discord.com/api/v10/channels/${channelId}/messages`, {
       method: "POST",
-      headers: { Authorization: `Bot ${this.botToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ content, allowed_mentions: { parse: [] } }),
+      headers: payload.contentTypeHeader === undefined
+        ? { Authorization: `Bot ${this.botToken}` }
+        : { Authorization: `Bot ${this.botToken}`, "Content-Type": payload.contentTypeHeader },
+      body: payload.body,
     });
     return apiResult(response);
   }

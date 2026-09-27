@@ -3,7 +3,7 @@ import { CallbackSecretsRepository } from "../db/callback-secrets-repository";
 import { ClipsRepository } from "../db/clips-repository";
 import { JobsRepository } from "../db/jobs-repository";
 import { D1StationsRepository } from "../db/stations-repository";
-import { AttachmentUnavailableError, DiscordRestClient } from "../discord/rest-client";
+import { AttachmentUnavailableError, DiscordRestClient, type DiscordFile } from "../discord/rest-client";
 import { formatAnalysisResult, formatFailure } from "../discord/messages";
 import { GeminiMetadataService, isRetryableGeminiError } from "../metadata/gemini";
 import { generateRailwayFilename } from "../railway/filename";
@@ -92,11 +92,12 @@ async function editOriginalResponse(
   callbacks: CallbackSecretsRepository,
   discord: DiscordRestClient,
   kind: "progress" | "result",
+  file?: DiscordFile,
 ): Promise<boolean> {
   const callback = await runStage(job.id, "discord_callback_lookup", () => callbacks.get(job.id));
   if (callback !== null && Date.parse(callback.expiresAt) > Date.now()) {
     try {
-      const result = await discord.editOriginalResponse(callback.token, content);
+      const result = await discord.editOriginalResponse(callback.token, content, file);
       if (result.ok) {
         console.info("audio_job_discord_original_edited", { jobId: job.id, kind });
         return true;
@@ -136,11 +137,12 @@ async function notify(
   content: string,
   callbacks: CallbackSecretsRepository,
   discord: DiscordRestClient,
+  file?: DiscordFile,
 ): Promise<void> {
-  const originalEdited = await editOriginalResponse(job, content, callbacks, discord, "result");
+  const originalEdited = await editOriginalResponse(job, content, callbacks, discord, "result", file);
   if (!originalEdited && job.source.channelId !== null) {
     try {
-      const result = await discord.sendChannelMessage(job.source.channelId, content);
+      const result = await discord.sendChannelMessage(job.source.channelId, content, file);
       if (result.ok) {
         console.info("audio_job_discord_channel_sent", { jobId: job.id });
       } else {
@@ -166,36 +168,45 @@ async function processJob(job: AudioJob, env: Env, attempt: number): Promise<voi
   const clips = new ClipsRepository(env.DB);
   const discord = new DiscordRestClient(env.DISCORD_BOT_TOKEN, env.DISCORD_APPLICATION_ID);
   const attachment = attachmentFor(job);
-  await jobs.updateStatus(job.id, "transcribing");
-  await updateProgress(job, "音声ファイルを取得しています…", callbacks, discord);
-  const audio = await runStage(job.id, "attachment_download", () =>
-    discord.downloadTemporaryAttachment(attachment, maxAudioBytes(env)));
-  await updateProgress(job, "音声を文字起こししています…", callbacks, discord);
-  const transcription = await runStage(job.id, "whisper_transcription", () =>
-    new CloudflareWhisperTranscriptionService(env.AI).transcribe({
-      audio, contentType: job.contentType, filename: job.originalFilename,
-    }));
+  let audio: ArrayBuffer | null = null;
+  let transcriptionText = job.transcriptionText;
+  if (transcriptionText === null) {
+    await jobs.updateStatus(job.id, "transcribing");
+    await updateProgress(job, "音声ファイルを取得しています…", callbacks, discord);
+    audio = await runStage(job.id, "attachment_download", () =>
+      discord.downloadTemporaryAttachment(attachment, maxAudioBytes(env)));
+    await updateProgress(job, "音声を文字起こししています…", callbacks, discord);
+    const transcription = await runStage(job.id, "whisper_transcription", () =>
+      new CloudflareWhisperTranscriptionService(env.AI).transcribe({
+        audio: audio as ArrayBuffer, contentType: job.contentType, filename: job.originalFilename,
+      }));
+    transcriptionText = transcription.text;
+    await runStage(job.id, "transcription_checkpoint", () => jobs.saveTranscription(job.id, transcription.text));
+  } else {
+    console.info("audio_job_transcription_checkpoint_reused", { jobId: job.id, attempt });
+    await updateProgress(job, "保存済みの文字起こしを再利用して、メタデータ解析を再開しています…", callbacks, discord);
+  }
   await jobs.updateStatus(job.id, "metadata_extracting");
   await updateProgress(job, "文字起こしが完了しました。駅候補とメタデータを解析しています…", callbacks, discord);
   const candidateService = new StationCandidateService(new D1StationsRepository(env.DB));
-  const candidates = await runStage(job.id, "station_candidates", () => candidateService.candidates(transcription.text));
+  const candidates = await runStage(job.id, "station_candidates", () => candidateService.candidates(transcriptionText));
   let extracted: Awaited<ReturnType<GeminiMetadataService["extract"]>>;
   try {
     extracted = await runStage(job.id, "gemini_metadata", () =>
-      new GeminiMetadataService(env.GEMINI_API_KEY, env.GEMINI_MODEL).extract(transcription.text, candidates));
+      new GeminiMetadataService(env.GEMINI_API_KEY, env.GEMINI_MODEL).extract(transcriptionText, candidates));
   } catch (error) {
     if (isRetryableGeminiError(error)) throw error;
     console.warn("audio_job_metadata_partial", { jobId: job.id, ...errorDetails(error) });
     await sendAlert(env, discord, job.id, errorStage(error, "metadata_processing"), error, attempt);
     const filename = generateRailwayFilename(1, emptyMetadata, job.originalFilename);
     await runStage(job.id, "partial_clip_save", () => clips.save({
-      jobId: job.id, clipIndex: 1, rawTranscription: transcription.text, normalizedTranscription: null,
+      jobId: job.id, clipIndex: 1, rawTranscription: transcriptionText, normalizedTranscription: null,
       metadata: emptyMetadata,
       resolution: { stationName: null, candidateStationId: null, confidence: 0, source: "unresolved" },
       generatedFilename: filename, createdAt: new Date().toISOString(),
     }));
     await jobs.updateStatus(job.id, "partial", "metadata_extraction_failed");
-    await notify(job, `文字起こしは完了しましたが、メタデータ解析に失敗しました。\n\n「${transcription.text.slice(0, 1200)}」`, callbacks, discord);
+    await notify(job, `文字起こしは完了しましたが、メタデータ解析に失敗しました。\n\n「${transcriptionText.slice(0, 1200)}」`, callbacks, discord);
     await runStage(job.id, "ephemeral_cleanup", () => jobs.clearEphemeral(job.id));
     return;
   }
@@ -203,12 +214,23 @@ async function processJob(job: AudioJob, env: Env, attempt: number): Promise<voi
   const metadata = { ...extracted.metadata, station: resolution.stationName };
   const filename = generateRailwayFilename(1, metadata, job.originalFilename);
   await runStage(job.id, "clip_save", () => clips.save({
-    jobId: job.id, clipIndex: 1, rawTranscription: transcription.text,
+    jobId: job.id, clipIndex: 1, rawTranscription: transcriptionText,
     normalizedTranscription: extracted.normalizedTranscription, metadata, resolution,
     generatedFilename: filename, createdAt: new Date().toISOString(),
   }));
+  if (audio === null) {
+    await updateProgress(job, "解析済みの音声ファイルを添付しています…", callbacks, discord);
+    audio = await runStage(job.id, "attachment_download_for_result", () =>
+      discord.downloadTemporaryAttachment(attachment, maxAudioBytes(env)));
+  }
   await jobs.updateStatus(job.id, "completed");
-  await notify(job, formatAnalysisResult(metadata, transcription.text, filename), callbacks, discord);
+  await notify(
+    job,
+    formatAnalysisResult(metadata, extracted.normalizedTranscription, filename),
+    callbacks,
+    discord,
+    { data: audio, filename, contentType: job.contentType },
+  );
   await runStage(job.id, "ephemeral_cleanup", () => jobs.clearEphemeral(job.id));
 }
 

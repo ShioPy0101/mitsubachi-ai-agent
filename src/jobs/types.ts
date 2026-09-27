@@ -29,6 +29,7 @@ export type AudioJob = {
   durationSecs: number | null;
   status: JobStatus;
   errorMessage: string | null;
+  transcriptionText: string | null;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;

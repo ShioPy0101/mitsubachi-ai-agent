@@ -17,7 +17,7 @@ export function formatAnalysisResult(
     time,
     metadata.summary,
     "",
-    `文字起こし:\n「${transcription.slice(0, 1200)}」`,
+    `補正文字起こし:\n「${transcription.slice(0, 1200)}」`,
     metadata.station === null ? null : `駅名候補: ${metadata.station}`,
     `ファイル名: ${filename}`,
   ].filter((line): line is string => line !== null).join("\n");

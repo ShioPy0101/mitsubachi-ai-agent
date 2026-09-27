@@ -20,6 +20,7 @@ const job: AudioJob = {
   durationSecs: input.durationSecs,
   status: "queued",
   errorMessage: null,
+  transcriptionText: null,
   createdAt: "2026-01-01T00:00:00.000Z",
   startedAt: null,
   completedAt: null,

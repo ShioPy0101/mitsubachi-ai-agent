@@ -12,7 +12,7 @@ External values cross runtime-validation adapters before reaching domain code. G
 
 1. `/platform-ai-agent audio:<attachment>` validates the interaction signature and attachment, inserts a job idempotently by Interaction ID, enqueues `{ jobId }`, and immediately returns a deferred ephemeral ACK.
 2. `/platform-search query:<text>` performs a bounded repository search and returns an immediate ephemeral response.
-3. The Queue consumer reloads the interaction attachment reference from its short-lived table, downloads it with a configured byte cap, transcribes it through Workers AI, generates station candidates from D1, parses metadata through Gemini structured JSON plus Zod, stores the clip, and sends an Interaction follow-up.
+3. The Queue consumer reloads the interaction attachment reference from its short-lived table, downloads it with a configured byte cap, transcribes it through Workers AI, checkpoints the raw transcription for retry, generates station candidates from D1, parses metadata through Gemini structured JSON plus Zod, stores the clip, and edits the Interaction response with the normalized transcription and renamed audio attachment.
 4. Whisper success followed by Gemini failure is stored as `partial`; other terminal failures are `failed` after retry policy is exhausted.
 
 ## Decisions and technical risks
@@ -22,6 +22,7 @@ External values cross runtime-validation adapters before reaching domain code. G
 - **Slash attachments:** an attachment command invocation does not expose a durable source message ID. Its Interaction ID plus attachment ID is the stable identity. The received CDN URL and follow-up token live in dedicated short-lived tables, are excluded from search/domain metadata, and are deleted after terminal notification or expiry cleanup. If queue delay exceeds Discord's webhook-token lifetime and a channel is available, the bot falls back to a channel message.
 - **Audio limits/chunking:** the MVP passes one bounded `ArrayBuffer` to Whisper. `TranscriptionService` supports chunk arrays, but byte splitting is intentionally not implemented because arbitrary compressed-audio byte chunks are invalid. Real long-audio chunking needs a Workers-compatible media segmenter or upstream segmentation.
 - **Gemini:** Gemini is only a metadata parser/normalizer. It receives a JSON schema, a non-inference prompt, and its JSON is parsed with Zod. Filenames are deterministic domain output.
+- **Retry checkpoint:** A successful Whisper transcription is stored on the job. Transient Gemini or D1 failures resume from that text instead of paying for and waiting on Whisper again. Audio bytes remain ephemeral and are re-downloaded only when a retried job needs to attach the result.
 - **Reprocessing:** the normal insert path is idempotent. Explicit reprocess is not exposed in the MVP; when added it must create a distinct attempt record rather than weaken the unique Discord attachment constraint.
 - **Search:** MVP uses escaped `LIKE` predicates behind `ClipsRepository`; moving to FTS5 does not affect command/domain code.
 - **Source links:** Slash-command uploads have no durable Discord message URL. Search can return analysis records and generated names, but cannot offer a jump link to an invocation message. A future message-ingestion feature must add its own durable message source model.

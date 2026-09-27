@@ -15,6 +15,7 @@ const JobRowSchema = z.object({
   duration_secs: z.number().nullable(),
   status: z.enum(jobStatuses),
   error_message: z.string().nullable(),
+  transcription_text: z.string().nullable(),
   created_at: z.string(),
   started_at: z.string().nullable(),
   completed_at: z.string().nullable(),
@@ -32,6 +33,7 @@ function toJob(rowInput: unknown): AudioJob {
     durationSecs: row.duration_secs,
     status: row.status,
     errorMessage: row.error_message,
+    transcriptionText: row.transcription_text,
     createdAt: row.created_at,
     startedAt: row.started_at,
     completedAt: row.completed_at,
@@ -127,6 +129,13 @@ export class JobsRepository {
     await this.db
       .prepare(`UPDATE audio_jobs SET status = ?, error_message = ?, started_at = COALESCE(started_at, ?), completed_at = COALESCE(?, completed_at) WHERE id = ?`)
       .bind(status, errorMessage, startedAt, completedAt, id)
+      .run();
+  }
+
+  async saveTranscription(id: string, transcriptionText: string): Promise<void> {
+    await this.db
+      .prepare("UPDATE audio_jobs SET transcription_text = ? WHERE id = ?")
+      .bind(transcriptionText, id)
       .run();
   }
 

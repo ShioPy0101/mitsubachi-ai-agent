@@ -26,9 +26,36 @@ describe("DiscordRestClient", () => {
       {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: "done" }),
+        body: JSON.stringify({ content: "done", allowed_mentions: { parse: [] } }),
       },
     );
+  });
+
+  it("edits the response with a renamed audio attachment", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+    const client = new DiscordRestClient("bot-token", "application-id", fetcher);
+
+    await expect(client.editOriginalResponse("interaction-token", "done", {
+      data: new Uint8Array([1, 2, 3]).buffer,
+      filename: "001_中本行き.mp3",
+      contentType: "audio/mpeg",
+    })).resolves.toEqual({ ok: true });
+
+    const request = fetcher.mock.calls[0]?.[1] as RequestInit;
+    expect(request.method).toBe("PATCH");
+    expect(request.headers).toBeUndefined();
+    expect(request.body).toBeInstanceOf(FormData);
+    const form = request.body as FormData;
+    expect(JSON.parse(String(form.get("payload_json")))).toEqual({
+      content: "done",
+      allowed_mentions: { parse: [] },
+      attachments: [{ id: 0, filename: "001_中本行き.mp3" }],
+    });
+    const file = form.get("files[0]");
+    expect(file).toBeInstanceOf(File);
+    expect((file as File).name).toBe("001_中本行き.mp3");
+    expect((file as File).type).toBe("audio/mpeg");
+    expect((file as File).size).toBe(3);
   });
 
   it("returns Discord error details without throwing them away", async () => {
