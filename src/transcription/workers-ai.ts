@@ -1,6 +1,12 @@
 import { WorkersAiWhisperResponseSchema } from "./schemas";
 import type { TranscriptionInput, TranscriptionResult, TranscriptionService } from "./service";
 
+const railwayAnnouncementPrompt = [
+  "日本の鉄道駅構内放送。駅名、路線名、列車名、時刻、番線。",
+  "Japanese railway station announcement. Station, line, train, time, and platform.",
+  "日本語に続いて英語、中国語、韓国語などの案内が含まれる場合があります。",
+].join(" ");
+
 export interface WhisperAiRunner {
   run(
     model: "@cf/openai/whisper-large-v3-turbo",
@@ -26,6 +32,7 @@ export class CloudflareWhisperTranscriptionService implements TranscriptionServi
       audio: encodeBase64(input.audio),
       task: "transcribe",
       vad_filter: true,
+      initial_prompt: railwayAnnouncementPrompt,
     });
     const parsed = WorkersAiWhisperResponseSchema.parse(output);
     return {

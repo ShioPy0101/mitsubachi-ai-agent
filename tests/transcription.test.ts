@@ -36,6 +36,7 @@ describe("Workers AI response adapter", () => {
       audio: "AA==",
       task: "transcribe",
       vad_filter: true,
+      initial_prompt: "日本の鉄道駅構内放送。駅名、路線名、列車名、時刻、番線。 Japanese railway station announcement. Station, line, train, time, and platform. 日本語に続いて英語、中国語、韓国語などの案内が含まれる場合があります。",
     }]);
   });
 
