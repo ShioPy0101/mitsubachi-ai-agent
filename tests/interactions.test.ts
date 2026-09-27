@@ -62,6 +62,12 @@ describe("/platform-ai-agent interaction", () => {
     })).toBe(false);
     expect(isSupportedAudioAttachment({
       id: "1", filename: "station.mp3", size: 1, url: "https://example.com/a", contentType: "application/octet-stream", durationSecs: null,
+    })).toBe(true);
+    expect(isSupportedAudioAttachment({
+      id: "1", filename: "station.mp3", size: 1, url: "https://example.com/a", contentType: "audio/mp3; charset=binary", durationSecs: null,
+    })).toBe(true);
+    expect(isSupportedAudioAttachment({
+      id: "1", filename: "station.mp3", size: 1, url: "https://example.com/a", contentType: "image/png", durationSecs: null,
     })).toBe(false);
   });
 
