@@ -51,7 +51,15 @@ export class GeminiMetadataService implements MetadataService {
     const text = envelope.candidates[0]?.content.parts[0]?.text;
     if (text === undefined) throw new Error("Gemini response did not contain JSON text");
     const parsedJson: unknown = JSON.parse(text);
-    const parsed = RailwayAnnouncementSchema.parse(parsedJson);
+    const normalizedJson = typeof parsedJson === "object"
+      && parsedJson !== null
+      && "normalizedTranscription" in parsedJson
+      && typeof parsedJson.normalizedTranscription === "string"
+      && parsedJson.normalizedTranscription.trim() === ""
+      && transcription.trim() !== ""
+      ? { ...parsedJson, normalizedTranscription: transcription }
+      : parsedJson;
+    const parsed = RailwayAnnouncementSchema.parse(normalizedJson);
     const candidateNames = new Set(stationCandidates.map(({ station }) => station.name));
     return {
       normalizedTranscription: parsed.normalizedTranscription,

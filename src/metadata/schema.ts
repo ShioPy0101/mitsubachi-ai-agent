@@ -4,7 +4,7 @@ import { announcementCategories } from "../railway/types";
 const TimeSchema = z.string().regex(/^\d{2}:\d{2}$/u);
 
 export const RailwayAnnouncementSchema = z.object({
-  normalizedTranscription: z.string().min(1),
+  normalizedTranscription: z.string().trim().min(1),
   station: z.string().nullable(),
   line: z.string().nullable(),
   trainType: z.string().nullable(),
@@ -39,7 +39,7 @@ export const railwayAnnouncementJsonSchema = {
     "departureTime", "arrivalTime", "platform", "nextStation", "category", "summary",
   ],
   properties: {
-    normalizedTranscription: { type: "string" },
+    normalizedTranscription: { type: "string", minLength: 1 },
     station: { type: ["string", "null"] },
     line: { type: ["string", "null"] },
     trainType: { type: ["string", "null"] },

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { GeminiApiError, GeminiMetadataService, isRetryableGeminiError } from "../src/metadata/gemini";
 import { buildGeminiPrompt } from "../src/metadata/prompt";
-import { RailwayAnnouncementSchema } from "../src/metadata/schema";
+import { RailwayAnnouncementSchema, railwayAnnouncementJsonSchema } from "../src/metadata/schema";
 import { scoreStation } from "../src/stations/candidate-service";
 import { iseStations } from "./fixtures/stations";
 
@@ -27,6 +27,8 @@ describe("Gemini metadata boundary", () => {
     expect(() => RailwayAnnouncementSchema.parse({ ...validOutput, departureTime: "1:25" })).toThrow();
     expect(() => RailwayAnnouncementSchema.parse({ ...validOutput, category: "invented" })).toThrow();
     expect(() => RailwayAnnouncementSchema.parse({ ...validOutput, summary: "長".repeat(31) })).toThrow();
+    expect(() => RailwayAnnouncementSchema.parse({ ...validOutput, normalizedTranscription: "  " })).toThrow();
+    expect(railwayAnnouncementJsonSchema.properties.normalizedTranscription.minLength).toBe(1);
   });
 
   it("includes non-inference and station candidate rules in the prompt", () => {
@@ -45,6 +47,7 @@ describe("Gemini metadata boundary", () => {
     expect(prompt).toContain("時刻・番線・行先などが異なる繰り返しは削除しない");
     expect(prompt).toContain("各言語を元の言語のまま保持");
     expect(prompt).toContain("異なる言語による同内容の案内は重複とみなさない");
+    expect(prompt).toContain("必ず空文字にせず");
   });
 
   it("drops a station returned outside the supplied candidates", async () => {
@@ -57,6 +60,17 @@ describe("Gemini metadata boundary", () => {
     const service = new GeminiMetadataService("secret", "gemini-test", fetcher);
     const result = await service.extract("次はいすずがおかです", [scoreStation(station, "いすずがおか", {})]);
     expect(result.metadata.station).toBeNull();
+  });
+
+  it("falls back to a non-empty raw transcription when Gemini returns an empty normalized value", async () => {
+    const fetcher = async (): Promise<Response> => Response.json({
+      candidates: [{ content: { parts: [{ text: JSON.stringify({ ...validOutput, normalizedTranscription: "" }) }] } }],
+    });
+    const service = new GeminiMetadataService("secret", "gemini-test", fetcher);
+
+    const result = await service.extract("補正前の駅放送", []);
+
+    expect(result.normalizedTranscription).toBe("補正前の駅放送");
   });
 
   it("preserves Gemini HTTP error details for consumer logs", async () => {
