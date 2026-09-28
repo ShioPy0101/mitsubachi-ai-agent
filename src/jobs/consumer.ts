@@ -137,13 +137,15 @@ async function notify(
   callbacks: CallbackSecretsRepository,
   discord: DiscordRestClient,
   file?: DiscordFile,
-): Promise<void> {
+): Promise<boolean> {
   const originalEdited = await editOriginalResponse(job, content, callbacks, discord, "result", file);
+  if (originalEdited) return true;
   if (!originalEdited && job.source.channelId !== null) {
     try {
       const result = await discord.sendChannelMessage(job.source.channelId, content, file);
       if (result.ok) {
         console.info("audio_job_discord_channel_sent", { jobId: job.id });
+        return true;
       } else {
         console.error("audio_job_discord_channel_send_failed", {
           jobId: job.id, status: result.status, responseBody: result.responseBody,
@@ -154,6 +156,7 @@ async function notify(
       // The terminal state remains queryable even when Discord is temporarily unavailable.
     }
   }
+  return false;
 }
 
 const rejectedContentMessage = "この音声は利用条件に合わないため処理できませんでした。";
@@ -253,14 +256,15 @@ async function processJob(job: AudioJob, env: Env, attempt: number): Promise<voi
     audio = await runStage(job.id, "attachment_download_for_result", () =>
       discord.downloadTemporaryAttachment(attachment, maxAudioBytes(env)));
   }
-  await jobs.updateStatus(job.id, "completed");
-  await notify(
+  const delivered = await notify(
     job,
     formatAnalysisResult(metadata, extracted.normalizedTranscription, filename),
     callbacks,
     discord,
     { data: audio, filename, contentType: job.contentType },
   );
+  if (!delivered) throw new Error("Discord result notification failed");
+  await jobs.updateStatus(job.id, "completed");
   await runStage(job.id, "ephemeral_cleanup", () => jobs.clearEphemeral(job.id));
 }
 

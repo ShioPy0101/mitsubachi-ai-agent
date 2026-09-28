@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import { DiscordRestClient } from "../src/discord/rest-client";
+import { DiscordRequestTimeoutError, DiscordRestClient } from "../src/discord/rest-client";
 
 describe("DiscordRestClient", () => {
+  it("times out stalled Discord requests", async () => {
+    const fetcher = async (): Promise<Response> => new Promise(() => undefined);
+    const client = new DiscordRestClient("bot-token", "application-id", fetcher, 5);
+
+    await expect(client.sendChannelMessage("channel-id", "message"))
+      .rejects.toEqual(new DiscordRequestTimeoutError(5));
+  });
+
   it("does not bind the global fetch function to the client instance", async () => {
     const globalFetcher = vi.fn(function (this: unknown) {
       expect(this).not.toBeInstanceOf(DiscordRestClient);

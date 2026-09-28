@@ -1,6 +1,14 @@
 import type { DiscordAttachment } from "./schemas";
 
 const defaultFetcher: typeof fetch = (input, init) => fetch(input, init);
+const defaultRequestTimeoutMs = 30_000;
+
+export class DiscordRequestTimeoutError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super(`Discord request timed out after ${timeoutMs}ms`);
+    this.name = "DiscordRequestTimeoutError";
+  }
+}
 
 export class AttachmentUnavailableError extends Error {
   constructor(
@@ -54,11 +62,24 @@ export class DiscordRestClient {
     private readonly botToken: string,
     private readonly applicationId: string,
     private readonly fetcher: typeof fetch = defaultFetcher,
+    private readonly timeoutMs = defaultRequestTimeoutMs,
   ) {}
+
+  private async request(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timeoutId = setTimeout(() => reject(new DiscordRequestTimeoutError(this.timeoutMs)), this.timeoutMs);
+    });
+    try {
+      return await Promise.race([this.fetcher(input, init), timeout]);
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    }
+  }
 
   async downloadTemporaryAttachment(attachment: DiscordAttachment, maximumBytes: number): Promise<ArrayBuffer> {
     if (attachment.size > maximumBytes) throw new AttachmentUnavailableError("attachment_too_large");
-    const response = await this.fetcher(attachment.url);
+    const response = await this.request(attachment.url);
     if (!response.ok) throw new AttachmentUnavailableError("attachment_unavailable", response.status);
     const declaredLength = Number(response.headers.get("content-length"));
     if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
@@ -71,7 +92,7 @@ export class DiscordRestClient {
 
   async editOriginalResponse(token: string, content: string, file?: DiscordFile): Promise<DiscordApiResult> {
     const payload = messagePayload(content, file);
-    const response = await this.fetcher(`https://discord.com/api/v10/webhooks/${this.applicationId}/${token}/messages/@original`, {
+    const response = await this.request(`https://discord.com/api/v10/webhooks/${this.applicationId}/${token}/messages/@original`, {
       method: "PATCH",
       ...(payload.contentTypeHeader === undefined ? {} : { headers: { "Content-Type": payload.contentTypeHeader } }),
       body: payload.body,
@@ -81,7 +102,7 @@ export class DiscordRestClient {
 
   async sendChannelMessage(channelId: string, content: string, file?: DiscordFile): Promise<DiscordApiResult> {
     const payload = messagePayload(content, file);
-    const response = await this.fetcher(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+    const response = await this.request(`https://discord.com/api/v10/channels/${channelId}/messages`, {
       method: "POST",
       headers: payload.contentTypeHeader === undefined
         ? { Authorization: `Bot ${this.botToken}` }
