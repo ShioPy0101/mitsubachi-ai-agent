@@ -70,20 +70,23 @@ export class ClipsRepository {
     ).run();
   }
 
-  async search(query: string, limit = 10): Promise<ClipSearchResult[]> {
+  async search(query: string, guildId: string, limit = 10): Promise<ClipSearchResult[]> {
     const pattern = escapedLike(query.trim());
     const result = await this.db.prepare(`
-      SELECT station, line, train_type, train_name, destination, departure_time,
-             next_station, summary, raw_transcription, generated_filename
-      FROM railway_audio_clips
-      WHERE station LIKE ? ESCAPE '\\' OR line LIKE ? ESCAPE '\\'
-         OR train_type LIKE ? ESCAPE '\\' OR train_name LIKE ? ESCAPE '\\'
-         OR destination LIKE ? ESCAPE '\\' OR next_station LIKE ? ESCAPE '\\'
-         OR summary LIKE ? ESCAPE '\\' OR raw_transcription LIKE ? ESCAPE '\\'
-         OR normalized_transcription LIKE ? ESCAPE '\\'
-      ORDER BY created_at DESC
+      SELECT c.station, c.line, c.train_type, c.train_name, c.destination, c.departure_time,
+             c.next_station, c.summary, c.raw_transcription, c.generated_filename
+      FROM railway_audio_clips c
+      INNER JOIN audio_jobs j ON j.id = c.job_id
+      WHERE j.guild_id = ? AND (
+           c.station LIKE ? ESCAPE '\\' OR c.line LIKE ? ESCAPE '\\'
+        OR c.train_type LIKE ? ESCAPE '\\' OR c.train_name LIKE ? ESCAPE '\\'
+        OR c.destination LIKE ? ESCAPE '\\' OR c.next_station LIKE ? ESCAPE '\\'
+        OR c.summary LIKE ? ESCAPE '\\' OR c.raw_transcription LIKE ? ESCAPE '\\'
+        OR c.normalized_transcription LIKE ? ESCAPE '\\'
+      )
+      ORDER BY c.created_at DESC
       LIMIT ?
-    `).bind(pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, Math.min(10, limit)).all();
+    `).bind(guildId, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, Math.min(10, limit)).all();
     return result.results.map((input) => {
       const row = SearchRowSchema.parse(input);
       return {

@@ -24,7 +24,12 @@ export type DiscordAttachment = z.output<typeof DiscordAttachmentSchema>;
 const InteractionOptionSchema = z.object({
   name: z.string(),
   type: z.number().int(),
-  value: z.string(),
+  value: z.string().optional(),
+  options: z.array(z.object({
+    name: z.string(),
+    type: z.number().int(),
+    value: z.string(),
+  })).optional(),
 });
 
 export const DiscordInteractionSchema = z.object({
@@ -34,6 +39,8 @@ export const DiscordInteractionSchema = z.object({
   token: z.string(),
   guild_id: z.string().optional(),
   channel_id: z.string().optional(),
+  member: z.object({ user: z.object({ id: z.string() }) }).optional(),
+  user: z.object({ id: z.string() }).optional(),
   data: z
     .object({
       name: z.string(),

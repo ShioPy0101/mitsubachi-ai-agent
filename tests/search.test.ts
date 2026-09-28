@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { escapedLike } from "../src/db/clips-repository";
+import { vi } from "vitest";
+import { ClipsRepository, escapedLike } from "../src/db/clips-repository";
 import { formatSearchResults } from "../src/discord/messages";
 
 describe("search", () => {
@@ -15,5 +16,21 @@ describe("search", () => {
     }]);
     expect(output).toContain("1. 五十鈴ヶ丘 / JR参宮線 / 普通 / 鳥羽行き");
     expect(output).toContain("13:25発");
+  });
+
+  it("scopes repository searches to the Discord guild", async () => {
+    const all = vi.fn().mockResolvedValue({ results: [] });
+    const bind = vi.fn().mockReturnValue({ all });
+    const prepare = vi.fn().mockReturnValue({ bind });
+    const repository = new ClipsRepository({ prepare } as unknown as D1Database);
+
+    await repository.search("敦賀", "guild-123");
+
+    expect(bind).toHaveBeenCalledWith(
+      "guild-123",
+      ...Array(9).fill("%敦賀%"),
+      10,
+    );
+    expect(prepare.mock.calls[0]?.[0]).toContain("j.guild_id = ?");
   });
 });

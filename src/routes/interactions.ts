@@ -2,7 +2,9 @@ import { Hono } from "hono";
 import { ClipsRepository } from "../db/clips-repository";
 import { CallbackSecretsRepository } from "../db/callback-secrets-repository";
 import { JobsRepository } from "../db/jobs-repository";
+import { GuildAccessRepository } from "../db/guild-access-repository";
 import { isSupportedAudioAttachment } from "../discord/attachments";
+import { canControlGuild } from "../discord/access-control";
 import {
   DiscordInteractionSchema,
 } from "../discord/schemas";
@@ -10,7 +12,8 @@ import {
   SEARCH_COMMAND_NAME,
   deferredResponse,
   ephemeralErrorResponse,
-  parseShioCommand,
+  ephemeralMessageResponse,
+  parsePlatformCommand,
 } from "../discord/interactions";
 import { formatSearchResults } from "../discord/messages";
 import { verifyDiscordSignature } from "../discord/signatures";
@@ -37,7 +40,7 @@ function parseSearchQuery(input: unknown): string | null {
   const parsed = DiscordInteractionSchema.safeParse(input);
   if (!parsed.success || parsed.data.type !== 2 || parsed.data.data?.name !== SEARCH_COMMAND_NAME) return null;
   const option = parsed.data.data.options?.find((candidate) => candidate.name === "query" && candidate.type === 3);
-  return option?.value.trim() || null;
+  return option?.value?.trim() || null;
 }
 
 interactionRoutes.post("/interactions", async (context) => {
@@ -62,12 +65,43 @@ interactionRoutes.post("/interactions", async (context) => {
 
   const searchQuery = parseSearchQuery(input);
   if (searchQuery !== null) {
-    const results = await new ClipsRepository(context.env.DB).search(searchQuery);
+    const guildId = interaction.success ? interaction.data.guild_id : undefined;
+    if (guildId === undefined || !(await new GuildAccessRepository(context.env.DB).isEnabled(guildId))) {
+      return ephemeralErrorResponse("このサーバーでは利用が許可されていません。");
+    }
+    const results = await new ClipsRepository(context.env.DB).search(searchQuery, guildId);
     return Response.json({ type: 4, data: { content: formatSearchResults(results), flags: 64 } });
   }
 
-  const command = parseShioCommand(input);
+  const command = parsePlatformCommand(input);
   if (!command.ok) return ephemeralErrorResponse(command.error);
+  if (command.value.kind === "access") {
+    if (command.value.guildId === null) return ephemeralErrorResponse("サーバー内でのみ実行できます。");
+    if (!canControlGuild(context.env.DISCORD_CONTROL_USER_IDS, command.value.userId)) {
+      return ephemeralErrorResponse("この操作を実行する権限がありません。");
+    }
+    const enabled = command.value.action === "allow";
+    const updatedAt = new Date().toISOString();
+    await new GuildAccessRepository(context.env.DB).setEnabled(
+      command.value.guildId,
+      enabled,
+      command.value.userId as string,
+      updatedAt,
+    );
+    console.info("guild_access_updated", {
+      guild_id: command.value.guildId,
+      user_id: command.value.userId,
+      enabled,
+      timestamp: updatedAt,
+    });
+    return ephemeralMessageResponse(enabled
+      ? "このサーバーでの利用を許可しました。"
+      : "このサーバーでの利用を停止しました。");
+  }
+  if (command.value.guildId === null
+    || !(await new GuildAccessRepository(context.env.DB).isEnabled(command.value.guildId))) {
+    return ephemeralErrorResponse("このサーバーでは利用が許可されていません。");
+  }
   if (!isSupportedAudioAttachment(command.value.attachment)) {
     return ephemeralErrorResponse("対応していない音声形式です。mp3 / wav / m4a / aac / flac / ogg を指定してください。");
   }
@@ -88,6 +122,7 @@ interactionRoutes.post("/interactions", async (context) => {
           type: "interaction",
           guildId: command.value.guildId,
           channelId: command.value.channelId,
+          userId: command.value.userId,
           interactionId: command.value.interactionId,
           attachmentId: command.value.attachment.id,
           temporaryReference: {

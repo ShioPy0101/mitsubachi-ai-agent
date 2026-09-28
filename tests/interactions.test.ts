@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isSupportedAudioAttachment } from "../src/discord/attachments";
-import { deferredResponse, parseShioCommand } from "../src/discord/interactions";
+import { deferredResponse, parsePlatformCommand } from "../src/discord/interactions";
 import { verifyDiscordSignature } from "../src/discord/signatures";
 
 const interaction = {
@@ -10,6 +10,7 @@ const interaction = {
   token: "callback-token",
   guild_id: "300",
   channel_id: "400",
+  member: { user: { id: "600" } },
   data: {
     name: "platform-ai-agent",
     options: [{ name: "audio", type: 11, value: "500" }],
@@ -27,26 +28,29 @@ const interaction = {
 
 describe("/platform-ai-agent interaction", () => {
   it("parses the required attachment into the interaction source", () => {
-    const result = parseShioCommand(interaction);
+    const result = parsePlatformCommand(interaction);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
+    expect(result.value.kind).toBe("audio");
+    if (result.value.kind !== "audio") return;
     expect(result.value.interactionId).toBe("100");
     expect(result.value.attachment.id).toBe("500");
+    expect(result.value.userId).toBe("600");
     expect(isSupportedAudioAttachment(result.value.attachment)).toBe(true);
   });
 
   it("rejects a missing attachment", () => {
-    const result = parseShioCommand({ ...interaction, data: { name: "platform-ai-agent", options: [] } });
+    const result = parsePlatformCommand({ ...interaction, data: { name: "platform-ai-agent", options: [] } });
     expect(result).toEqual({ ok: false, error: "audio添付は必須です。" });
   });
 
   it("rejects commands other than platform-ai-agent", () => {
-    const result = parseShioCommand({ ...interaction, data: { ...interaction.data, name: "platform" } });
+    const result = parsePlatformCommand({ ...interaction, data: { ...interaction.data, name: "platform" } });
     expect(result).toEqual({ ok: false, error: "未対応のコマンドです。" });
   });
 
   it("uses the audio option value as the resolved attachment ID", () => {
-    const result = parseShioCommand({
+    const result = parsePlatformCommand({
       ...interaction,
       data: {
         ...interaction.data,
@@ -54,6 +58,23 @@ describe("/platform-ai-agent interaction", () => {
       },
     });
     expect(result).toEqual({ ok: false, error: "audio添付を読み取れませんでした。" });
+  });
+
+  it("parses allow and deny access subcommands with their actor", () => {
+    for (const action of ["allow", "deny"] as const) {
+      const result = parsePlatformCommand({
+        ...interaction,
+        data: {
+          ...interaction.data,
+          name: action === "allow" ? "platform-ai-agent-allow" : "platform-ai-agent-deny",
+          options: [],
+        },
+      });
+      expect(result).toEqual({
+        ok: true,
+        value: { kind: "access", action, guildId: "300", userId: "600" },
+      });
+    }
   });
 
   it("rejects unsupported MIME or extension combinations", () => {

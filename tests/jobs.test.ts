@@ -4,7 +4,7 @@ import type { AudioJob, NewAudioJob } from "../src/jobs/types";
 
 const input: NewAudioJob = {
   source: {
-    type: "interaction", guildId: "guild", channelId: "channel", interactionId: "interaction",
+    type: "interaction", guildId: "guild", channelId: "channel", userId: "user", interactionId: "interaction",
     attachmentId: "attachment", temporaryReference: { url: "https://example.com/audio.mp3", expiresAt: null },
   },
   interactionCallback: { token: "secret", expiresAt: "2026-01-01T00:15:00.000Z" },

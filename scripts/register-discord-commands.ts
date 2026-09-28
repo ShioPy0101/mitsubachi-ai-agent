@@ -2,7 +2,8 @@ import { discordCommands } from "../src/discord/commands";
 
 const applicationId = process.env.DISCORD_APPLICATION_ID;
 const botToken = process.env.DISCORD_BOT_TOKEN;
-const guildId = process.env.DISCORD_DEV_GUILD_ID;
+const globalRegistration = process.argv.includes("--global");
+const guildId = globalRegistration ? undefined : process.env.DISCORD_DEV_GUILD_ID?.trim() || undefined;
 if (applicationId === undefined || botToken === undefined) {
   throw new Error("DISCORD_APPLICATION_ID and DISCORD_BOT_TOKEN are required");
 }
