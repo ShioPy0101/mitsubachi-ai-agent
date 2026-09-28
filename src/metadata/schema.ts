@@ -6,7 +6,7 @@ const TimeSchema = z.string().regex(/^\d{2}:\d{2}$/u);
 export const TransitAnnouncementSchema = z.object({
   isTransitAnnouncement: z.boolean(),
   normalizedTranscription: z.string().trim().min(1),
-  station: z.string().nullable(),
+  station: z.null(),
   line: z.string().nullable(),
   trainType: z.string().nullable(),
   trainName: z.string().nullable(),
@@ -56,7 +56,7 @@ export const transitAnnouncementJsonSchema = {
   properties: {
     isTransitAnnouncement: { type: "boolean" },
     normalizedTranscription: { type: "string", minLength: 1 },
-    station: { type: ["string", "null"] },
+    station: { type: "null" },
     line: { type: ["string", "null"] },
     trainType: { type: ["string", "null"] },
     trainName: { type: ["string", "null"] },

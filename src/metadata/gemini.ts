@@ -94,12 +94,11 @@ export class GeminiMetadataService implements MetadataService {
       ? { ...parsedJson, normalizedTranscription: transcription }
       : parsedJson;
     const parsed = TransitAnnouncementSchema.parse(normalizedJson);
-    const candidateNames = new Set(stationCandidates.map(({ station }) => station.name));
     return {
       isTransitAnnouncement: parsed.isTransitAnnouncement,
       normalizedTranscription: parsed.normalizedTranscription,
       metadata: {
-        station: parsed.station !== null && candidateNames.has(parsed.station) ? parsed.station : null,
+        station: null,
         line: parsed.line,
         trainType: parsed.trainType,
         trainName: parsed.trainName,

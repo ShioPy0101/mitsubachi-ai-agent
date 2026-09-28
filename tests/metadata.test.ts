@@ -8,7 +8,7 @@ import { iseStations } from "./fixtures/stations";
 const validOutput = {
   isTransitAnnouncement: true,
   normalizedTranscription: "次は五十鈴ヶ丘です",
-  station: "五十鈴ヶ丘",
+  station: null,
   line: "JR参宮線",
   trainType: null,
   trainName: null,
@@ -38,7 +38,7 @@ describe("Gemini metadata boundary", () => {
     if (station === undefined) return;
     const prompt = buildGeminiPrompt("次はいすずがおかです", [scoreStation(station, "いすずがおか", {})]);
     expect(prompt).toContain("知識による補完は禁止");
-    expect(prompt).toContain("駅名を自由生成しないでください");
+    expect(prompt).toContain("文字起こし補正専用の候補");
     expect(prompt).toContain('"name":"五十鈴ヶ丘"');
     expect(prompt).toContain("departureTime / arrivalTime は HH:MM");
     expect(prompt).toContain("「鶴ヶ方面」→「敦賀方面」");
@@ -54,21 +54,12 @@ describe("Gemini metadata boundary", () => {
     expect(prompt).toContain("isTransitAnnouncement");
     expect(prompt).toContain("routeSupported");
     expect(prompt).toContain("福井、芦原温泉、加賀温泉");
-    expect(prompt).toContain("推定収録駅");
-    expect(prompt).toContain("音声内の複数の独立した手掛かり");
-    expect(prompt).toContain("収録駅を一意に絞れない場合はnull");
+    expect(prompt).toContain("収録駅は音声から推定しません");
+    expect(prompt).toContain("stationは常にnull");
   });
 
-  it("drops a station returned outside the supplied candidates", async () => {
-    const station = iseStations[1];
-    expect(station).toBeDefined();
-    if (station === undefined) return;
-    const fetcher = async (): Promise<Response> => Response.json({
-      candidates: [{ content: { parts: [{ text: JSON.stringify({ ...validOutput, station: "架空駅" }) }] } }],
-    });
-    const service = new GeminiMetadataService("secret", "gemini-test", fetcher);
-    const result = await service.extract("次はいすずがおかです", [scoreStation(station, "いすずがおか", {})]);
-    expect(result.metadata.station).toBeNull();
+  it("rejects a recording station because station must stay null", () => {
+    expect(() => TransitAnnouncementSchema.parse({ ...validOutput, station: "架空駅" })).toThrow();
   });
 
   it("falls back to a non-empty raw transcription when Gemini returns an empty normalized value", async () => {
