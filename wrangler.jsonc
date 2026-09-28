@@ -22,6 +22,7 @@
         "queue": "mitsubachi-audio-jobs",
         "max_batch_size": 1,
         "max_batch_timeout": 1,
+        "max_concurrency": 2,
         "max_retries": 5,
         "dead_letter_queue": "mitsubachi-audio-jobs-dlq"
       }
