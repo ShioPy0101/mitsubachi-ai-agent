@@ -1,6 +1,6 @@
 import type { RailwayAnnouncementMetadata } from "./types";
 
-const forbiddenFilenameCharacters = /[\\/:*?"<>|]/gu;
+const forbiddenFilenameCharacters = /[\\/:*?"<>|`]/gu;
 const edgeCharacters = /^[\s._]+|[\s._]+$/gu;
 
 export function sanitizeFilenamePart(value: string, maxLength = 80): string {
@@ -28,7 +28,7 @@ export function generateRailwayFilename(
   const parts = [metadata.line, metadata.trainType, destination, departure || null, metadata.summary]
     .filter((part): part is string => part !== null && part.length > 0)
     .map((part) => sanitizeFilenamePart(part));
-  const body = parts.length === 0 ? "駅放送" : parts.join("_");
+  const body = parts.length === 0 ? "交通案内" : parts.join("_");
   const suffixLength = extension.length + 1;
   return `${index}_${sanitizeFilenamePart(body, Math.max(1, maxLength - index.length - suffixLength - 1))}.${extension}`;
 }

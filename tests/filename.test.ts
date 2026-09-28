@@ -15,10 +15,14 @@ describe("filename", () => {
     );
   });
 
+  it("removes Discord code fence characters from filename parts", () => {
+    expect(sanitizeFilenamePart("大船`行き")).toBe("大船_行き");
+  });
+
   it("omits nulls and uses the fallback", () => {
     const empty = Object.fromEntries(Object.keys(metadata).map((key) => [key, null]));
     const valid = { ...empty, category: "other" } as RailwayAnnouncementMetadata;
-    expect(generateRailwayFilename(1, valid, "audio.mp3")).toBe("001_駅放送.mp3");
+    expect(generateRailwayFilename(1, valid, "audio.mp3")).toBe("001_交通案内.mp3");
   });
 
   it("sanitizes forbidden characters, underscores and edges", () => {

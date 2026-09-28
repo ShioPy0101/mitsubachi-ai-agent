@@ -13,13 +13,13 @@ export function formatAnalysisResult(
   return [
     "解析完了",
     "",
-    heading || "駅放送",
+    heading || "交通案内",
     time,
     metadata.summary,
     "",
     `補正文字起こし:\n「${transcription.slice(0, 1200)}」`,
     metadata.station === null ? null : `駅名候補: ${metadata.station}`,
-    `ファイル名: ${filename}`,
+    `ファイル名:\n\`\`\`text\n${filename}\n\`\`\``,
   ].filter((line): line is string => line !== null).join("\n");
 }
 
@@ -30,10 +30,10 @@ export function formatFailure(reason: "attachment_unavailable" | "processing_fai
 }
 
 export function formatSearchResults(results: readonly ClipSearchResult[]): string {
-  if (results.length === 0) return "該当する駅放送はありませんでした。";
+  if (results.length === 0) return "該当する交通案内はありませんでした。";
   return results.map((result, index) => {
     const heading = present([result.station, result.line, result.trainType, result.destination === null ? null : `${result.destination}行き`]);
     const excerpt = result.rawTranscription.length > 100 ? `${result.rawTranscription.slice(0, 100)}…` : result.rawTranscription;
-    return `${index + 1}. ${heading || "駅放送"}\n${result.departureTime === null ? "" : `${result.departureTime}発\n`}${result.summary ?? ""}\n「${excerpt}」`;
+    return `${index + 1}. ${heading || "交通案内"}\n${result.departureTime === null ? "" : `${result.departureTime}発\n`}${result.summary ?? ""}\n「${excerpt}」`;
   }).join("\n\n");
 }
