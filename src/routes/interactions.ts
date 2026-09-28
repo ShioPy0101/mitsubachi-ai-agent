@@ -88,7 +88,6 @@ interactionRoutes.post("/interactions", async (context) => {
           type: "interaction",
           guildId: command.value.guildId,
           channelId: command.value.channelId,
-          userId: command.value.userId,
           interactionId: command.value.interactionId,
           attachmentId: command.value.attachment.id,
           temporaryReference: {

@@ -5,7 +5,6 @@ const JobRowSchema = z.object({
   id: z.string(),
   guild_id: z.string().nullable(),
   channel_id: z.string().nullable(),
-  user_id: z.string().nullable(),
   interaction_id: z.string(),
   attachment_id: z.string(),
   temporary_url: z.string().nullable(),
@@ -45,7 +44,6 @@ function toJob(rowInput: unknown): AudioJob {
       type: "interaction",
       guildId: row.guild_id,
       channelId: row.channel_id,
-      userId: row.user_id,
       interactionId: row.interaction_id,
       attachmentId: row.attachment_id,
       temporaryReference:
@@ -69,15 +67,14 @@ export class JobsRepository {
     const result = await this.db
       .prepare(`
         INSERT OR IGNORE INTO audio_jobs (
-          id, guild_id, channel_id, user_id, interaction_id, attachment_id,
+          id, guild_id, channel_id, interaction_id, attachment_id,
           original_filename, content_type, size_bytes, duration_secs, status, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?)
       `)
       .bind(
         id,
         source.guildId,
         source.channelId,
-        source.userId,
         source.interactionId,
         source.attachmentId,
         input.originalFilename,
@@ -140,10 +137,6 @@ export class JobsRepository {
       .prepare("UPDATE audio_jobs SET transcription_text = ? WHERE id = ?")
       .bind(transcriptionText, id)
       .run();
-  }
-
-  async discardTranscription(id: string): Promise<void> {
-    await this.db.prepare("UPDATE audio_jobs SET transcription_text = NULL WHERE id = ?").bind(id).run();
   }
 
   async clearEphemeral(jobId: string): Promise<void> {

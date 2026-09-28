@@ -9,7 +9,6 @@ export type ParsedShioCommand = {
   interactionToken: string;
   guildId: string | null;
   channelId: string | null;
-  userId: string | null;
   attachment: DiscordAttachment;
 };
 
@@ -38,7 +37,6 @@ export function parseShioCommand(input: unknown): CommandParseResult {
       interactionToken: interaction.token,
       guildId: interaction.guild_id ?? null,
       channelId: interaction.channel_id ?? null,
-      userId: interaction.member?.user.id ?? interaction.user?.id ?? null,
       attachment: attachment.data,
     },
   };

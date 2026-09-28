@@ -15,7 +15,6 @@ export type InteractionAudioSource = {
   type: "interaction";
   guildId: string | null;
   channelId: string | null;
-  userId: string | null;
   interactionId: string;
   attachmentId: string;
   temporaryReference: { url: string; expiresAt: string | null } | null;

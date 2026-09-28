@@ -34,8 +34,6 @@ export const DiscordInteractionSchema = z.object({
   token: z.string(),
   guild_id: z.string().optional(),
   channel_id: z.string().optional(),
-  member: z.object({ user: z.object({ id: z.string() }) }).optional(),
-  user: z.object({ id: z.string() }).optional(),
   data: z
     .object({
       name: z.string(),

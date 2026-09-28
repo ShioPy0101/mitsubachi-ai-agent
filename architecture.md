@@ -32,9 +32,7 @@ External values cross runtime-validation adapters before reaching domain code. G
 
 ## Status transitions
 
-`pending -> queued -> transcribing -> Guardrails -> metadata_extracting -> completed`
-
-Whisper の結果は保存前に AI Gateway Guardrails で検査する。Block または Guardrails 障害時は fail-closed で終了し、文字起こし本文は D1・AI Gateway ログ・キャッシュへ保存しない。許可された結果だけを再試行用 checkpoint として保存する。
+`pending -> queued -> transcribing -> metadata_extracting -> completed`
 
 Allowed terminal outcomes are `partial` and `failed`.
 
