@@ -15,6 +15,7 @@ const minimumSilenceSec = 0.6;
 const minimumChunkSec = 1;
 const edgePaddingSec = 0.15;
 const maximumChunks = 10;
+const maximumInMemoryMp3DurationSec = 90;
 
 function extensionOf(filename: string): string {
   return filename.split(".").pop()?.toLowerCase() ?? "";
@@ -222,7 +223,16 @@ export async function splitAudioOnSilence(
   audio: ArrayBuffer,
   contentType: string | null,
   filename: string,
+  durationSecs?: number | null,
 ): Promise<AudioChunk[]> {
+  if (isMp3(contentType, filename) && durationSecs !== null && durationSecs !== undefined
+    && durationSecs > maximumInMemoryMp3DurationSec) {
+    console.info("audio_silence_segmentation_skipped", {
+      reason: "mp3_duration_exceeds_in_memory_limit",
+      durationSecs,
+    });
+    return [{ audio, contentType, startSec: 0, endSec: durationSecs }];
+  }
   let decoded: DecodedAudio;
   try {
     if (isWav(contentType, filename)) decoded = decodeWav(audio);

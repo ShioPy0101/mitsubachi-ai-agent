@@ -14,6 +14,7 @@ export type TranscriptionInput = {
   audio: ArrayBuffer;
   contentType: string | null;
   filename: string;
+  durationSecs?: number | null;
 };
 
 export interface TranscriptionService {

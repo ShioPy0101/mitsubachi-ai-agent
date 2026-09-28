@@ -180,6 +180,7 @@ async function processJob(job: AudioJob, env: Env, attempt: number): Promise<voi
     const transcription = await runStage(job.id, "whisper_transcription", () =>
       new CloudflareWhisperTranscriptionService(env.AI).transcribe({
         audio: audio as ArrayBuffer, contentType: job.contentType, filename: job.originalFilename,
+        durationSecs: job.durationSecs,
       }));
     transcriptionText = transcription.text;
     needsTranscriptionCheckpoint = true;

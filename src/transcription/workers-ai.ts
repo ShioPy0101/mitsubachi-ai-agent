@@ -77,8 +77,11 @@ export class CloudflareWhisperTranscriptionService implements TranscriptionServi
   }
 
   async transcribe(input: TranscriptionInput): Promise<TranscriptionResult> {
-    const chunks = await splitAudioOnSilence(input.audio, input.contentType, input.filename);
-    const results = await Promise.all(chunks.map((chunk) => this.transcribeChunk(chunk)));
+    const chunks = await splitAudioOnSilence(input.audio, input.contentType, input.filename, input.durationSecs);
+    const results: TranscriptionResult[] = [];
+    for (let offset = 0; offset < chunks.length; offset += 3) {
+      results.push(...await Promise.all(chunks.slice(offset, offset + 3).map((chunk) => this.transcribeChunk(chunk))));
+    }
     return {
       language: results.map((result) => result.language).find((language) => language !== null) ?? null,
       text: results.map((result) => result.text.trim()).filter((text) => text !== "").join("\n"),
