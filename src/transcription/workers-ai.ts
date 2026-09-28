@@ -1,5 +1,6 @@
 import { WorkersAiWhisperResponseSchema } from "./schemas";
 import type { TranscriptionInput, TranscriptionResult, TranscriptionService } from "./service";
+import { splitAudioOnSilence, type AudioChunk } from "../audio/silence-segmenter";
 
 const transitAnnouncementPrompt = [
   "日本の公共交通機関の案内放送。鉄道、地下鉄、路面電車、路線バス、高速バス、船舶、航空機。駅名、停留所名、路線名、便名、時刻、乗り場。",
@@ -41,7 +42,7 @@ export class CloudflareWhisperTranscriptionService implements TranscriptionServi
     private readonly timeoutMs = defaultTranscriptionTimeoutMs,
   ) {}
 
-  async transcribe(input: TranscriptionInput): Promise<TranscriptionResult> {
+  private async transcribeChunk(chunk: AudioChunk): Promise<TranscriptionResult> {
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_resolve, reject) => {
       timeoutId = setTimeout(() => reject(new TranscriptionTimeoutError(this.timeoutMs)), this.timeoutMs);
@@ -50,7 +51,7 @@ export class CloudflareWhisperTranscriptionService implements TranscriptionServi
     try {
       output = await Promise.race([
         this.ai.run("@cf/openai/whisper-large-v3-turbo", {
-          audio: encodeBase64(input.audio),
+          audio: encodeBase64(chunk.audio),
           task: "transcribe",
           vad_filter: false,
           beam_size: 8,
@@ -68,10 +69,20 @@ export class CloudflareWhisperTranscriptionService implements TranscriptionServi
       language: parsed.transcription_info?.language ?? null,
       text: parsed.text,
       segments: (parsed.segments ?? []).map((segment) => ({
-        startSec: segment.start,
-        endSec: segment.end,
+        startSec: segment.start + chunk.startSec,
+        endSec: segment.end + chunk.startSec,
         text: segment.text,
       })),
+    };
+  }
+
+  async transcribe(input: TranscriptionInput): Promise<TranscriptionResult> {
+    const chunks = await splitAudioOnSilence(input.audio, input.contentType, input.filename);
+    const results = await Promise.all(chunks.map((chunk) => this.transcribeChunk(chunk)));
+    return {
+      language: results.map((result) => result.language).find((language) => language !== null) ?? null,
+      text: results.map((result) => result.text.trim()).filter((text) => text !== "").join("\n"),
+      segments: results.flatMap((result) => result.segments),
     };
   }
 }

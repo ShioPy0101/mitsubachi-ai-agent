@@ -1,6 +1,6 @@
 # mitsubachi-ai-agent
 
-Cloudflare Workers上で動作する、公共交通機関の案内放送向けDiscord Botです。許可されたサーバーで `/platform-ai-agent audio:<attachment>` を実行すると、Workers AI Whisperで文字起こしし、GeminiのSafety判定と交通案内判定を通過した音声だけをD1へ保存・メタデータ化します。鉄道、地下鉄、路面電車、路線・高速バス、船舶、航空機の運行・乗降案内を対象とします。検索は `/platform-search query:<text>` です。
+Cloudflare Workers上で動作する、公共交通機関の案内放送向けDiscord Botです。許可されたサーバーで `/platform-ai-agent audio:<attachment>` を実行すると、WAV/MP3は無音区間で分割してからWorkers AI Whisperで文字起こしし、GeminiのSafety判定と交通案内判定を通過した音声だけをD1へ保存・メタデータ化します。鉄道、地下鉄、路面電車、路線・高速バス、船舶、航空機の運行・乗降案内を対象とします。検索は `/platform-search query:<text>` です。
 
 ## Setup
 

@@ -18,6 +18,32 @@ class FakeAi implements WhisperAiRunner {
   }
 }
 
+function wavWithSilence(sampleRate = 8_000): ArrayBuffer {
+  const samples = new Float32Array(Math.round(sampleRate * 2.8));
+  samples.fill(0.2, 0, sampleRate);
+  samples.fill(0.2, Math.round(sampleRate * 1.8));
+  const output = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(output);
+  const ascii = (offset: number, value: string): void => {
+    for (let index = 0; index < value.length; index += 1) view.setUint8(offset + index, value.charCodeAt(index));
+  };
+  ascii(0, "RIFF");
+  view.setUint32(4, output.byteLength - 8, true);
+  ascii(8, "WAVE");
+  ascii(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  ascii(36, "data");
+  view.setUint32(40, samples.length * 2, true);
+  samples.forEach((sample, index) => view.setInt16(44 + index * 2, Math.round(sample * 0x7fff), true));
+  return output;
+}
+
 describe("Workers AI response adapter", () => {
   it("maps a validated response to the domain type", async () => {
     const ai = new FakeAi({
@@ -27,7 +53,7 @@ describe("Workers AI response adapter", () => {
     });
     const service = new CloudflareWhisperTranscriptionService(ai);
     await expect(service.transcribe({
-      audio: new ArrayBuffer(1), contentType: "audio/mpeg", filename: "audio.mp3",
+      audio: new ArrayBuffer(1), contentType: null, filename: "audio.bin",
     })).resolves.toEqual({
       language: "ja",
       text: "次は西和田です",
@@ -47,8 +73,24 @@ describe("Workers AI response adapter", () => {
   it("rejects an invalid provider response", async () => {
     const service = new CloudflareWhisperTranscriptionService(new FakeAi({ text: 42 }));
     await expect(service.transcribe({
-      audio: new ArrayBuffer(1), contentType: null, filename: "audio.mp3",
+      audio: new ArrayBuffer(1), contentType: null, filename: "audio.bin",
     })).rejects.toThrow();
+  });
+
+  it("transcribes silence-delimited chunks independently and rejoins them", async () => {
+    const ai = new FakeAi({
+      transcription_info: { language: "ja" },
+      text: "announcement",
+      segments: [{ start: 0, end: 1, text: "announcement" }],
+    });
+    const result = await new CloudflareWhisperTranscriptionService(ai).transcribe({
+      audio: wavWithSilence(), contentType: "audio/wav", filename: "announcement.wav",
+    });
+
+    expect(ai.inputs).toHaveLength(2);
+    expect(result.text).toBe("announcement\nannouncement");
+    expect(result.segments).toHaveLength(2);
+    expect(result.segments[1]?.startSec).toBeCloseTo(1.25, 1);
   });
 
   it("times out when Workers AI does not respond", async () => {
@@ -58,7 +100,7 @@ describe("Workers AI response adapter", () => {
     const service = new CloudflareWhisperTranscriptionService(ai, 5);
 
     await expect(service.transcribe({
-      audio: new ArrayBuffer(1), contentType: "audio/mpeg", filename: "audio.mp3",
+      audio: new ArrayBuffer(1), contentType: null, filename: "audio.bin",
     })).rejects.toEqual(new TranscriptionTimeoutError(5));
   });
 });
