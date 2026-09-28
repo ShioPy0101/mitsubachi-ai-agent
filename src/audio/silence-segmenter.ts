@@ -1,5 +1,3 @@
-import { MPEGDecoder } from "mpg123-decoder";
-
 export type AudioChunk = {
   audio: ArrayBuffer;
   contentType: string | null;
@@ -100,6 +98,12 @@ function decodeWav(audio: ArrayBuffer): DecodedAudio {
 }
 
 async function decodeMp3(audio: ArrayBuffer): Promise<DecodedAudio> {
+  // mpg123-decoder exports an unused browser Web Worker adapter from its root module.
+  // Workers does not expose that constructor, so install a harmless placeholder before
+  // loading the package; decoding below uses only the synchronous WASM implementation.
+  const runtime = globalThis as typeof globalThis & { Worker?: unknown };
+  runtime.Worker ??= class UnsupportedWorker {};
+  const { MPEGDecoder } = await import("mpg123-decoder");
   const decoder = new MPEGDecoder();
   try {
     await decoder.ready;
