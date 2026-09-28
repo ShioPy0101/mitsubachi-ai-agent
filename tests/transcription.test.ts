@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CloudflareWhisperTranscriptionService,
+  TranscriptionTimeoutError,
   type WhisperAiRunner,
 } from "../src/transcription/workers-ai";
 
@@ -46,5 +47,16 @@ describe("Workers AI response adapter", () => {
     await expect(service.transcribe({
       audio: new ArrayBuffer(1), contentType: null, filename: "audio.mp3",
     })).rejects.toThrow();
+  });
+
+  it("times out when Workers AI does not respond", async () => {
+    const ai: WhisperAiRunner = {
+      run: async (): Promise<never> => new Promise(() => undefined),
+    };
+    const service = new CloudflareWhisperTranscriptionService(ai, 5);
+
+    await expect(service.transcribe({
+      audio: new ArrayBuffer(1), contentType: "audio/mpeg", filename: "audio.mp3",
+    })).rejects.toEqual(new TranscriptionTimeoutError(5));
   });
 });

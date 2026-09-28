@@ -9,6 +9,15 @@ const transitAnnouncementPrompt = [
   "English transit vocabulary: arriving, departing, bound for, platform, bus stop, boarding gate, transfer, on schedule, delayed, and cancelled.",
 ].join(" ");
 
+const defaultTranscriptionTimeoutMs = 120_000;
+
+export class TranscriptionTimeoutError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super(`Whisper transcription timed out after ${timeoutMs}ms`);
+    this.name = "TranscriptionTimeoutError";
+  }
+}
+
 export interface WhisperAiRunner {
   run(
     model: "@cf/openai/whisper-large-v3-turbo",
@@ -27,16 +36,31 @@ function encodeBase64(buffer: ArrayBuffer): string {
 }
 
 export class CloudflareWhisperTranscriptionService implements TranscriptionService {
-  constructor(private readonly ai: WhisperAiRunner) {}
+  constructor(
+    private readonly ai: WhisperAiRunner,
+    private readonly timeoutMs = defaultTranscriptionTimeoutMs,
+  ) {}
 
   async transcribe(input: TranscriptionInput): Promise<TranscriptionResult> {
-    const output = await this.ai.run("@cf/openai/whisper-large-v3-turbo", {
-      audio: encodeBase64(input.audio),
-      task: "transcribe",
-      vad_filter: true,
-      beam_size: 8,
-      initial_prompt: transitAnnouncementPrompt,
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timeoutId = setTimeout(() => reject(new TranscriptionTimeoutError(this.timeoutMs)), this.timeoutMs);
     });
+    let output: unknown;
+    try {
+      output = await Promise.race([
+        this.ai.run("@cf/openai/whisper-large-v3-turbo", {
+          audio: encodeBase64(input.audio),
+          task: "transcribe",
+          vad_filter: true,
+          beam_size: 8,
+          initial_prompt: transitAnnouncementPrompt,
+        }),
+        timeout,
+      ]);
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    }
     const parsed = WorkersAiWhisperResponseSchema.parse(output);
     return {
       language: parsed.transcription_info?.language ?? null,
