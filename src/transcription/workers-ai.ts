@@ -52,8 +52,10 @@ export class CloudflareWhisperTranscriptionService implements TranscriptionServi
         this.ai.run("@cf/openai/whisper-large-v3-turbo", {
           audio: encodeBase64(input.audio),
           task: "transcribe",
-          vad_filter: true,
+          vad_filter: false,
           beam_size: 8,
+          condition_on_previous_text: false,
+          no_speech_threshold: 0.8,
           initial_prompt: transitAnnouncementPrompt,
         }),
         timeout,

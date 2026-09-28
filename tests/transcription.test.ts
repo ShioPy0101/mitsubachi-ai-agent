@@ -36,8 +36,10 @@ describe("Workers AI response adapter", () => {
     expect(ai.inputs).toEqual([{
       audio: "AA==",
       task: "transcribe",
-      vad_filter: true,
+      vad_filter: false,
       beam_size: 8,
+      condition_on_previous_text: false,
+      no_speech_threshold: 0.8,
       initial_prompt: "日本の公共交通機関の案内放送。鉄道、地下鉄、路面電車、路線バス、高速バス、船舶、航空機。駅名、停留所名、路線名、便名、時刻、乗り場。 日本語、英語、中国語、韓国語など、音声で話されたすべての言語を翻訳・要約・省略せず、最後までそのまま文字起こしする。 Transcribe every spoken language verbatim and completely. Do not translate, summarize, or omit English sentences. Japanese public transit announcement. Station, bus stop, line, train, bus, flight, ferry, time, platform, gate, and destination. English transit vocabulary: arriving, departing, bound for, platform, bus stop, boarding gate, transfer, on schedule, delayed, and cancelled.",
     }]);
   });
