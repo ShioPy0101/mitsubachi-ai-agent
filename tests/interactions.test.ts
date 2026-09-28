@@ -10,6 +10,7 @@ const interaction = {
   token: "callback-token",
   guild_id: "300",
   channel_id: "400",
+  member: { user: { id: "600" } },
   data: {
     name: "platform-ai-agent",
     options: [{ name: "audio", type: 11, value: "500" }],
@@ -32,6 +33,7 @@ describe("/platform-ai-agent interaction", () => {
     if (!result.ok) return;
     expect(result.value.interactionId).toBe("100");
     expect(result.value.attachment.id).toBe("500");
+    expect(result.value.userId).toBe("600");
     expect(isSupportedAudioAttachment(result.value.attachment)).toBe(true);
   });
 
@@ -54,6 +56,13 @@ describe("/platform-ai-agent interaction", () => {
       },
     });
     expect(result).toEqual({ ok: false, error: "audio添付を読み取れませんでした。" });
+  });
+
+  it("reads a direct-message user ID when guild member data is absent", () => {
+    const { member: _member, guild_id: _guildId, ...directInteraction } = interaction;
+    const result = parseShioCommand({ ...directInteraction, user: { id: "700" } });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.userId).toBe("700");
   });
 
   it("rejects unsupported MIME or extension combinations", () => {

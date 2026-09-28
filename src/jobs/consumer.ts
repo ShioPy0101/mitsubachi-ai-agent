@@ -5,6 +5,11 @@ import { JobsRepository } from "../db/jobs-repository";
 import { D1StationsRepository } from "../db/stations-repository";
 import { AttachmentUnavailableError, DiscordRestClient, type DiscordFile } from "../discord/rest-client";
 import { formatAnalysisResult, formatFailure } from "../discord/messages";
+import {
+  CloudflareAiGatewayGuardrails,
+  GuardrailBlockedError,
+  GuardrailUnavailableError,
+} from "../guardrails/cloudflare-ai-gateway";
 import { GeminiMetadataService, isRetryableGeminiError } from "../metadata/gemini";
 import { generateRailwayFilename } from "../railway/filename";
 import type { RailwayAnnouncementMetadata } from "../railway/types";
@@ -17,6 +22,9 @@ import type { AudioJob, AudioJobMessage } from "./types";
 const AudioJobMessageSchema = z.object({ jobId: z.string().uuid() });
 const terminalStatuses = new Set(["completed", "partial", "failed"]);
 const errorStages = new WeakMap<object, string>();
+const contentPolicyBlockedMessage = "この音声はコンテンツポリシー判定により処理できませんでした。";
+const contentPolicyUnavailableMessage = "コンテンツポリシー判定を完了できなかったため、この音声は処理できませんでした。";
+const emptyTranscriptionMessage = "音声から文字を認識できませんでした。別の音声ファイルでお試しください。";
 
 function errorDetails(error: unknown): { errorName: string; errorMessage: string } {
   if (error instanceof Error) return { errorName: error.name, errorMessage: error.message };
@@ -170,6 +178,7 @@ async function processJob(job: AudioJob, env: Env, attempt: number): Promise<voi
   const attachment = attachmentFor(job);
   let audio: ArrayBuffer | null = null;
   let transcriptionText = job.transcriptionText;
+  let needsTranscriptionCheckpoint = false;
   if (transcriptionText === null) {
     await jobs.updateStatus(job.id, "transcribing");
     await updateProgress(job, "音声ファイルを取得しています…", callbacks, discord);
@@ -181,10 +190,64 @@ async function processJob(job: AudioJob, env: Env, attempt: number): Promise<voi
         audio: audio as ArrayBuffer, contentType: job.contentType, filename: job.originalFilename,
       }));
     transcriptionText = transcription.text;
-    await runStage(job.id, "transcription_checkpoint", () => jobs.saveTranscription(job.id, transcription.text));
+    needsTranscriptionCheckpoint = true;
   } else {
     console.info("audio_job_transcription_checkpoint_reused", { jobId: job.id, attempt });
-    await updateProgress(job, "保存済みの文字起こしを再利用して、メタデータ解析を再開しています…", callbacks, discord);
+    await updateProgress(job, "保存済みの文字起こしを再利用して、コンテンツポリシー判定を再開しています…", callbacks, discord);
+  }
+
+  await updateProgress(job, "文字起こしが完了しました。コンテンツポリシーを確認しています…", callbacks, discord);
+  console.info("audio_job_stage_started", { jobId: job.id, stage: "guardrails_evaluation" });
+  try {
+    await new CloudflareAiGatewayGuardrails(env.AI, env.GUARDRAILS_GATEWAY_ID).assertAllowed(transcriptionText);
+    console.info("audio_job_stage_completed", { jobId: job.id, stage: "guardrails_evaluation" });
+  } catch (error) {
+    const timestamp = new Date().toISOString();
+    if (error instanceof GuardrailBlockedError) {
+      console.warn("audio_job_guardrail_blocked", {
+        user_id: job.source.userId,
+        guild_id: job.source.guildId,
+        attachment_id: job.source.attachmentId,
+        blocked_category: error.blockedCategory,
+        timestamp,
+      });
+      await jobs.discardTranscription(job.id);
+      await jobs.updateStatus(job.id, "failed", "content_policy_blocked");
+      await notify(job, contentPolicyBlockedMessage, callbacks, discord);
+      await jobs.clearEphemeral(job.id);
+      return;
+    }
+    if (error instanceof GuardrailUnavailableError) {
+      console.error("audio_job_guardrail_unavailable", {
+        user_id: job.source.userId,
+        guild_id: job.source.guildId,
+        attachment_id: job.source.attachmentId,
+        timestamp,
+      });
+      await jobs.discardTranscription(job.id);
+      await jobs.updateStatus(job.id, "failed", "guardrails_unavailable");
+      await notify(job, contentPolicyUnavailableMessage, callbacks, discord);
+      await jobs.clearEphemeral(job.id);
+      return;
+    }
+    throw error;
+  }
+
+  if (transcriptionText.trim() === "") {
+    console.warn("audio_job_empty_transcription", {
+      jobId: job.id,
+      attachment_id: job.source.attachmentId,
+      timestamp: new Date().toISOString(),
+    });
+    await jobs.discardTranscription(job.id);
+    await jobs.updateStatus(job.id, "failed", "empty_transcription");
+    await notify(job, emptyTranscriptionMessage, callbacks, discord);
+    await jobs.clearEphemeral(job.id);
+    return;
+  }
+
+  if (needsTranscriptionCheckpoint) {
+    await runStage(job.id, "transcription_checkpoint", () => jobs.saveTranscription(job.id, transcriptionText));
   }
   await jobs.updateStatus(job.id, "metadata_extracting");
   await updateProgress(job, "文字起こしが完了しました。駅候補とメタデータを解析しています…", callbacks, discord);

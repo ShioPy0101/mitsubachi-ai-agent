@@ -7,6 +7,7 @@ interface __BaseEnv_Env {
 	AI: Ai;
 	MAX_AUDIO_BYTES: "26214400";
 	GEMINI_MODEL: "gemini-3.1-flash-lite";
+	GUARDRAILS_GATEWAY_ID: "mitsubachi-guardrails";
 	DISCORD_BOT_TOKEN: string;
 	DISCORD_PUBLIC_KEY: string;
 	DISCORD_APPLICATION_ID: string;
@@ -25,7 +26,7 @@ type StringifyValues<EnvType extends Record<string, unknown>> = {
 	[Binding in keyof EnvType]: EnvType[Binding] extends string ? EnvType[Binding] : string;
 };
 declare namespace NodeJS {
-	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "MAX_AUDIO_BYTES" | "GEMINI_MODEL" | "DISCORD_BOT_TOKEN" | "DISCORD_PUBLIC_KEY" | "DISCORD_APPLICATION_ID" | "GEMINI_API_KEY" | "DISCORD_DEV_GUILD_ID">> {}
+	interface ProcessEnv extends StringifyValues<Pick<Cloudflare.Env, "MAX_AUDIO_BYTES" | "GEMINI_MODEL" | "GUARDRAILS_GATEWAY_ID" | "DISCORD_BOT_TOKEN" | "DISCORD_PUBLIC_KEY" | "DISCORD_APPLICATION_ID" | "GEMINI_API_KEY" | "DISCORD_DEV_GUILD_ID">> {}
 }
 
 // Begin runtime types
