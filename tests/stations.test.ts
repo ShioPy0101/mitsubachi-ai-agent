@@ -97,6 +97,29 @@ describe("station normalization and ranking", () => {
     });
   });
 
+  it("does not treat a one-character station as a substring of another station", async () => {
+    const fuku: Station = {
+      id: 2971,
+      name: "福",
+      kana: "ふく",
+      kanaSource: "pykakasi",
+      operatorName: null,
+      lineName: "阪神なんば線",
+      prefecture: "大阪府",
+      prevStation: "出来島",
+      nextStation: "伝法",
+      longitude: 135.442692,
+      latitude: 34.699791,
+      postal: "5550034",
+    };
+    const service = new StationCandidateService(new FixtureRepository([fuku]));
+
+    await expect(service.candidates("停車駅は敦賀、福井、芦原温泉です"))
+      .resolves.toEqual([]);
+    await expect(service.candidates("次は福です"))
+      .resolves.toMatchObject([{ station: { name: "福" } }]);
+  });
+
   it("ranks 伊勢市 → 五十鈴ヶ丘 → 二見浦 context first", async () => {
     const candidates = await new StationCandidateService(new FixtureRepository(iseStations)).candidates(
       "次はいすずがおかです",
@@ -109,6 +132,19 @@ describe("station normalization and ranking", () => {
   it("returns unresolved for no candidates", () => {
     expect(resolveStation([], null)).toEqual({
       stationName: null, candidateStationId: null, confidence: 0, source: "unresolved",
+    });
+  });
+
+  it("does not infer the recording station from a strong candidate", () => {
+    const station = iseStations[1];
+    expect(station).toBeDefined();
+    if (station === undefined) return;
+    const candidate = scoreStation(station, "次は五十鈴ヶ丘です", {});
+
+    expect(resolveStation([candidate], null)).toMatchObject({
+      stationName: null,
+      candidateStationId: null,
+      source: "unresolved",
     });
   });
 });

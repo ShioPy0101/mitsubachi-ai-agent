@@ -18,7 +18,7 @@ export function formatAnalysisResult(
     metadata.summary,
     "",
     `補正文字起こし:\n「${transcription.slice(0, 1200)}」`,
-    metadata.station === null ? null : `駅名候補: ${metadata.station}`,
+    metadata.station === null ? null : `推定収録駅: ${metadata.station}`,
     `ファイル名:\n\`\`\`text\n${filename}\n\`\`\``,
   ].filter((line): line is string => line !== null).join("\n");
 }

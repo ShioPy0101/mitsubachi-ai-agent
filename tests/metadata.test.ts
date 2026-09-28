@@ -54,6 +54,9 @@ describe("Gemini metadata boundary", () => {
     expect(prompt).toContain("isTransitAnnouncement");
     expect(prompt).toContain("routeSupported");
     expect(prompt).toContain("福井、芦原温泉、加賀温泉");
+    expect(prompt).toContain("推定収録駅");
+    expect(prompt).toContain("音声内の複数の独立した手掛かり");
+    expect(prompt).toContain("収録駅を一意に絞れない場合はnull");
   });
 
   it("drops a station returned outside the supplied candidates", async () => {

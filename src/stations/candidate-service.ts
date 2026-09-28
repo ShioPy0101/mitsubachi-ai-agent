@@ -15,6 +15,17 @@ function adjacencyScore(station: Station, context: StationContext): number {
   return previousMatches || nextMatches ? 1 : 0;
 }
 
+function isEligibleStationMention(station: Station, transcription: string): boolean {
+  if (Array.from(station.name).length > 1) return true;
+  const escapedName = station.name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const normalized = transcription.normalize("NFKC");
+  if (normalized.includes(`${station.name}駅`)) return true;
+  return new RegExp(
+    `(?:次は|つぎは|まもなく|こちらは)[\\s、,「『]*${escapedName}(?:です|でございます|に到着|[、。,.!?！？」』])`,
+    "u",
+  ).test(normalized);
+}
+
 export function scoreStation(station: Station, transcription: string, context: StationContext): StationCandidate {
   const nameSimilarity = stationNameSimilarity(transcription, station.name);
   const kanaSimilarity = stationKanaSimilarity(transcription, station.kana);
@@ -38,7 +49,9 @@ export class StationCandidateService {
   async candidates(transcription: string, context: StationContext = {}): Promise<StationCandidate[]> {
     const searchText = extractStationSearchText(transcription);
     const pool = await this.repository.findCandidatePool(searchText, context, 100);
-    const initial = pool.map((station) => scoreStation(station, transcription, context));
+    const initial = pool
+      .filter((station) => isEligibleStationMention(station, transcription))
+      .map((station) => scoreStation(station, transcription, context));
     const anchorNames = [...new Set(
       initial.filter((candidate) => candidate.nameSimilarity === 1).map((candidate) => candidate.station.name),
     )].slice(0, 12);
@@ -46,8 +59,12 @@ export class StationCandidateService {
       ? await this.repository.findRouteCandidatePool(anchorNames, 16, 100)
       : [];
     const routeIds = new Set(routePool.map((station) => station.id));
-    const combined = new Map(pool.map((station) => [station.id, station]));
-    for (const station of routePool) combined.set(station.id, station);
+    const combined = new Map(
+      pool.filter((station) => isEligibleStationMention(station, transcription)).map((station) => [station.id, station]),
+    );
+    for (const station of routePool) {
+      if (isEligibleStationMention(station, transcription)) combined.set(station.id, station);
+    }
     return [...combined.values()]
       .map((station) => scoreStation(station, transcription, context))
       .map((candidate): StationCandidate => {
