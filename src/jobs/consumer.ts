@@ -5,9 +5,8 @@ import { JobsRepository } from "../db/jobs-repository";
 import { D1StationsRepository } from "../db/stations-repository";
 import { AttachmentUnavailableError, DiscordRestClient, type DiscordFile } from "../discord/rest-client";
 import { formatAnalysisResult, formatFailure } from "../discord/messages";
-import { GeminiMetadataService, isRetryableGeminiError } from "../metadata/gemini";
+import { GeminiMetadataService, GeminiSafetyBlockedError, isRetryableGeminiError } from "../metadata/gemini";
 import { generateRailwayFilename } from "../railway/filename";
-import type { RailwayAnnouncementMetadata } from "../railway/types";
 import { StationCandidateService } from "../stations/candidate-service";
 import { resolveStation } from "../stations/resolver";
 import { CloudflareWhisperTranscriptionService } from "../transcription/workers-ai";
@@ -157,10 +156,8 @@ async function notify(
   }
 }
 
-const emptyMetadata: RailwayAnnouncementMetadata = {
-  station: null, line: null, trainType: null, trainName: null, trainNumber: null, destination: null,
-  departureTime: null, arrivalTime: null, platform: null, nextStation: null, category: "other", summary: null,
-};
+const rejectedContentMessage = "この音声は利用条件に合わないため処理できませんでした。";
+const emptyTranscriptionMessage = "音声から文字を認識できませんでした。別の音声ファイルでお試しください。";
 
 async function processJob(job: AudioJob, env: Env, attempt: number): Promise<void> {
   const jobs = new JobsRepository(env.DB);
@@ -170,6 +167,7 @@ async function processJob(job: AudioJob, env: Env, attempt: number): Promise<voi
   const attachment = attachmentFor(job);
   let audio: ArrayBuffer | null = null;
   let transcriptionText = job.transcriptionText;
+  let needsTranscriptionCheckpoint = false;
   if (transcriptionText === null) {
     await jobs.updateStatus(job.id, "transcribing");
     await updateProgress(job, "音声ファイルを取得しています…", callbacks, discord);
@@ -181,13 +179,20 @@ async function processJob(job: AudioJob, env: Env, attempt: number): Promise<voi
         audio: audio as ArrayBuffer, contentType: job.contentType, filename: job.originalFilename,
       }));
     transcriptionText = transcription.text;
-    await runStage(job.id, "transcription_checkpoint", () => jobs.saveTranscription(job.id, transcription.text));
+    needsTranscriptionCheckpoint = true;
   } else {
     console.info("audio_job_transcription_checkpoint_reused", { jobId: job.id, attempt });
     await updateProgress(job, "保存済みの文字起こしを再利用して、メタデータ解析を再開しています…", callbacks, discord);
   }
+  if (transcriptionText.trim() === "") {
+    await jobs.discardTranscription(job.id);
+    await jobs.updateStatus(job.id, "failed", "empty_transcription");
+    await notify(job, emptyTranscriptionMessage, callbacks, discord);
+    await jobs.clearEphemeral(job.id);
+    return;
+  }
   await jobs.updateStatus(job.id, "metadata_extracting");
-  await updateProgress(job, "文字起こしが完了しました。駅候補とメタデータを解析しています…", callbacks, discord);
+  await updateProgress(job, "文字起こしが完了しました。利用条件とメタデータを確認しています…", callbacks, discord);
   const candidateService = new StationCandidateService(new D1StationsRepository(env.DB));
   const candidates = await runStage(job.id, "station_candidates", () => candidateService.candidates(transcriptionText));
   let extracted: Awaited<ReturnType<GeminiMetadataService["extract"]>>;
@@ -195,20 +200,45 @@ async function processJob(job: AudioJob, env: Env, attempt: number): Promise<voi
     extracted = await runStage(job.id, "gemini_metadata", () =>
       new GeminiMetadataService(env.GEMINI_API_KEY, env.GEMINI_MODEL).extract(transcriptionText, candidates));
   } catch (error) {
+    if (error instanceof GeminiSafetyBlockedError) {
+      console.warn("audio_job_safety_blocked", {
+        user_id: job.source.userId,
+        guild_id: job.source.guildId,
+        attachment_id: job.source.attachmentId,
+        blocked_category: error.blockedCategories.join(",") || "SAFETY",
+        timestamp: new Date().toISOString(),
+      });
+      await jobs.discardTranscription(job.id);
+      await jobs.updateStatus(job.id, "failed", "content_policy_blocked");
+      await notify(job, rejectedContentMessage, callbacks, discord);
+      await jobs.clearEphemeral(job.id);
+      return;
+    }
     if (isRetryableGeminiError(error)) throw error;
-    console.warn("audio_job_metadata_partial", { jobId: job.id, ...errorDetails(error) });
+    console.warn("audio_job_metadata_rejected", { jobId: job.id, ...errorDetails(error) });
     await sendAlert(env, discord, job.id, errorStage(error, "metadata_processing"), error, attempt);
-    const filename = generateRailwayFilename(1, emptyMetadata, job.originalFilename);
-    await runStage(job.id, "partial_clip_save", () => clips.save({
-      jobId: job.id, clipIndex: 1, rawTranscription: transcriptionText, normalizedTranscription: null,
-      metadata: emptyMetadata,
-      resolution: { stationName: null, candidateStationId: null, confidence: 0, source: "unresolved" },
-      generatedFilename: filename, createdAt: new Date().toISOString(),
-    }));
-    await jobs.updateStatus(job.id, "partial", "metadata_extraction_failed");
-    await notify(job, `文字起こしは完了しましたが、メタデータ解析に失敗しました。\n\n「${transcriptionText.slice(0, 1200)}」`, callbacks, discord);
-    await runStage(job.id, "ephemeral_cleanup", () => jobs.clearEphemeral(job.id));
+    await jobs.discardTranscription(job.id);
+    await jobs.updateStatus(job.id, "failed", "metadata_extraction_failed");
+    await notify(job, formatFailure("processing_failed"), callbacks, discord);
+    await jobs.clearEphemeral(job.id);
     return;
+  }
+  if (!extracted.isTransitAnnouncement) {
+    console.warn("audio_job_non_transit_blocked", {
+      user_id: job.source.userId,
+      guild_id: job.source.guildId,
+      attachment_id: job.source.attachmentId,
+      blocked_category: "NON_TRANSIT_CONTENT",
+      timestamp: new Date().toISOString(),
+    });
+    await jobs.discardTranscription(job.id);
+    await jobs.updateStatus(job.id, "failed", "non_transit_content");
+    await notify(job, rejectedContentMessage, callbacks, discord);
+    await jobs.clearEphemeral(job.id);
+    return;
+  }
+  if (needsTranscriptionCheckpoint) {
+    await runStage(job.id, "transcription_checkpoint", () => jobs.saveTranscription(job.id, transcriptionText));
   }
   const resolution = resolveStation(candidates, extracted.metadata.station);
   const metadata = { ...extracted.metadata, station: resolution.stationName };

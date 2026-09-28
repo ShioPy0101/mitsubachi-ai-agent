@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { GeminiApiError, GeminiMetadataService, isRetryableGeminiError } from "../src/metadata/gemini";
 import { buildGeminiPrompt } from "../src/metadata/prompt";
-import { RailwayAnnouncementSchema, railwayAnnouncementJsonSchema } from "../src/metadata/schema";
+import { TransitAnnouncementSchema, transitAnnouncementJsonSchema } from "../src/metadata/schema";
 import { scoreStation } from "../src/stations/candidate-service";
 import { iseStations } from "./fixtures/stations";
 
 const validOutput = {
+  isTransitAnnouncement: true,
   normalizedTranscription: "次は五十鈴ヶ丘です",
   station: "五十鈴ヶ丘",
   line: "JR参宮線",
@@ -23,12 +24,12 @@ const validOutput = {
 
 describe("Gemini metadata boundary", () => {
   it("validates the structured schema", () => {
-    expect(RailwayAnnouncementSchema.parse(validOutput).departureTime).toBe("13:25");
-    expect(() => RailwayAnnouncementSchema.parse({ ...validOutput, departureTime: "1:25" })).toThrow();
-    expect(() => RailwayAnnouncementSchema.parse({ ...validOutput, category: "invented" })).toThrow();
-    expect(() => RailwayAnnouncementSchema.parse({ ...validOutput, summary: "長".repeat(31) })).toThrow();
-    expect(() => RailwayAnnouncementSchema.parse({ ...validOutput, normalizedTranscription: "  " })).toThrow();
-    expect(railwayAnnouncementJsonSchema.properties.normalizedTranscription.minLength).toBe(1);
+    expect(TransitAnnouncementSchema.parse(validOutput).departureTime).toBe("13:25");
+    expect(() => TransitAnnouncementSchema.parse({ ...validOutput, departureTime: "1:25" })).toThrow();
+    expect(() => TransitAnnouncementSchema.parse({ ...validOutput, category: "invented" })).toThrow();
+    expect(() => TransitAnnouncementSchema.parse({ ...validOutput, summary: "長".repeat(31) })).toThrow();
+    expect(() => TransitAnnouncementSchema.parse({ ...validOutput, normalizedTranscription: "  " })).toThrow();
+    expect(transitAnnouncementJsonSchema.properties.normalizedTranscription.minLength).toBe(1);
   });
 
   it("includes non-inference and station candidate rules in the prompt", () => {
@@ -48,6 +49,11 @@ describe("Gemini metadata boundary", () => {
     expect(prompt).toContain("各言語を元の言語のまま保持");
     expect(prompt).toContain("異なる言語による同内容の案内は重複とみなさない");
     expect(prompt).toContain("必ず空文字にせず");
+    expect(prompt).toContain("迷う場合はfalse");
+    expect(prompt).toContain("路線バス");
+    expect(prompt).toContain("isTransitAnnouncement");
+    expect(prompt).toContain("routeSupported");
+    expect(prompt).toContain("福井、芦原温泉、加賀温泉");
   });
 
   it("drops a station returned outside the supplied candidates", async () => {
@@ -84,6 +90,48 @@ describe("Gemini metadata boundary", () => {
       400,
       '{"error":{"message":"API key not valid"}}',
     ));
+  });
+
+  it("uses strict safety settings and reports blocked prompt categories", async () => {
+    let requestBody: unknown;
+    const fetcher = async (_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      requestBody = JSON.parse(String(init?.body));
+      return Response.json({
+        promptFeedback: {
+          blockReason: "SAFETY",
+          safetyRatings: [{ category: "HARM_CATEGORY_DANGEROUS_CONTENT", probability: "LOW", blocked: true }],
+        },
+      });
+    };
+    const service = new GeminiMetadataService("secret", "gemini-test", fetcher);
+
+    await expect(service.extract("unsafe", [])).rejects.toMatchObject({
+      name: "GeminiSafetyBlockedError",
+      blockedCategories: ["HARM_CATEGORY_DANGEROUS_CONTENT"],
+    });
+    expect(requestBody).toMatchObject({
+      safetySettings: [
+        { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_LOW_AND_ABOVE" },
+        { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_LOW_AND_ABOVE" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_LOW_AND_ABOVE" },
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_LOW_AND_ABOVE" },
+      ],
+    });
+  });
+
+  it("reports a safety-blocked response without requiring response content", async () => {
+    const fetcher = async (): Promise<Response> => Response.json({
+      candidates: [{
+        finishReason: "SAFETY",
+        safetyRatings: [{ category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", probability: "MEDIUM", blocked: true }],
+      }],
+    });
+    const service = new GeminiMetadataService("secret", "gemini-test", fetcher);
+
+    await expect(service.extract("unsafe", [])).rejects.toMatchObject({
+      name: "GeminiSafetyBlockedError",
+      blockedCategories: ["HARM_CATEGORY_SEXUALLY_EXPLICIT"],
+    });
   });
 
   it("retries temporary Gemini failures but not deterministic client errors", () => {

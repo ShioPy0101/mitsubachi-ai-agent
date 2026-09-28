@@ -1,7 +1,14 @@
-import { GeminiResponseSchema, RailwayAnnouncementSchema, railwayAnnouncementJsonSchema } from "./schema";
+import { GeminiResponseSchema, TransitAnnouncementSchema, transitAnnouncementJsonSchema } from "./schema";
 import { buildGeminiPrompt } from "./prompt";
 import type { MetadataResult, MetadataService } from "./service";
 import type { StationCandidate } from "../stations/types";
+
+export class GeminiSafetyBlockedError extends Error {
+  constructor(readonly blockedCategories: readonly string[]) {
+    super("Gemini blocked the transcription due to safety settings");
+    this.name = "GeminiSafetyBlockedError";
+  }
+}
 
 export class GeminiApiError extends Error {
   constructor(
@@ -39,8 +46,14 @@ export class GeminiMetadataService implements MetadataService {
           generationConfig: {
             temperature: 0,
             responseMimeType: "application/json",
-            responseJsonSchema: railwayAnnouncementJsonSchema,
+            responseJsonSchema: transitAnnouncementJsonSchema,
           },
+          safetySettings: [
+            "HARM_CATEGORY_HARASSMENT",
+            "HARM_CATEGORY_HATE_SPEECH",
+            "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            "HARM_CATEGORY_DANGEROUS_CONTENT",
+          ].map((category) => ({ category, threshold: "BLOCK_LOW_AND_ABOVE" })),
         }),
       },
     );
@@ -48,7 +61,28 @@ export class GeminiMetadataService implements MetadataService {
       throw new GeminiApiError(response.status, (await response.text()).slice(0, 500));
     }
     const envelope = GeminiResponseSchema.parse(await response.json());
-    const text = envelope.candidates[0]?.content.parts[0]?.text;
+    const promptBlockedCategories = envelope.promptFeedback?.safetyRatings
+      ?.filter((rating) => rating.blocked)
+      .map((rating) => rating.category) ?? [];
+    if (envelope.promptFeedback?.blockReason !== undefined) {
+      throw new GeminiSafetyBlockedError(
+        promptBlockedCategories.length > 0 ? promptBlockedCategories : [envelope.promptFeedback.blockReason],
+      );
+    }
+    const candidate = envelope.candidates[0];
+    const responseBlockedCategories = candidate?.safetyRatings
+      ?.filter((rating) => rating.blocked)
+      .map((rating) => rating.category) ?? [];
+    const blockedFinishReasons = new Set(["SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "RECITATION"]);
+    if (responseBlockedCategories.length > 0
+      || (candidate?.finishReason !== undefined && blockedFinishReasons.has(candidate.finishReason))) {
+      throw new GeminiSafetyBlockedError(
+        responseBlockedCategories.length > 0
+          ? responseBlockedCategories
+          : [candidate?.finishReason ?? "SAFETY"],
+      );
+    }
+    const text = candidate?.content?.parts[0]?.text;
     if (text === undefined) throw new Error("Gemini response did not contain JSON text");
     const parsedJson: unknown = JSON.parse(text);
     const normalizedJson = typeof parsedJson === "object"
@@ -59,9 +93,10 @@ export class GeminiMetadataService implements MetadataService {
       && transcription.trim() !== ""
       ? { ...parsedJson, normalizedTranscription: transcription }
       : parsedJson;
-    const parsed = RailwayAnnouncementSchema.parse(normalizedJson);
+    const parsed = TransitAnnouncementSchema.parse(normalizedJson);
     const candidateNames = new Set(stationCandidates.map(({ station }) => station.name));
     return {
+      isTransitAnnouncement: parsed.isTransitAnnouncement,
       normalizedTranscription: parsed.normalizedTranscription,
       metadata: {
         station: parsed.station !== null && candidateNames.has(parsed.station) ? parsed.station : null,

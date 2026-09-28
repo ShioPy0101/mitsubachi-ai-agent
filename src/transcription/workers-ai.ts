@@ -1,12 +1,12 @@
 import { WorkersAiWhisperResponseSchema } from "./schemas";
 import type { TranscriptionInput, TranscriptionResult, TranscriptionService } from "./service";
 
-const railwayAnnouncementPrompt = [
-  "日本の鉄道駅構内放送。駅名、路線名、列車名、時刻、番線。",
+const transitAnnouncementPrompt = [
+  "日本の公共交通機関の案内放送。鉄道、地下鉄、路面電車、路線バス、高速バス、船舶、航空機。駅名、停留所名、路線名、便名、時刻、乗り場。",
   "日本語、英語、中国語、韓国語など、音声で話されたすべての言語を翻訳・要約・省略せず、最後までそのまま文字起こしする。",
   "Transcribe every spoken language verbatim and completely. Do not translate, summarize, or omit English sentences.",
-  "Japanese railway station announcement. Station, line, train, time, platform, car, reserved seat, non-reserved seat, and destination.",
-  "English railway vocabulary: the train arriving at the platform, limited express, bound for, cars, reserved seats, non-reserved seats, on schedule, please stand behind the yellow tactile paving.",
+  "Japanese public transit announcement. Station, bus stop, line, train, bus, flight, ferry, time, platform, gate, and destination.",
+  "English transit vocabulary: arriving, departing, bound for, platform, bus stop, boarding gate, transfer, on schedule, delayed, and cancelled.",
 ].join(" ");
 
 export interface WhisperAiRunner {
@@ -35,7 +35,7 @@ export class CloudflareWhisperTranscriptionService implements TranscriptionServi
       task: "transcribe",
       vad_filter: true,
       beam_size: 8,
-      initial_prompt: railwayAnnouncementPrompt,
+      initial_prompt: transitAnnouncementPrompt,
     });
     const parsed = WorkersAiWhisperResponseSchema.parse(output);
     return {

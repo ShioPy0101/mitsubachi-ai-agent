@@ -1,16 +1,26 @@
 import type { StationCandidate } from "../stations/types";
 
 export function buildGeminiPrompt(transcription: string, candidates: readonly StationCandidate[]): string {
-  const stationCandidates = candidates.map(({ station, score }) => ({
+  const stationCandidates = candidates.map(({ station, score, routeContextBonus }) => ({
     name: station.name,
     kana: station.kana,
     lineName: station.lineName,
     prefecture: station.prefecture,
     prevStation: station.prevStation,
     nextStation: station.nextStation,
+    longitude: station.longitude,
+    latitude: station.latitude,
+    routeSupported: routeContextBonus > 0,
     score: Number(score.toFixed(3)),
   }));
-  return `これは日本の鉄道駅構内放送の文字起こしです。
+  return `これは公共交通機関の案内放送として投稿された文字起こしです。
+
+最初に、この入力が実際の公共交通機関の案内放送かを厳格に判定してください。
+鉄道、地下鉄、路面電車、路線バス、高速バス、船舶、航空機など、不特定多数が利用する公共交通機関の運行・乗降に直接関係する放送だけisTransitAnnouncementをtrueにしてください。
+到着、発車、停車地、経由地、行先、乗換、遅延、運休、乗り場、車内設備、乗降方法、安全案内は対象です。
+一般会話、音楽、動画・配信音声、広告だけの音声、自家用車・道路交通だけの案内、施設案内だけの音声、判定不能な内容はfalseです。
+交通に関する単語や地名が偶然含まれるだけではtrueにしないでください。迷う場合はfalseにしてください。
+falseの場合もnormalizedTranscriptionには入力全文を返し、metadata項目はnull、categoryはother、summaryはnullにしてください。
 
 放送には日本語、英語、中国語、韓国語など複数言語が含まれる場合があります。
 normalizedTranscriptionでは各言語を元の言語のまま保持し、翻訳したり日本語へ置き換えたりしないでください。
@@ -30,10 +40,14 @@ stationCandidates は駅マスタ data/stations.csv から検索した候補で�
 stationCandidates の候補と文字起こしが十分一致すると判断できる場合のみ、候補の正式な name を station として返してください。
 十分な候補がない場合は null を返してください。
 候補の lineName / prevStation / nextStation は判断材料として利用できますが、それだけを根拠に駅名を推測してはいけません。
+停車駅の列挙では各出現を局所的な文脈で判断してください。行先として正しい駅名を、似た発音の停車駅へ一括置換してはいけません。
+prevStation / nextStation は路線上の隣駅であり、列車やバスの次の停車地を意味しません。特急などは途中駅を通過するため、隣駅情報だけを根拠に停車駅を追加・置換してはいけません。
+routeSupportedがtrueの候補は、文字起こしに同一路線の実在駅が複数現れ、その路線上の駅として抽出されたことを示します。これは経路候補にすぎず、停車を保証しません。対象箇所の発音、列挙順序、緯度経度による地理的な並びがすべて整合する場合に限り誤認識を補正してください。
+例: 行先の「和倉温泉」は維持しつつ、停車駅列の「福井、和倉温泉、加賀温泉」は発音と並びが整合する場合のみ「福井、芦原温泉、加賀温泉」と補正します。
 ASRに軽微な読み間違い・表記揺れがある場合は、候補との音韻的類似性が十分高ければ正式名称へ正規化して構いません。
 normalizedTranscriptionには、確実な軽微補正だけを反映した全文を返してください。rawを書き換える用途には使いません。
 normalizedTranscriptionは必ず空文字にせず、補正できない場合も入力のtranscription全文をそのまま返してください。
-鉄道文脈と発音からほぼ確実な同音・近音の誤変換は、実在する自然な表記へ直してください。
+公共交通の文脈と発音からほぼ確実な同音・近音の誤変換は、実在する自然な表記へ直してください。
 例: 「鶴ヶ方面」→「敦賀方面」、「梅田難波天王寺方面中本行」→「梅田・なんば・天王寺方面、なかもず行」、「黄色い展示ブロック」→「黄色い点字ブロック」。
 ただし確信できない固有名詞を知識だけで補完してはいけません。
 同じ言語の同一文または案内ブロックが連続して完全に繰り返されている場合、normalizedTranscriptionでは1回にまとめてください。
