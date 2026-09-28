@@ -36,10 +36,23 @@ describe("silence audio segmentation", () => {
     expect(chunks).toHaveLength(2);
     expect(chunks[0]?.contentType).toBe("audio/wav");
     expect(chunks[0]?.startSec).toBe(0);
-    expect(chunks[0]?.endSec).toBeCloseTo(1.55, 1);
-    expect(chunks[1]?.startSec).toBeCloseTo(1.25, 1);
+    expect(chunks[0]?.endSec).toBeCloseTo(1.15, 1);
+    expect(chunks[1]?.startSec).toBeCloseTo(1.65, 1);
     expect(chunks[1]?.endSec).toBeCloseTo(2.8, 1);
     expect(new TextDecoder().decode(chunks[0]?.audio.slice(0, 4))).toBe("RIFF");
+  });
+
+  it("removes sustained silence at the beginning and end", async () => {
+    const sampleRate = 8_000;
+    const samples = new Float32Array(Math.round(sampleRate * 2.6));
+    samples.fill(0.2, Math.round(sampleRate * 0.8), Math.round(sampleRate * 1.8));
+
+    const chunks = await splitAudioOnSilence(monoWav(samples), "audio/wav", "announcement.wav");
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]?.startSec).toBeCloseTo(0.65, 1);
+    expect(chunks[0]?.endSec).toBeCloseTo(1.95, 1);
+    expect(chunks[0]?.audio.byteLength).toBeLessThan(monoWav(samples).byteLength);
   });
 
   it("keeps an unsupported format unchanged", async () => {

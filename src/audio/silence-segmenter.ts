@@ -151,7 +151,7 @@ function findRanges(decoded: DecodedAudio): Array<{ start: number; end: number }
   const minimumSilentFrames = Math.ceil(minimumSilenceSec / frameDurationSec);
   const minimumChunkSamples = Math.ceil(minimumChunkSec * decoded.sampleRate);
   const paddingSamples = Math.ceil(edgePaddingSec * decoded.sampleRate);
-  const cuts: number[] = [];
+  const silentRuns: Array<{ start: number; end: number }> = [];
 
   for (let index = 0; index < levels.length;) {
     if ((levels[index] ?? 0) > threshold) {
@@ -161,20 +161,31 @@ function findRanges(decoded: DecodedAudio): Array<{ start: number; end: number }
     const runStart = index;
     while (index < levels.length && (levels[index] ?? 0) <= threshold) index += 1;
     if (index - runStart < minimumSilentFrames) continue;
-    const silentStart = runStart * samplesPerFrame;
-    const silentEnd = Math.min(sampleCount, index * samplesPerFrame);
-    if (silentStart >= minimumChunkSamples && sampleCount - silentEnd >= minimumChunkSamples) {
-      cuts.push(Math.round((silentStart + silentEnd) / 2));
-    }
+    silentRuns.push({
+      start: runStart * samplesPerFrame,
+      end: Math.min(sampleCount, index * samplesPerFrame),
+    });
   }
 
-  if (cuts.length === 0) return [{ start: 0, end: sampleCount }];
-  const selectedCuts = cuts.slice(0, maximumChunks - 1);
-  const boundaries = [0, ...selectedCuts, sampleCount];
-  return boundaries.slice(0, -1).map((start, index) => ({
-    start: Math.max(0, start - (index === 0 ? 0 : paddingSamples)),
-    end: Math.min(sampleCount, (boundaries[index + 1] ?? sampleCount) + (index === boundaries.length - 2 ? 0 : paddingSamples)),
-  }));
+  const firstActiveFrame = levels.findIndex((level) => level > threshold);
+  if (firstActiveFrame < 0) return [{ start: 0, end: sampleCount }];
+  let lastActiveFrame = levels.length - 1;
+  while (lastActiveFrame > firstActiveFrame && (levels[lastActiveFrame] ?? 0) <= threshold) lastActiveFrame -= 1;
+  const trimmedStart = Math.max(0, firstActiveFrame * samplesPerFrame - paddingSamples);
+  const trimmedEnd = Math.min(sampleCount, (lastActiveFrame + 1) * samplesPerFrame + paddingSamples);
+
+  const ranges: Array<{ start: number; end: number }> = [];
+  let currentStart = trimmedStart;
+  for (const silence of silentRuns) {
+    if (ranges.length >= maximumChunks - 1) break;
+    const previousEnd = Math.min(trimmedEnd, silence.start + paddingSamples);
+    const nextStart = Math.max(trimmedStart, silence.end - paddingSamples);
+    if (previousEnd - currentStart < minimumChunkSamples || trimmedEnd - nextStart < minimumChunkSamples) continue;
+    ranges.push({ start: currentStart, end: previousEnd });
+    currentStart = nextStart;
+  }
+  ranges.push({ start: currentStart, end: trimmedEnd });
+  return ranges;
 }
 
 function writeAscii(view: DataView, offset: number, value: string): void {
@@ -226,7 +237,10 @@ export async function splitAudioOnSilence(
 
   const durationSec = (decoded.channels[0]?.length ?? 0) / decoded.sampleRate;
   const ranges = findRanges(decoded);
-  if (ranges.length <= 1) return [{ audio, contentType, startSec: 0, endSec: durationSec }];
+  const onlyRange = ranges[0];
+  if (ranges.length === 1 && onlyRange?.start === 0 && onlyRange.end === (decoded.channels[0]?.length ?? 0)) {
+    return [{ audio, contentType, startSec: 0, endSec: durationSec }];
+  }
   return ranges.map((range) => ({
     audio: encodeMonoWav(decoded, range.start, range.end),
     contentType: "audio/wav",

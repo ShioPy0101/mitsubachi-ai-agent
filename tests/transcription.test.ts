@@ -90,7 +90,7 @@ describe("Workers AI response adapter", () => {
     expect(ai.inputs).toHaveLength(2);
     expect(result.text).toBe("announcement\nannouncement");
     expect(result.segments).toHaveLength(2);
-    expect(result.segments[1]?.startSec).toBeCloseTo(1.25, 1);
+    expect(result.segments[1]?.startSec).toBeCloseTo(1.65, 1);
   });
 
   it("times out when Workers AI does not respond", async () => {
