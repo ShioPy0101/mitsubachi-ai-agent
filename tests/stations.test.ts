@@ -12,6 +12,9 @@ class FixtureRepository implements StationRepository {
   async findCandidatePool(_searchText: string, _context: StationContext, _limit: number): Promise<Station[]> {
     return this.stations;
   }
+  async findRouteCandidatePool(_anchorNames: readonly string[], _maxHops: number, _limit: number): Promise<Station[]> {
+    return this.stations;
+  }
 }
 
 describe("station normalization and ranking", () => {
@@ -47,6 +50,51 @@ describe("station normalization and ranking", () => {
     expect(previous.adjacencyBonus).toBe(1);
     expect(next.adjacencyBonus).toBe(1);
     expect(previous.score).toBeGreaterThan(base.score);
+  });
+
+  it("uses a cross-line route candidate to recover a misrecognized stop", async () => {
+    const awaraOnsen: Station = {
+      id: 7995,
+      name: "芦原温泉",
+      kana: "あわらおんせん",
+      kanaSource: "pykakasi",
+      operatorName: null,
+      lineName: "北陸新幹線",
+      prefecture: "福井県",
+      prevStation: "福井",
+      nextStation: "加賀温泉",
+      longitude: 136.235069,
+      latitude: 36.214542,
+      postal: "9190632",
+    };
+    const fukui: Station = {
+      ...awaraOnsen,
+      id: 7994,
+      name: "福井",
+      kana: "ふくい",
+      lineName: "ハピラインふくい線",
+      prevStation: "越前花堂",
+      nextStation: "森田",
+    };
+    const kagaOnsen: Station = {
+      ...awaraOnsen,
+      id: 7407,
+      name: "加賀温泉",
+      kana: "かがおんせん",
+      lineName: "IRいしかわ鉄道線",
+      prevStation: "大聖寺",
+      nextStation: "動橋",
+    };
+    const transcription = "和倉温泉行きです。停車駅は敦賀、福井、和倉温泉、加賀温泉です。";
+
+    const scored = scoreStation(awaraOnsen, transcription, {});
+    expect(scored.routeContextBonus).toBe(0);
+
+    const candidates = await new StationCandidateService(new FixtureRepository([fukui, awaraOnsen, kagaOnsen]))
+      .candidates(transcription);
+    expect(candidates.find(({ station }) => station.name === "芦原温泉")).toMatchObject({
+      routeContextBonus: 1,
+    });
   });
 
   it("ranks 伊勢市 → 五十鈴ヶ丘 → 二見浦 context first", async () => {

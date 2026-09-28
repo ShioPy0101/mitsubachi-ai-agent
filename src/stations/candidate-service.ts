@@ -4,6 +4,7 @@ import { STATION_MATCH_WEIGHTS, type Station, type StationCandidate, type Statio
 
 export interface StationRepository {
   findCandidatePool(searchText: string, context: StationContext, limit: number): Promise<Station[]>;
+  findRouteCandidatePool(anchorNames: readonly string[], maxHops: number, limit: number): Promise<Station[]>;
 }
 
 function adjacencyScore(station: Station, context: StationContext): number {
@@ -28,7 +29,7 @@ export function scoreStation(station: Station, transcription: string, context: S
       prefectureBonus * STATION_MATCH_WEIGHTS.prefecture +
       adjacencyBonus * STATION_MATCH_WEIGHTS.adjacency,
   );
-  return { station, nameSimilarity, kanaSimilarity, lineBonus, prefectureBonus, adjacencyBonus, score };
+  return { station, nameSimilarity, kanaSimilarity, lineBonus, prefectureBonus, adjacencyBonus, routeContextBonus: 0, score };
 }
 
 export class StationCandidateService {
@@ -37,10 +38,30 @@ export class StationCandidateService {
   async candidates(transcription: string, context: StationContext = {}): Promise<StationCandidate[]> {
     const searchText = extractStationSearchText(transcription);
     const pool = await this.repository.findCandidatePool(searchText, context, 100);
-    return pool
+    const initial = pool.map((station) => scoreStation(station, transcription, context));
+    const anchorNames = [...new Set(
+      initial.filter((candidate) => candidate.nameSimilarity === 1).map((candidate) => candidate.station.name),
+    )].slice(0, 12);
+    const routePool = anchorNames.length >= 2
+      ? await this.repository.findRouteCandidatePool(anchorNames, 16, 100)
+      : [];
+    const routeIds = new Set(routePool.map((station) => station.id));
+    const combined = new Map(pool.map((station) => [station.id, station]));
+    for (const station of routePool) combined.set(station.id, station);
+    return [...combined.values()]
       .map((station) => scoreStation(station, transcription, context))
+      .map((candidate): StationCandidate => {
+        if (!routeIds.has(candidate.station.id)) return candidate;
+        return {
+          ...candidate,
+          routeContextBonus: 1,
+          score: Math.min(1, candidate.score + STATION_MATCH_WEIGHTS.route),
+        };
+      })
       .filter((candidate) => candidate.score >= 0.35)
       .sort((left, right) => right.score - left.score || left.station.name.localeCompare(right.station.name, "ja"))
-      .slice(0, 5);
+      .filter((candidate, index, ranked) =>
+        ranked.findIndex((item) => item.station.name === candidate.station.name) === index)
+      .slice(0, 12);
   }
 }

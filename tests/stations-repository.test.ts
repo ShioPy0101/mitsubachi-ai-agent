@@ -17,6 +17,8 @@ describe("D1StationsRepository", () => {
       searchText,
       searchText,
       searchText.slice(0, 2),
+      searchText,
+      searchText,
       null, null,
       null, null,
       null, null, null,

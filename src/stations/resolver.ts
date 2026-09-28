@@ -20,6 +20,12 @@ export function resolveStation(
   if (best === undefined || best.score < 0.72) {
     return { stationName: null, candidateStationId: null, confidence: best?.score ?? 0, source: "unresolved" };
   }
-  const source = best.nameSimilarity === 1 ? "exact" : best.kanaSimilarity === 1 ? "kana" : best.adjacencyBonus > 0 ? "context" : "fuzzy";
+  const source = best.nameSimilarity === 1
+    ? "exact"
+    : best.kanaSimilarity === 1
+      ? "kana"
+      : best.adjacencyBonus > 0 || best.routeContextBonus > 0
+        ? "context"
+        : "fuzzy";
   return { stationName: best.station.name, candidateStationId: best.station.id, confidence: best.score, source };
 }

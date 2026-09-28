@@ -19,6 +19,7 @@ export const STATION_MATCH_WEIGHTS = {
   line: 0.1,
   prefecture: 0.05,
   adjacency: 0.15,
+  route: 0.2,
 } as const;
 
 export type StationCandidate = {
@@ -28,6 +29,7 @@ export type StationCandidate = {
   lineBonus: number;
   prefectureBonus: number;
   adjacencyBonus: number;
+  routeContextBonus: number;
   score: number;
 };
 
