@@ -36,7 +36,8 @@ describe("Workers AI response adapter", () => {
       audio: "AA==",
       task: "transcribe",
       vad_filter: true,
-      initial_prompt: "日本の鉄道駅構内放送。駅名、路線名、列車名、時刻、番線。 Japanese railway station announcement. Station, line, train, time, and platform. 日本語に続いて英語、中国語、韓国語などの案内が含まれる場合があります。",
+      beam_size: 8,
+      initial_prompt: "日本の鉄道駅構内放送。駅名、路線名、列車名、時刻、番線。 日本語、英語、中国語、韓国語など、音声で話されたすべての言語を翻訳・要約・省略せず、最後までそのまま文字起こしする。 Transcribe every spoken language verbatim and completely. Do not translate, summarize, or omit English sentences. Japanese railway station announcement. Station, line, train, time, platform, car, reserved seat, non-reserved seat, and destination. English railway vocabulary: the train arriving at the platform, limited express, bound for, cars, reserved seats, non-reserved seats, on schedule, please stand behind the yellow tactile paving.",
     }]);
   });
 
