@@ -14,6 +14,7 @@
     "discord:register": "node --env-file-if-exists=.dev.vars --import tsx scripts/register-discord-commands.ts"
   },
   "dependencies": {
+    "codec-parser": "^2.5.0",
     "hono": "^4.9.8",
     "mpg123-decoder": "^1.0.3",
     "zod": "^4.1.11"

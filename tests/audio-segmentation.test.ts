@@ -61,7 +61,7 @@ describe("silence audio segmentation", () => {
     expect(chunks).toEqual([{ audio: input, contentType: "audio/mp4", startSec: 0, endSec: 0 }]);
   });
 
-  it("keeps a long MP3 compressed instead of decoding it in memory", async () => {
+  it("keeps malformed MP3 input unchanged", async () => {
     const input = new Uint8Array([1, 2, 3]).buffer;
     const chunks = await splitAudioOnSilence(input, "audio/mpeg", "announcement.mp3", 220);
     expect(chunks).toEqual([{ audio: input, contentType: "audio/mpeg", startSec: 0, endSec: 220 }]);
