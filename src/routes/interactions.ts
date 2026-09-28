@@ -142,7 +142,14 @@ interactionRoutes.post("/interactions", async (context) => {
       now.toISOString(),
     );
     return deferredResponse();
-  } catch {
+  } catch (error) {
+    console.error("audio_job_enqueue_failed", {
+      errorName: error instanceof Error ? error.name : "UnknownError",
+      errorMessage: error instanceof Error ? error.message : String(error),
+      guild_id: command.value.guildId,
+      attachment_id: command.value.attachment.id,
+      timestamp: new Date().toISOString(),
+    });
     return ephemeralErrorResponse("処理を受け付けられませんでした。時間をおいて再実行してください。");
   }
 });
