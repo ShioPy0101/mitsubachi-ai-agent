@@ -456,18 +456,6 @@ async function processJob(
       }
     }, whisperTimeoutMs);
     transcriptionResult = transcription;
-    if (showDemoProgress) {
-      const preparation = transcription.audioPreparation?.strategy === "mp3_rebuilt"
-        ? `、MP3フレーム再構成で復旧（${transcription.audioPreparation.submittedBytes} bytes）`
-        : "";
-      await updateProgress(
-        job,
-        `Whisperの文字起こしが完了しました（言語: ${transcription.language ?? "不明"}、セグメント: ${transcription.segments.length}件${preparation}）。`,
-        callbacks,
-        discord,
-        true,
-      );
-    }
     if (!(await jobs.isActive(job.id))) {
       console.warn("audio_job_processing_stopped", { jobId: job.id, stage: "whisper_transcription" });
       return "stopped";
@@ -490,6 +478,22 @@ async function processJob(
     await notify(job, emptyTranscriptionMessage, callbacks, discord);
     await jobs.clearEphemeral(job.id);
     return "failed";
+  }
+  if (needsTranscriptionCheckpoint) {
+    await runJobStage("transcription_checkpoint", () => jobs.saveTranscription(job.id, transcriptionText));
+    console.info("audio_job_transcription_checkpoint_saved", { jobId: job.id, attempt });
+    if (showDemoProgress && transcriptionResult !== null) {
+      const preparation = transcriptionResult.audioPreparation?.strategy === "mp3_rebuilt"
+        ? `、MP3フレーム再構成で復旧（${transcriptionResult.audioPreparation.submittedBytes} bytes）`
+        : "";
+      await updateProgress(
+        job,
+        `Whisperの文字起こしが完了しました（言語: ${transcriptionResult.language ?? "不明"}、セグメント: ${transcriptionResult.segments.length}件${preparation}）。以降は同じ文字起こしを利用し、Whisperを再実行しません。`,
+        callbacks,
+        discord,
+        true,
+      );
+    }
   }
   await jobs.updateStatus(job.id, "metadata_extracting");
   const gemini = new GeminiMetadataService(env.GEMINI_API_KEY, env.GEMINI_MODEL);
@@ -582,10 +586,6 @@ async function processJob(
     await jobs.clearEphemeral(job.id);
     return "failed";
   }
-  if (needsTranscriptionCheckpoint) {
-    await runJobStage("transcription_checkpoint", () => jobs.saveTranscription(job.id, transcriptionText));
-  }
-
   await updateProgress(job, "役割別sequenceごとに駅候補と局所経路を検索しています…", callbacks, discord, showDemoProgress);
   const candidateService = new StationCandidateService(new D1StationsRepository(env.DB));
   const sequenceSearches: DemoDiagnostics["sequenceSearches"] = [];

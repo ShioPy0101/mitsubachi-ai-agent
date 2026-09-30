@@ -188,7 +188,13 @@ describe("owner-only demo", () => {
     expect(fetcher.mock.calls.some(([url]) => String(url).includes("/webhooks/"))).toBe(true);
     expect(discordContents).toContain("🔧 音声ファイルを取得しています…");
     expect(discordContents).toContain("🔧 音声をWhisperへ送信し、文字起こししています…");
+    expect(discordContents).toContain(
+      "🔧 Whisperの文字起こしが完了しました（言語: ja、セグメント: 0件）。以降は同じ文字起こしを利用し、Whisperを再実行しません。",
+    );
     expect(discordContents).toContain("🔧 Gemini #1で放送構造と明示metadataを解析しています…");
+    expect(discordContents.indexOf(
+      "🔧 Whisperの文字起こしが完了しました（言語: ja、セグメント: 0件）。以降は同じ文字起こしを利用し、Whisperを再実行しません。",
+    )).toBeLessThan(discordContents.indexOf("🔧 Gemini #1で放送構造と明示metadataを解析しています…"));
     expect(discordContents.some((content) =>
       content.includes("同じ文字起こしのままこの段階だけ再試行します（2/3）"))).toBe(true);
     expect(discordContents).toContain("🔧 Gemini #1が完了しました（交通案内判定: true、駅mention: 1件）。");
