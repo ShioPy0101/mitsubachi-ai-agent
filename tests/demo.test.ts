@@ -125,7 +125,7 @@ describe("owner-only demo", () => {
         if (geminiRequests === 1) return new Response("temporary Gemini failure", { status: 503 });
         const output = geminiRequests === 2
           ? geminiAnalysisOutput
-          : { normalizedTranscription: "次はテスト駅です" };
+          : { normalizedTranscription: "次はテスト駅です", entities: [] };
         return Response.json({
           candidates: [{ content: { parts: [{ text: JSON.stringify(output) }] } }],
         });

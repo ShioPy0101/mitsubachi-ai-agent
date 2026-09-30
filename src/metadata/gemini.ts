@@ -5,6 +5,7 @@ import {
   geminiAnalysisJsonSchema,
   geminiNormalizationJsonSchema,
 } from "./schema";
+import type { z } from "zod";
 import { buildGeminiAnalysisPrompt } from "./analysis-prompt";
 import { buildGeminiNormalizationPrompt, type StopSequenceContext } from "./prompt";
 import type { AnnouncementAnalysis, StationMention } from "./service";
@@ -50,7 +51,18 @@ export type NormalizationGuard = {
   accepted: boolean;
   similarity: number;
   editDistance: number;
-  reason: "accepted" | "excessive_rewrite";
+  globalSimilarity: number;
+  entitySimilarity: number;
+  nonEntitySimilarity: number;
+  supportedEntityCorrections: number;
+  unsupportedEntityCorrections: number;
+  unsupportedEntities: string[];
+  reason:
+    | "accepted"
+    | "route_supported_entity_corrections"
+    | "unsupported_factual_addition"
+    | "unsupported_entity_insertion"
+    | "unsupported_non_entity_rewrite";
 };
 
 export type GeminiDiagnostics = {
@@ -72,21 +84,244 @@ function comparisonText(value: string): string {
   return value.normalize("NFKC").replace(/[\s、。,.!?！？「」『』（）()：:;；]/gu, "");
 }
 
-function checkNormalization(transcription: string, normalized: string): NormalizationGuard {
+type EntityCorrectionAssessment = {
+  rawEntities: string[];
+  normalizedEntities: string[];
+  rawMaskEntities: string[];
+  normalizedMaskEntities: string[];
+  supported: number;
+  unsupported: number;
+};
+
+type NormalizedEntity = z.output<typeof GeminiNormalizationSchema>["entities"][number];
+
+function routeSupportedTargets(sequence: StopSequenceContext, mentionIndex: number): string[] {
+  const fromMentionCandidates = (sequence.mentionCandidates[mentionIndex] ?? [])
+    .filter((candidate) => candidate.routeHypothesisIds.length > 0
+      && candidate.lexicalScore >= 0.2
+      && candidate.bestRouteScore !== null)
+    .map((candidate) => candidate.station.name);
+  const fromRouteMatches = sequence.routeHypotheses.flatMap((route) =>
+    (route.mentionMatches ?? [])
+      .filter((match) => match.mentionIndex === mentionIndex && match.lexicalSimilarity >= 0.2)
+      .map((match) => match.station.name));
+  return [...new Set([...fromMentionCandidates, ...fromRouteMatches])];
+}
+
+function assessEntityCorrections(
+  normalized: string,
+  analysis: AnnouncementAnalysis,
+  sequences: readonly StopSequenceContext[],
+): EntityCorrectionAssessment {
+  const targetsByMention = new Map<string, Set<string>>();
+  for (const sequence of sequences) {
+    const searchMentions = [...sequence.mentions, ...sequence.contextMentions];
+    searchMentions.forEach((mention, mentionIndex) => {
+      const targets = targetsByMention.get(mention.text) ?? new Set<string>();
+      for (const target of routeSupportedTargets(sequence, mentionIndex)) targets.add(target);
+      targetsByMention.set(mention.text, targets);
+    });
+  }
+  const rawEntities: string[] = [];
+  const normalizedEntities: string[] = [];
+  const rawMaskEntities: string[] = [];
+  const normalizedMaskEntities: string[] = [];
+  let supported = 0;
+  let unsupported = 0;
+  for (const mention of analysis.mentions) {
+    rawEntities.push(mention.text);
+    rawMaskEntities.push(mention.text);
+    if (normalized.includes(mention.text)) {
+      normalizedEntities.push(mention.text);
+      normalizedMaskEntities.push(mention.text);
+      continue;
+    }
+    const supportedTarget = [...(targetsByMention.get(mention.text) ?? [])]
+      .sort((left, right) => right.length - left.length)
+      .find((target) => normalized.includes(target));
+    if (supportedTarget !== undefined) {
+      supported += 1;
+      normalizedEntities.push(supportedTarget);
+      normalizedMaskEntities.push(supportedTarget);
+    } else {
+      unsupported += 1;
+    }
+  }
+  for (const value of Object.values(analysis.metadata)) {
+    if (typeof value !== "string" || value === "" || !normalized.includes(value)) continue;
+    rawMaskEntities.push(value);
+    normalizedMaskEntities.push(value);
+  }
+  return { rawEntities, normalizedEntities, rawMaskEntities, normalizedMaskEntities, supported, unsupported };
+}
+
+function maskEntities(value: string, entities: readonly string[]): string {
+  let masked = value;
+  for (const entity of [...new Set(entities)].sort((left, right) => right.length - left.length)) {
+    masked = masked.replaceAll(entity, "固有名詞");
+  }
+  return masked.replace(
+    /((?:特急|快速急行|快速|急行|普通)[、\s]*)([^、。\s]{1,20}?)(\d+号)/gu,
+    "$1列車名$3",
+  );
+}
+
+function factualTokens(value: string): Set<string> {
+  const normalized = value.normalize("NFKC");
+  const tokens = new Set<string>();
+  for (const match of normalized.matchAll(/\b\d{1,2}:\d{2}\b|\d{1,2}時\d{1,2}分/gu)) tokens.add(`time:${match[0]}`);
+  for (const match of normalized.matchAll(/\d+番(?:線|乗り場)/gu)) tokens.add(`platform:${match[0]}`);
+  if (/乗り換え|乗換/gu.test(normalized)) tokens.add("transfer");
+  return tokens;
+}
+
+type SupportedEntityNames = {
+  stations: Set<string>;
+  lines: Set<string>;
+  trainNames: Set<string>;
+  trainTypes: Set<string>;
+  other: Set<string>;
+};
+
+function supportedEntityNames(
+  analysis: AnnouncementAnalysis,
+  sequences: readonly StopSequenceContext[],
+): SupportedEntityNames {
+  const stations = new Set(analysis.mentions.map((mention) => mention.text));
+  const lines = new Set<string>();
+  const trainNames = new Set<string>();
+  const trainTypes = new Set<string>();
+  const other = new Set<string>();
+  if (analysis.metadata.station !== null) stations.add(analysis.metadata.station);
+  if (analysis.metadata.destination !== null) stations.add(analysis.metadata.destination);
+  if (analysis.metadata.nextStation !== null) stations.add(analysis.metadata.nextStation);
+  if (analysis.metadata.line !== null) lines.add(analysis.metadata.line);
+  if (analysis.metadata.trainName !== null) trainNames.add(analysis.metadata.trainName);
+  if (analysis.metadata.trainType !== null) trainTypes.add(analysis.metadata.trainType);
+  for (const sequence of sequences) {
+    for (const candidate of sequence.stationCandidates) {
+      stations.add(candidate.station.name);
+      if (candidate.station.lineName !== null) lines.add(candidate.station.lineName);
+    }
+    for (const candidates of sequence.mentionCandidates) {
+      for (const candidate of candidates) {
+        stations.add(candidate.station.name);
+        if (candidate.station.lineName !== null) lines.add(candidate.station.lineName);
+      }
+    }
+    for (const route of sequence.routeHypotheses) {
+      for (const { station } of route.stations) {
+        stations.add(station.name);
+        if (station.lineName !== null) lines.add(station.lineName);
+      }
+    }
+  }
+  return { stations, lines, trainNames, trainTypes, other };
+}
+
+function unsupportedNormalizedEntities(
+  transcription: string,
+  normalized: string,
+  normalizedEntities: readonly NormalizedEntity[],
+  analysis: AnnouncementAnalysis,
+  sequences: readonly StopSequenceContext[],
+): string[] {
+  const supportedNames = supportedEntityNames(analysis, sequences);
+  const unsupported: string[] = [];
+  for (const entity of normalizedEntities) {
+    if (!normalized.includes(entity.text)) {
+      unsupported.push(entity.text);
+      continue;
+    }
+    if (transcription.includes(entity.text)) continue;
+    const structurallySupported = entity.kind === "station" || entity.kind === "destination"
+      ? supportedNames.stations.has(entity.text)
+      : entity.kind === "line"
+        ? supportedNames.lines.has(entity.text)
+        : entity.kind === "train_name"
+          ? supportedNames.trainNames.has(entity.text)
+          : entity.kind === "train_type"
+            ? supportedNames.trainTypes.has(entity.text)
+            : supportedNames.other.has(entity.text);
+    if (structurallySupported) continue;
+    if (entity.kind === "station" || entity.kind === "destination") {
+      unsupported.push(entity.text);
+      continue;
+    }
+    if (entity.sourceText !== null && transcription.includes(entity.sourceText)) {
+      const source = comparisonText(entity.sourceText);
+      const target = comparisonText(entity.text);
+      if (source !== "" && target !== "" && stringSimilarity(source, target) >= 0.25) continue;
+    }
+    unsupported.push(entity.text);
+  }
+  return [...new Set(unsupported)];
+}
+
+function hasUnsupportedFactualAddition(raw: string, corrected: string): boolean {
+  const rawFacts = factualTokens(raw);
+  return [...factualTokens(corrected)].some((fact) => !rawFacts.has(fact));
+}
+
+export function checkNormalization(
+  transcription: string,
+  normalized: string,
+  analysis: AnnouncementAnalysis,
+  sequences: readonly StopSequenceContext[],
+  normalizedEntities: readonly NormalizedEntity[] = [],
+): NormalizationGuard {
   const raw = comparisonText(transcription);
   const corrected = comparisonText(normalized);
-  const similarity = stringSimilarity(raw, corrected);
+  const globalSimilarity = stringSimilarity(raw, corrected);
   const editDistance = levenshteinDistance(raw, corrected);
   const looksLikeDeduplication = corrected.length > 0 && raw.includes(corrected);
-  const excessiveRewrite = raw.length >= 50
+  const globallyLargeRewrite = raw.length >= 50
     && !looksLikeDeduplication
-    && similarity < 0.72
+    && globalSimilarity < 0.72
     && editDistance >= 20;
+  const entities = assessEntityCorrections(normalized, analysis, sequences);
+  const rawNonEntity = comparisonText(maskEntities(transcription, entities.rawMaskEntities));
+  const normalizedNonEntity = comparisonText(maskEntities(normalized, entities.normalizedMaskEntities));
+  const nonEntitySimilarity = stringSimilarity(rawNonEntity, normalizedNonEntity);
+  const entitySimilarity = entities.rawEntities.length === 0
+    ? 1
+    : stringSimilarity(entities.rawEntities.join("|"), entities.normalizedEntities.join("|"));
+  const unsupportedAllowance = Math.max(1, Math.floor(entities.supported * 0.2));
+  const routeExplainsRewrite = entities.supported >= 2
+    && entities.unsupported <= unsupportedAllowance
+    && nonEntitySimilarity >= 0.78;
+  const unsupportedEntities = unsupportedNormalizedEntities(
+    transcription,
+    normalized,
+    normalizedEntities,
+    analysis,
+    sequences,
+  );
+  const unsupportedFactualAddition = hasUnsupportedFactualAddition(transcription, normalized);
+  const unsupportedEntityInsertion = unsupportedEntities.length > 0;
+  const accepted = !unsupportedFactualAddition
+    && !unsupportedEntityInsertion
+    && (!globallyLargeRewrite || routeExplainsRewrite);
+  const reason: NormalizationGuard["reason"] = unsupportedFactualAddition
+    ? "unsupported_factual_addition"
+    : unsupportedEntityInsertion
+      ? "unsupported_entity_insertion"
+    : !globallyLargeRewrite
+      ? "accepted"
+      : routeExplainsRewrite
+        ? "route_supported_entity_corrections"
+        : "unsupported_non_entity_rewrite";
   return {
-    accepted: !excessiveRewrite,
-    similarity,
+    accepted,
+    similarity: globalSimilarity,
     editDistance,
-    reason: excessiveRewrite ? "excessive_rewrite" : "accepted",
+    globalSimilarity,
+    entitySimilarity,
+    nonEntitySimilarity,
+    supportedEntityCorrections: entities.supported,
+    unsupportedEntityCorrections: entities.unsupported,
+    unsupportedEntities,
+    reason,
   };
 }
 
@@ -225,7 +460,13 @@ export class GeminiMetadataService {
       ? { ...raw, normalizedTranscription: transcription }
       : raw;
     const parsed = GeminiNormalizationSchema.parse(normalizedJson);
-    const normalizationGuard = checkNormalization(transcription, parsed.normalizedTranscription);
+    const normalizationGuard = checkNormalization(
+      transcription,
+      parsed.normalizedTranscription,
+      analysis,
+      sequences,
+      parsed.entities,
+    );
     return {
       normalizedTranscription: normalizationGuard.accepted ? parsed.normalizedTranscription : transcription,
       diagnostics: generated.diagnostics,

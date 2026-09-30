@@ -37,6 +37,11 @@ export const GeminiAnalysisSchema = TransitAnnouncementSchema.omit({ normalizedT
 
 export const GeminiNormalizationSchema = z.object({
   normalizedTranscription: z.string().trim().min(1),
+  entities: z.array(z.object({
+    text: z.string().trim().min(1),
+    kind: z.enum(["station", "line", "train_name", "train_type", "destination", "other_proper_noun"]),
+    sourceText: z.string().trim().min(1).nullable(),
+  })),
 });
 export const GeminiResponseSchema = z
   .object({
@@ -189,6 +194,24 @@ export const geminiAnalysisJsonSchema = {
 export const geminiNormalizationJsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["normalizedTranscription"],
-  properties: { normalizedTranscription: { type: "string", minLength: 1 } },
+  required: ["normalizedTranscription", "entities"],
+  properties: {
+    normalizedTranscription: { type: "string", minLength: 1 },
+    entities: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["text", "kind", "sourceText"],
+        properties: {
+          text: { type: "string", minLength: 1 },
+          kind: {
+            type: "string",
+            enum: ["station", "line", "train_name", "train_type", "destination", "other_proper_noun"],
+          },
+          sourceText: { type: ["string", "null"], minLength: 1 },
+        },
+      },
+    },
+  },
 } as const;

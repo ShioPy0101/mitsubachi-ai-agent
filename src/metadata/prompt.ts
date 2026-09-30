@@ -98,6 +98,9 @@ Gemini #1が抽出した意味構造と、アプリが役割別sequenceごとに
 - 候補が不十分、役割が不明、または確信が持てない箇所は元のtranscriptionを維持する
 - 判断できない固有名詞は元の表記を維持する
 - normalizedTranscriptionは空にしない
+- entitiesには、normalizedTranscriptionに出現する駅名・路線名・列車名・列車種別・行先・その他の固有名詞を出現順で漏れなく返す
+- entities.textはnormalizedTranscriptionに実在する連続部分にする
+- 元のtranscription内の文字列を補正した固有名詞はsourceTextに元文字列を返し、元文字列がない場合だけnullにする
 - 同じ言語の同一案内が連続して完全に繰り返される場合だけ1回へまとめてよい。異なる言語や内容差のある繰り返しは残す
 
 局所的で確実な補正例:
