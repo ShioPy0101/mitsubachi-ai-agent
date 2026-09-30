@@ -29,7 +29,7 @@
     ]
   },
   "triggers": {
-    "crons": ["*/5 * * * *"]
+    "crons": ["* * * * *"]
   },
   "vars": {
     "DISCORD_CONTROL_USER_IDS": "[\"398465248253837314\"]",

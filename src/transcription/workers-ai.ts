@@ -1,23 +1,13 @@
 import { WorkersAiWhisperResponseSchema } from "./schemas";
 import type { TranscriptionInput, TranscriptionResult, TranscriptionService } from "./service";
-import { splitAudioOnSilence, type AudioChunk } from "../audio/silence-segmenter";
 
-const transitAnnouncementPrompt = [
-  "日本の公共交通機関の案内放送。鉄道、地下鉄、路面電車、路線バス、高速バス、船舶、航空機。駅名、停留所名、路線名、便名、時刻、乗り場。",
+const railwayAnnouncementPrompt = [
+  "日本の鉄道駅構内放送。駅名、路線名、列車名、時刻、番線。",
   "日本語、英語、中国語、韓国語など、音声で話されたすべての言語を翻訳・要約・省略せず、最後までそのまま文字起こしする。",
   "Transcribe every spoken language verbatim and completely. Do not translate, summarize, or omit English sentences.",
-  "Japanese public transit announcement. Station, bus stop, line, train, bus, flight, ferry, time, platform, gate, and destination.",
-  "English transit vocabulary: arriving, departing, bound for, platform, bus stop, boarding gate, transfer, on schedule, delayed, and cancelled.",
+  "Japanese railway station announcement. Station, line, train, time, platform, car, reserved seat, non-reserved seat, and destination.",
+  "English railway vocabulary: the train arriving at the platform, limited express, bound for, cars, reserved seats, non-reserved seats, on schedule, please stand behind the yellow tactile paving.",
 ].join(" ");
-
-const defaultTranscriptionTimeoutMs = 120_000;
-
-export class TranscriptionTimeoutError extends Error {
-  constructor(readonly timeoutMs: number) {
-    super(`Whisper transcription timed out after ${timeoutMs}ms`);
-    this.name = "TranscriptionTimeoutError";
-  }
-}
 
 export interface WhisperAiRunner {
   run(
@@ -37,55 +27,25 @@ function encodeBase64(buffer: ArrayBuffer): string {
 }
 
 export class CloudflareWhisperTranscriptionService implements TranscriptionService {
-  constructor(
-    private readonly ai: WhisperAiRunner,
-    private readonly timeoutMs = defaultTranscriptionTimeoutMs,
-  ) {}
+  constructor(private readonly ai: WhisperAiRunner) {}
 
-  private async transcribeChunk(chunk: AudioChunk): Promise<TranscriptionResult> {
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_resolve, reject) => {
-      timeoutId = setTimeout(() => reject(new TranscriptionTimeoutError(this.timeoutMs)), this.timeoutMs);
+  async transcribe(input: TranscriptionInput): Promise<TranscriptionResult> {
+    const output = await this.ai.run("@cf/openai/whisper-large-v3-turbo", {
+      audio: encodeBase64(input.audio),
+      task: "transcribe",
+      vad_filter: true,
+      beam_size: 8,
+      initial_prompt: railwayAnnouncementPrompt,
     });
-    let output: unknown;
-    try {
-      output = await Promise.race([
-        this.ai.run("@cf/openai/whisper-large-v3-turbo", {
-          audio: encodeBase64(chunk.audio),
-          task: "transcribe",
-          vad_filter: false,
-          beam_size: 8,
-          condition_on_previous_text: false,
-          no_speech_threshold: 0.8,
-          initial_prompt: transitAnnouncementPrompt,
-        }),
-        timeout,
-      ]);
-    } finally {
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
-    }
     const parsed = WorkersAiWhisperResponseSchema.parse(output);
     return {
       language: parsed.transcription_info?.language ?? null,
       text: parsed.text,
       segments: (parsed.segments ?? []).map((segment) => ({
-        startSec: segment.start + chunk.startSec,
-        endSec: segment.end + chunk.startSec,
+        startSec: segment.start,
+        endSec: segment.end,
         text: segment.text,
       })),
-    };
-  }
-
-  async transcribe(input: TranscriptionInput): Promise<TranscriptionResult> {
-    const chunks = await splitAudioOnSilence(input.audio, input.contentType, input.filename, input.durationSecs);
-    const results: TranscriptionResult[] = [];
-    for (let offset = 0; offset < chunks.length; offset += 3) {
-      results.push(...await Promise.all(chunks.slice(offset, offset + 3).map((chunk) => this.transcribeChunk(chunk))));
-    }
-    return {
-      language: results.map((result) => result.language).find((language) => language !== null) ?? null,
-      text: results.map((result) => result.text.trim()).filter((text) => text !== "").join("\n"),
-      segments: results.flatMap((result) => result.segments),
     };
   }
 }

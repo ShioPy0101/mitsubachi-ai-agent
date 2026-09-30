@@ -11,6 +11,7 @@ import { StationCandidateService } from "../stations/candidate-service";
 import { resolveStation } from "../stations/resolver";
 import { CloudflareWhisperTranscriptionService } from "../transcription/workers-ai";
 import { formatAudioJobAlert } from "./alerts";
+import { AudioJobProcessingTimeoutError, withAudioJobProcessingTimeout } from "./processing-timeout";
 import { staleAudioJobCutoff, staleAudioJobTimeoutMs } from "./staleness";
 import type { AudioJob, AudioJobMessage, DemoAudioJobMessage } from "./types";
 
@@ -422,21 +423,24 @@ export async function consumeAudioJobs(batch: MessageBatch<AudioJobMessage>, env
       continue;
     }
     if (parsed.data.kind === "demo") {
-      const job = demoJob(parsed.data);
-      const resources = demoResources(parsed.data);
+      const demoMessage = parsed.data;
+      const job = demoJob(demoMessage);
+      const resources = demoResources(demoMessage);
       try {
-        await processDemoMessage(parsed.data, env, message.attempts);
+        await withAudioJobProcessingTimeout(() => processDemoMessage(demoMessage, env, message.attempts));
         console.info("demo_audio_job_message_acked", {
-          interactionId: parsed.data.interactionId,
+          interactionId: demoMessage.interactionId,
           queueMessageId: message.id,
           attempt: message.attempts,
         });
         message.ack();
       } catch (error) {
         const details = errorDetails(error);
-        if (error instanceof AttachmentUnavailableError || message.attempts >= 5) {
+        if (error instanceof AttachmentUnavailableError
+          || error instanceof AudioJobProcessingTimeoutError
+          || message.attempts >= 5) {
           console.error("demo_audio_job_processing_terminal", {
-            interactionId: parsed.data.interactionId,
+            interactionId: demoMessage.interactionId,
             queueMessageId: message.id,
             attempt: message.attempts,
             ...details,
@@ -479,12 +483,15 @@ export async function consumeAudioJobs(batch: MessageBatch<AudioJobMessage>, env
       continue;
     }
     try {
-      await processJob(job, env, message.attempts);
+      await withAudioJobProcessingTimeout(() => processJob(job, env, message.attempts));
       console.info("audio_job_message_acked", { jobId: job.id, queueMessageId: message.id, attempt: message.attempts });
       message.ack();
     } catch (error) {
       const details = errorDetails(error);
-      if (error instanceof AttachmentUnavailableError || message.attempts === 1 || message.attempts >= 5) {
+      if (error instanceof AttachmentUnavailableError
+        || error instanceof AudioJobProcessingTimeoutError
+        || message.attempts === 1
+        || message.attempts >= 5) {
         await sendAlert(env, discord, job.id, errorStage(error, "processing"), error, message.attempts);
       }
       if (error instanceof AttachmentUnavailableError) {
@@ -493,6 +500,15 @@ export async function consumeAudioJobs(batch: MessageBatch<AudioJobMessage>, env
         });
         await jobs.updateStatus(job.id, "failed", "attachment_unavailable");
         await notify(job, formatFailure("attachment_unavailable"), callbacks, discord);
+        await jobs.clearEphemeral(job.id);
+        console.info("audio_job_message_acked", { jobId: job.id, queueMessageId: message.id, attempt: message.attempts });
+        message.ack();
+      } else if (error instanceof AudioJobProcessingTimeoutError) {
+        console.error("audio_job_processing_timed_out", {
+          jobId: job.id, queueMessageId: message.id, attempt: message.attempts, ...details,
+        });
+        await jobs.updateStatus(job.id, "failed", "processing_timeout");
+        await notify(job, staleJobMessage, callbacks, discord);
         await jobs.clearEphemeral(job.id);
         console.info("audio_job_message_acked", { jobId: job.id, queueMessageId: message.id, attempt: message.attempts });
         message.ack();

@@ -20,6 +20,15 @@ export class GeminiApiError extends Error {
   }
 }
 
+const defaultGeminiTimeoutMs = 60_000;
+
+export class GeminiRequestTimeoutError extends Error {
+  constructor(readonly timeoutMs: number) {
+    super(`Gemini request timed out after ${timeoutMs}ms`);
+    this.name = "GeminiRequestTimeoutError";
+  }
+}
+
 export function isRetryableGeminiError(error: unknown): boolean {
   return !(error instanceof GeminiApiError) || error.status === 429 || error.status >= 500;
 }
@@ -33,30 +42,48 @@ export class GeminiMetadataService implements MetadataService {
     private readonly apiKey: string,
     private readonly model: string,
     private readonly fetcher: HttpFetcher = defaultFetcher,
+    private readonly timeoutMs = defaultGeminiTimeoutMs,
   ) {}
 
   async extract(transcription: string, stationCandidates: readonly StationCandidate[]): Promise<MetadataResult> {
-    const response = await this.fetcher(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model)}:generateContent`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": this.apiKey },
-        body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: buildGeminiPrompt(transcription, stationCandidates) }] }],
-          generationConfig: {
-            temperature: 0,
-            responseMimeType: "application/json",
-            responseJsonSchema: transitAnnouncementJsonSchema,
+    const controller = new AbortController();
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timeoutId = setTimeout(() => {
+        controller.abort();
+        reject(new GeminiRequestTimeoutError(this.timeoutMs));
+      }, this.timeoutMs);
+    });
+    let response: Response;
+    try {
+      response = await Promise.race([
+        this.fetcher(
+          `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model)}:generateContent`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "x-goog-api-key": this.apiKey },
+            signal: controller.signal,
+            body: JSON.stringify({
+              contents: [{ role: "user", parts: [{ text: buildGeminiPrompt(transcription, stationCandidates) }] }],
+              generationConfig: {
+                temperature: 0,
+                responseMimeType: "application/json",
+                responseJsonSchema: transitAnnouncementJsonSchema,
+              },
+              safetySettings: [
+                "HARM_CATEGORY_HARASSMENT",
+                "HARM_CATEGORY_HATE_SPEECH",
+                "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "HARM_CATEGORY_DANGEROUS_CONTENT",
+              ].map((category) => ({ category, threshold: "BLOCK_LOW_AND_ABOVE" })),
+            }),
           },
-          safetySettings: [
-            "HARM_CATEGORY_HARASSMENT",
-            "HARM_CATEGORY_HATE_SPEECH",
-            "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-            "HARM_CATEGORY_DANGEROUS_CONTENT",
-          ].map((category) => ({ category, threshold: "BLOCK_LOW_AND_ABOVE" })),
-        }),
-      },
-    );
+        ),
+        timeout,
+      ]);
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+    }
     if (!response.ok) {
       throw new GeminiApiError(response.status, (await response.text()).slice(0, 500));
     }

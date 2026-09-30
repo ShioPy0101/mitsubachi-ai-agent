@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { DemoJobProducer, JobProducer, type JobQueue, type JobStore } from "../src/jobs/producer";
 import { staleAudioJobCutoff, staleAudioJobTimeoutMs } from "../src/jobs/staleness";
+import {
+  AudioJobProcessingTimeoutError,
+  withAudioJobProcessingTimeout,
+} from "../src/jobs/processing-timeout";
 import type { AudioJob, NewAudioJob } from "../src/jobs/types";
 
 const input: NewAudioJob = {
@@ -66,9 +70,18 @@ describe("job producer", () => {
 });
 
 describe("stale audio jobs", () => {
-  it("uses a 15 minute cutoff", () => {
-    expect(staleAudioJobTimeoutMs).toBe(15 * 60 * 1000);
+  it("uses a 12 minute cutoff so Discord can still receive the failure response", () => {
+    expect(staleAudioJobTimeoutMs).toBe(12 * 60 * 1000);
     expect(staleAudioJobCutoff(new Date("2026-09-30T08:00:00.000Z")))
-      .toBe("2026-09-30T07:45:00.000Z");
+      .toBe("2026-09-30T07:48:00.000Z");
+  });
+});
+
+describe("audio job processing deadline", () => {
+  it("rejects an operation that never settles", async () => {
+    await expect(withAudioJobProcessingTimeout(
+      async () => await new Promise<never>(() => {}),
+      5,
+    )).rejects.toEqual(new AudioJobProcessingTimeoutError(5));
   });
 });
