@@ -12,6 +12,9 @@ export const stationMentionRoles = [
 
 export type StationMentionRole = (typeof stationMentionRoles)[number];
 
+export const sequenceRoles = ["stops", "direction", "destination", "unknown"] as const;
+export type SequenceRole = (typeof sequenceRoles)[number];
+
 export type StationMention = {
   text: string;
   start: number | null;

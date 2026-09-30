@@ -328,4 +328,40 @@ export class D1StationsRepository implements StationRepository {
         || left.pathLength - right.pathLength)
       .slice(0, maxCandidates);
   }
+
+  async findLocalRouteCandidates(
+    seedNames: readonly string[],
+    sequenceLength: number,
+    maxCandidates: number,
+    stationRadius?: number,
+  ): Promise<RoutePathCandidate[]> {
+    if (seedNames.length === 0 || sequenceLength < 2 || maxCandidates < 1) return [];
+    const occurrences = await this.findAnchorOccurrences(seedNames);
+    const radius = Math.max(3, stationRadius ?? sequenceLength + 2);
+    const routes: RoutePathCandidate[] = [];
+    const signatures = new Set<string>();
+    for (const occurrence of occurrences) {
+      for (const direction of [1, -1] as const) {
+        const positioned = await this.expandSegment({
+          lineId: occurrence.lineId,
+          fromSeq: occurrence.seq - radius * direction,
+          toSeq: occurrence.seq + radius * direction,
+        });
+        const stations = positioned.map(({ station }, routeIndex) => ({ station, routeIndex }));
+        const signature = stations.map(({ station }) => station.id).join(",");
+        if (stations.length < sequenceLength || signatures.has(signature)) continue;
+        signatures.add(signature);
+        routes.push({
+          stations,
+          anchorCoverage: 0,
+          orderConsistency: 0,
+          transferCount: 0,
+          pathLength: stations.length,
+          score: 0,
+          source: "sequence_fallback",
+        });
+      }
+    }
+    return routes.slice(0, maxCandidates);
+  }
 }

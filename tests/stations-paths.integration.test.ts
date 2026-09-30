@@ -201,6 +201,82 @@ describe("D1 ordered station paths", () => {
     });
   });
 
+  it("recovers the Meitetsu Kowa stop sequence from competing exact station names", async () => {
+    await Promise.all([
+      station(1, "河和口", "名鉄河和線", "愛知県"),
+      station(2, "富貴", "名鉄河和線", "愛知県"),
+      station(3, "知多武豊", "名鉄河和線", "愛知県"),
+      station(4, "上ゲ", "名鉄河和線", "愛知県"),
+      station(5, "青山", "名鉄河和線", "愛知県"),
+      station(6, "成岩", "名鉄河和線", "愛知県"),
+      station(7, "知多半田", "名鉄河和線", "愛知県"),
+      station(20, "奈良", "JR大和路線", "奈良県"),
+      station(21, "半田", "JR武豊線", "愛知県"),
+    ]);
+    await segment("meitetsu-kowa", [1, 2, 3, 4, 5, 6, 7]);
+    await segment("unrelated-nara", [20]);
+    await segment("unrelated-handa", [21]);
+
+    const mentions = ["神話口", "福岐", "千田竹豊", "上", "青山", "奈良", "千田半田"];
+    const diagnostics = await new StationCandidateService(new D1StationsRepository(env.DB))
+      .analyzeMentions(mentions);
+
+    expect(diagnostics.anchorNames).toEqual(["青山", "奈良", "半田"]);
+    expect(diagnostics.anchorSearchStatus).toBe("inconsistent_anchors");
+    expect(diagnostics.sequenceFallbackAttempted).toBe(true);
+    expect(diagnostics.fallbackSearchStatus).toBe("matched");
+    expect(diagnostics.routeSearchStatus).toBe("matched");
+    expect(diagnostics.routeCandidates[0]?.source).toBe("sequence_fallback");
+    expect(names(diagnostics.routeCandidates[0]!)).toEqual([
+      "河和口", "富貴", "知多武豊", "上ゲ", "青山", "成岩", "知多半田",
+    ]);
+    expect(diagnostics.routeCandidates[0]!.score).toBeGreaterThan(0.5);
+    expect(diagnostics.mentionCandidates[5]?.find(({ station: value }) => value.name === "奈良")?.matchStrength)
+      .toBe("hard");
+    expect(diagnostics.mentionCandidates[5]?.find(({ station: value }) => value.name === "成岩")?.matchStrength)
+      .toBe("soft");
+    expect(diagnostics.mentionCandidates.map((candidates) => candidates[0]?.station.name)).toEqual([
+      "河和口", "富貴", "知多武豊", "上ゲ", "青山", "成岩", "知多半田",
+    ]);
+    expect(diagnostics.mentionCandidates[5]?.find(({ station: value }) => value.name === "成岩")?.finalScore)
+      .toBeGreaterThan(
+        diagnostics.mentionCandidates[5]?.find(({ station: value }) => value.name === "奈良")?.finalScore ?? 0,
+      );
+    expect(diagnostics.mentionCandidates[6]?.find(({ station: value }) => value.name === "知多半田")?.finalScore)
+      .toBeGreaterThan(
+        diagnostics.mentionCandidates[6]?.find(({ station: value }) => value.name === "半田")?.finalScore ?? 0,
+      );
+  });
+
+  it("uses a direction sequence and destination context to rank 久保川 → 窪川", async () => {
+    const routeNames = [
+      "伊野", "枝川", "朝倉", "佐川", "斗賀野", "須崎",
+      "土佐新荘", "安和", "土佐久礼", "影野", "六反地", "仁井田", "窪川",
+    ];
+    await Promise.all(routeNames.map((name, index) => station(index + 1, name, "JR土讃線", "高知県")));
+    await segment("dosan-local", routeNames.map((_name, index) => index + 1));
+
+    const diagnostics = await new StationCandidateService(new D1StationsRepository(env.DB)).analyzeMentions(
+      ["伊野", "佐川", "須崎", "久保川"],
+      {},
+      { sequenceRole: "direction", destinationContext: true },
+    );
+
+    expect(diagnostics.sequenceFallbackAttempted).toBe(true);
+    expect(diagnostics.routeSearchStatus).toBe("matched");
+    expect(diagnostics.routeCandidates[0]?.mentionMatches?.map(({ station: value }) => value.name))
+      .toEqual(["伊野", "佐川", "須崎", "窪川"]);
+    const destinationCandidates = diagnostics.mentionCandidates[3] ?? [];
+    expect(destinationCandidates[0]?.station.name).toBe("窪川");
+    expect(destinationCandidates[0]).toMatchObject({
+      mentionText: "久保川",
+      matchStrength: "soft",
+      routeHypothesisIds: [0],
+    });
+    expect(destinationCandidates[0]!.lexicalScore).toBeGreaterThanOrEqual(0.5);
+    expect(destinationCandidates[0]!.bestRouteScore).toBeGreaterThan(0.5);
+  });
+
   it("accepts increasing and decreasing seq order without requiring adjacent seq values", async () => {
     await Promise.all([
       station(1, "武生", "ハピラインふくい線", "福井県"),

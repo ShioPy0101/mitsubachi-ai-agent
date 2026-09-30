@@ -14,7 +14,7 @@ import { GeminiMetadataService, GeminiSafetyBlockedError, isRetryableGeminiError
 import { generateRailwayFilename } from "../railway/filename";
 import { StationCandidateService } from "../stations/candidate-service";
 import { resolveStation } from "../stations/resolver";
-import { groupStopSequences } from "../stations/stop-sequences";
+import { groupStationSequences } from "../stations/stop-sequences";
 import type { TranscriptionResult } from "../transcription/service";
 import {
   CloudflareWhisperTranscriptionService,
@@ -274,6 +274,8 @@ function formatDemoFailure(error: unknown, stage: string, attempt: number): stri
   const message = details.errorMessage.slice(0, 1_300).replaceAll("```", "``\u200b`");
   const retrySummary = stage.startsWith("gemini_")
     ? "同じ文字起こしを使ったGemini再試行（最大3回）も完了できませんでした。"
+    : details.errorName === "WhisperAudioDecodeError"
+      ? "MP3原本の3030エラー後、16kHz mono WAVへ変換した再送も完了できませんでした。"
     : "この失敗では処理全体を再実行しません。";
   return [
     "❌ **デモ処理に失敗しました**",
@@ -349,9 +351,12 @@ async function processJob(
       }));
     transcriptionResult = transcription;
     if (showDemoProgress) {
+      const preparation = transcription.audioPreparation?.strategy === "mp3_to_wav_fallback"
+        ? `、MP3デコード3030を検出したため16kHz mono WAVへ変換して再送（${transcription.audioPreparation.originalBytes} → ${transcription.audioPreparation.submittedBytes} bytes）`
+        : "";
       await updateProgress(
         job,
-        `Whisperの文字起こしが完了しました（言語: ${transcription.language ?? "不明"}、セグメント: ${transcription.segments.length}件）。`,
+        `Whisperの文字起こしが完了しました（言語: ${transcription.language ?? "不明"}、セグメント: ${transcription.segments.length}件${preparation}）。`,
         callbacks,
         discord,
         true,
@@ -472,13 +477,19 @@ async function processJob(
     await runStage(job.id, "transcription_checkpoint", () => jobs.saveTranscription(job.id, transcriptionText));
   }
 
-  await updateProgress(job, "stop sequenceごとに駅候補と局所経路を検索しています…", callbacks, discord, showDemoProgress);
+  await updateProgress(job, "役割別sequenceごとに駅候補と局所経路を検索しています…", callbacks, discord, showDemoProgress);
   const candidateService = new StationCandidateService(new D1StationsRepository(env.DB));
   const sequenceSearches = [];
-  for (const { id, mentions } of groupStopSequences(analysis.mentions)) {
+  for (const { id, role, mentions, contextMentions } of groupStationSequences(analysis.mentions)) {
+    if (role === "unknown") continue;
+    const searchMentions = [...mentions, ...contextMentions];
     const stationSearch = await runStage(job.id, `station_candidates_sequence_${id}`, () =>
-      candidateService.analyze(mentions.map(({ text }) => text).join("、")));
-    sequenceSearches.push({ id, mentions, stationSearch });
+      candidateService.analyzeMentions(
+        searchMentions.map(({ text }) => text),
+        {},
+        { sequenceRole: role, destinationContext: contextMentions.length > 0 },
+      ));
+    sequenceSearches.push({ id, role, mentions, contextMentions, stationSearch });
   }
   const candidates = [...new Map(sequenceSearches.flatMap(({ stationSearch }) => stationSearch.candidates)
     .map((candidate) => [candidate.station.id, candidate])).values()];
@@ -498,10 +509,13 @@ async function processJob(
     mentions: analysis.mentions,
     metadata: analysis.metadata,
   };
-  const normalizationSequences = sequenceSearches.map(({ id, mentions, stationSearch }) => ({
+  const normalizationSequences = sequenceSearches.map(({ id, role, mentions, contextMentions, stationSearch }) => ({
     id,
+    role,
     mentions,
+    contextMentions,
     stationCandidates: stationSearch.candidates,
+    mentionCandidates: stationSearch.mentionCandidates,
     routeHypotheses: stationSearch.routeCandidates,
   }));
   await updateProgress(job, "Gemini #2で構造とsequence候補に制約された文字起こしを生成しています…", callbacks, discord, showDemoProgress);

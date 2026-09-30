@@ -2,11 +2,15 @@ import { extractStationSearchText, normalizeKana, normalizeStationName } from ".
 import { stationKanaSimilarity, stationNameSimilarity } from "./similarity";
 import {
   STATION_MATCH_WEIGHTS,
+  type MentionRouteMatch,
+  type MentionStationCandidate,
   type RoutePathCandidate,
+  type RouteSearchStatus,
   type Station,
   type StationCandidate,
   type StationContext,
 } from "./types";
+import type { SequenceRole } from "../metadata/service";
 
 export interface StationRepository {
   findCandidatePool(searchText: string, context: StationContext, limit: number): Promise<Station[]>;
@@ -15,7 +19,18 @@ export interface StationRepository {
     maxCandidates: number,
     endpointContextStations?: number,
   ): Promise<RoutePathCandidate[]>;
+  findLocalRouteCandidates?(
+    seedNames: readonly string[],
+    sequenceLength: number,
+    maxCandidates: number,
+    stationRadius?: number,
+  ): Promise<RoutePathCandidate[]>;
 }
+
+export type SequenceSearchOptions = {
+  sequenceRole?: SequenceRole;
+  destinationContext?: boolean;
+};
 
 export type StationCandidateDiagnostics = {
   searchText: string;
@@ -23,6 +38,11 @@ export type StationCandidateDiagnostics = {
   pool: Station[];
   eligiblePool: Station[];
   anchorNames: string[];
+  anchorSearchStatus: "matched" | "insufficient_anchors" | "inconsistent_anchors";
+  routeSearchStatus: RouteSearchStatus;
+  sequenceFallbackAttempted: boolean;
+  fallbackSearchStatus: "not_attempted" | "matched" | "no_route_match";
+  mentionCandidates: MentionStationCandidate[][];
   routeCandidates: RoutePathCandidate[];
   candidates: StationCandidate[];
 };
@@ -90,6 +110,95 @@ function mentionIndex(station: Station, transcription: string): number {
   return Math.min(nameIndex, kanaIndex);
 }
 
+function lexicalSimilarities(mention: string, station: Station): {
+  nameSimilarity: number;
+  kanaSimilarity: number;
+  lexicalSimilarity: number;
+} {
+  const nameSimilarity = stationNameSimilarity(mention, station.name);
+  const kanaSimilarity = stationKanaSimilarity(mention, station.kana);
+  return { nameSimilarity, kanaSimilarity, lexicalSimilarity: Math.max(nameSimilarity, kanaSimilarity) };
+}
+
+function alignMentionsToRoute(
+  mentionTexts: readonly string[],
+  route: RoutePathCandidate,
+  source: "anchor" | "sequence_fallback",
+  maximumStationGap = 4,
+): RoutePathCandidate | null {
+  if (mentionTexts.length < 2 || route.stations.length < mentionTexts.length) return null;
+  type Alignment = { value: number; indexes: number[] };
+  let previous = route.stations.map((item, routeIndex): Alignment => {
+    const lexical = lexicalSimilarities(mentionTexts[0] ?? "", item.station).lexicalSimilarity;
+    return { value: lexical * 0.75, indexes: [routeIndex] };
+  });
+  for (let mentionIndex = 1; mentionIndex < mentionTexts.length; mentionIndex += 1) {
+    const current = route.stations.map((item, routeIndex): Alignment => {
+      const lexical = lexicalSimilarities(mentionTexts[mentionIndex] ?? "", item.station).lexicalSimilarity;
+      let best: Alignment | null = null;
+      for (let previousIndex = Math.max(0, routeIndex - maximumStationGap); previousIndex < routeIndex; previousIndex += 1) {
+        const prior = previous[previousIndex];
+        if (prior === undefined) continue;
+        const gap = routeIndex - previousIndex;
+        const value = prior.value + lexical * 0.75 + 0.2 - (gap - 1) * 0.04;
+        if (best === null || value > best.value) best = { value, indexes: [...prior.indexes, routeIndex] };
+      }
+      return best ?? { value: Number.NEGATIVE_INFINITY, indexes: [] };
+    });
+    previous = current;
+  }
+  const best = previous.reduce<Alignment | null>(
+    (selected, item) => selected === null || item.value > selected.value ? item : selected,
+    null,
+  );
+  if (best === null || best.indexes.length !== mentionTexts.length) return null;
+  const mentionMatches: MentionRouteMatch[] = best.indexes.map((routeIndex, mentionIndex) => {
+    const station = route.stations[routeIndex]!.station;
+    return {
+      mentionIndex,
+      mentionText: mentionTexts[mentionIndex] ?? "",
+      station,
+      routeIndex,
+      ...lexicalSimilarities(mentionTexts[mentionIndex] ?? "", station),
+    };
+  });
+  const lexicalValues = mentionMatches.map(({ lexicalSimilarity }) => lexicalSimilarity);
+  const covered = lexicalValues.filter((value) => value >= 0.25).length;
+  const strong = lexicalValues.filter((value) => value >= 0.65).length;
+  const gaps = best.indexes.slice(1).map((value, index) => value - (best.indexes[index] ?? value));
+  const continuity = gaps.length === 0
+    ? 0
+    : gaps.reduce((sum, gap) => sum + Math.max(0, 1 - (gap - 1) * 0.25), 0) / gaps.length;
+  const meanLexical = lexicalValues.reduce((sum, value) => sum + value, 0) / lexicalValues.length;
+  const anchorCoverage = covered / mentionTexts.length;
+  const score = Math.max(0, Math.min(1,
+    meanLexical * 0.4
+      + anchorCoverage * 0.25
+      + continuity * 0.2
+      + (strong / mentionTexts.length) * 0.15
+      - route.transferCount * 0.08,
+  ));
+  if (covered < Math.max(2, Math.ceil(mentionTexts.length * 0.5)) || score < 0.43) return null;
+  const stations = mentionMatches.map(({ station }, routeIndex) => ({ station, routeIndex }));
+  return {
+    stations,
+    mentionMatches: mentionMatches.map((match, routeIndex) => ({ ...match, routeIndex })),
+    anchorCoverage,
+    orderConsistency: 1,
+    transferCount: route.transferCount,
+    pathLength: stations.length,
+    score,
+    source,
+  };
+}
+
+function deduplicateRoutes(routes: readonly RoutePathCandidate[]): RoutePathCandidate[] {
+  return [...new Map(routes.map((route) => [
+    route.stations.map(({ station }) => station.id).join(","),
+    route,
+  ])).values()];
+}
+
 export class StationCandidateService {
   constructor(private readonly repository: StationRepository) {}
 
@@ -98,8 +207,30 @@ export class StationCandidateService {
   }
 
   async analyze(transcription: string, context: StationContext = {}): Promise<StationCandidateDiagnostics> {
+    return this.analyzeInternal(transcription, null, context);
+  }
+
+  async analyzeMentions(
+    mentionTexts: readonly string[],
+    context: StationContext = {},
+    options: SequenceSearchOptions = {},
+  ): Promise<StationCandidateDiagnostics> {
+    return this.analyzeInternal(mentionTexts.join("、"), mentionTexts, context, options);
+  }
+
+  private async analyzeInternal(
+    transcription: string,
+    mentionTexts: readonly string[] | null,
+    context: StationContext,
+    options: SequenceSearchOptions = {},
+  ): Promise<StationCandidateDiagnostics> {
     const searchText = extractStationSearchText(transcription);
-    const pool = await this.repository.findCandidatePool(searchText, context, 100);
+    const pools = await Promise.all([
+      this.repository.findCandidatePool(searchText, context, 100),
+      ...(mentionTexts ?? []).map((mention) =>
+        this.repository.findCandidatePool(extractStationSearchText(mention), context, 40)),
+    ]);
+    const pool = [...new Map(pools.flat().map((station) => [station.id, station])).values()];
     const eligiblePool = pool.filter((station) => isEligibleStationMention(station, transcription));
     const initial = eligiblePool
       .map((station) => scoreStation(station, transcription, context));
@@ -112,9 +243,63 @@ export class StationCandidateService {
       .sort((left, right) => left[1] - right[1])
       .map(([name]) => name)
       .slice(0, 12);
-    const routeCandidates = anchorNames.length >= 2
+    const anchorRouteCandidates = anchorNames.length >= 2
       ? await this.repository.findRouteCandidates(anchorNames, 5, 2)
       : [];
+    const alignedAnchorRoutes = mentionTexts === null
+      ? anchorRouteCandidates.map((route) => ({ ...route, source: "anchor" as const }))
+      : anchorRouteCandidates
+        .map((route) => alignMentionsToRoute(
+          mentionTexts,
+          route,
+          "anchor",
+          options.sequenceRole === "direction" ? 16 : 4,
+        ))
+        .filter((route): route is RoutePathCandidate => route !== null);
+    const anchorSearchStatus = anchorNames.length < 2
+      ? "insufficient_anchors" as const
+      : alignedAnchorRoutes.length === 0
+        ? "inconsistent_anchors" as const
+        : "matched" as const;
+    const sequenceFallbackAttempted = mentionTexts !== null
+      && this.repository.findLocalRouteCandidates !== undefined
+      && (options.destinationContext === true || alignedAnchorRoutes.length === 0 || alignedAnchorRoutes[0]!.score < 0.65);
+    let fallbackRoutes: RoutePathCandidate[] = [];
+    if (sequenceFallbackAttempted && mentionTexts !== null && this.repository.findLocalRouteCandidates !== undefined) {
+      const perMentionSeeds = mentionTexts.flatMap((mention) => pool
+        .map((station) => ({ station, ...lexicalSimilarities(mention, station) }))
+        .filter(({ lexicalSimilarity }) => lexicalSimilarity >= 0.5)
+        .sort((left, right) => right.lexicalSimilarity - left.lexicalSimilarity)
+        .slice(0, 3)
+        .map(({ station }) => station.name));
+      const seedNames = [...new Set([...anchorNames, ...perMentionSeeds])].slice(0, 20);
+      const maximumStationGap = options.sequenceRole === "direction" ? 16 : 4;
+      const stationRadius = options.destinationContext === true
+        ? Math.max(16, mentionTexts.length * 4)
+        : mentionTexts.length + 2;
+      const localRoutes = await this.repository.findLocalRouteCandidates(
+        seedNames,
+        mentionTexts.length,
+        30,
+        stationRadius,
+      );
+      fallbackRoutes = localRoutes
+        .map((route) => alignMentionsToRoute(mentionTexts, route, "sequence_fallback", maximumStationGap))
+        .filter((route): route is RoutePathCandidate => route !== null);
+    }
+    const routeCandidates = deduplicateRoutes([...alignedAnchorRoutes, ...fallbackRoutes])
+      .sort((left, right) => right.score - left.score || left.transferCount - right.transferCount)
+      .slice(0, 5);
+    const fallbackSearchStatus = !sequenceFallbackAttempted
+      ? "not_attempted" as const
+      : fallbackRoutes.length > 0
+        ? "matched" as const
+        : "no_route_match" as const;
+    const routeSearchStatus: RouteSearchStatus = routeCandidates.length > 0
+      ? "matched"
+      : sequenceFallbackAttempted
+        ? "no_route_match"
+        : anchorSearchStatus;
     const routeById = new Map<number, {
       station: Station;
       routeCandidateIds: number[];
@@ -154,8 +339,12 @@ export class StationCandidateService {
           return exactButRouteInconsistent ? { ...candidate, score: candidate.score * 0.6 } : candidate;
         }
         const routeRankFactor = Math.max(0.4, 1 - route.bestRouteRank * 0.15);
-        const routeQualityFactor = route.bestRouteScore >= 0.8 ? 1 : route.bestRouteScore;
-        const routeContextBonus = STATION_MATCH_WEIGHTS.exactPath * routeRankFactor * routeQualityFactor;
+        const matchedRoute = routeCandidates[route.bestRouteRank];
+        const fallbackFactor = matchedRoute?.source === "sequence_fallback" ? 0.4 : STATION_MATCH_WEIGHTS.exactPath;
+        const routeQualityFactor = matchedRoute?.source === "sequence_fallback"
+          ? route.bestRouteScore
+          : route.bestRouteScore >= 0.8 ? 1 : route.bestRouteScore;
+        const routeContextBonus = fallbackFactor * routeRankFactor * routeQualityFactor;
         return {
           ...candidate,
           onExactPath: true,
@@ -177,6 +366,57 @@ export class StationCandidateService {
       .filter((candidate, index, ranked) =>
         ranked.findIndex((item) => item.station.name === candidate.station.name) === index)
       .slice(0, 24);
-    return { searchText, context, pool, eligiblePool, anchorNames, routeCandidates, candidates };
+    const mentionCandidates: MentionStationCandidate[][] = (mentionTexts ?? []).map((mentionText, mentionIndex) => {
+      const routeMatches = routeCandidates.flatMap((route, routeHypothesisId) =>
+        (route.mentionMatches ?? [])
+          .filter((match) => match.mentionIndex === mentionIndex)
+          .map((match) => ({ route, routeHypothesisId, match })));
+      const stations = new Map(pool.map((station) => [station.id, station]));
+      for (const { match } of routeMatches) stations.set(match.station.id, match.station);
+      return [...stations.values()].map((station): MentionStationCandidate => {
+        const { nameSimilarity, kanaSimilarity, lexicalSimilarity } = lexicalSimilarities(mentionText, station);
+        const supportingRoutes = routeMatches.filter(({ match }) => match.station.id === station.id);
+        const bestRouteScore = supportingRoutes.reduce<number | null>(
+          (best, { route }) => best === null || route.score > best ? route.score : best,
+          null,
+        );
+        const conflictsWithMatchedRoute = routeCandidates.length > 0 && supportingRoutes.length === 0;
+        const lexicalBase = Math.min(0.7, nameSimilarity * 0.35 + kanaSimilarity * 0.35);
+        const finalScore = Math.min(1,
+          lexicalBase * (conflictsWithMatchedRoute ? 0.25 : 1) + (bestRouteScore ?? 0) * 0.4,
+        );
+        return {
+          mentionIndex,
+          mentionText,
+          station,
+          nameSimilarity,
+          kanaSimilarity,
+          lexicalScore: lexicalSimilarity,
+          matchStrength: nameSimilarity === 1 || kanaSimilarity === 1 || lexicalSimilarity >= 0.85
+            ? "hard"
+            : "soft",
+          routeHypothesisIds: supportingRoutes.map(({ routeHypothesisId }) => routeHypothesisId),
+          bestRouteScore,
+          finalScore,
+        };
+      })
+        .filter((candidate) => candidate.lexicalScore >= 0.2 || candidate.bestRouteScore !== null)
+        .sort((left, right) => right.finalScore - left.finalScore || right.lexicalScore - left.lexicalScore)
+        .slice(0, 8);
+    });
+    return {
+      searchText,
+      context,
+      pool,
+      eligiblePool,
+      anchorNames,
+      anchorSearchStatus,
+      routeSearchStatus,
+      sequenceFallbackAttempted,
+      fallbackSearchStatus,
+      mentionCandidates,
+      routeCandidates,
+      candidates,
+    };
   }
 }

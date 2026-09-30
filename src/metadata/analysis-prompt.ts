@@ -12,9 +12,12 @@ mentionsには駅名らしく発話された文字列を、入力中の表記を
 - start/endはJavaScript文字列の0始まり位置と終了位置。確信できない場合はnull
 - roleはdestination、direction、stop、next_stop、transfer、service_change_point、unknownのいずれか
 - 「X行き」のXはdestination、「X方面」のXはdirectionであり、停車駅列へ混ぜない
-- 「A、B、Cの順に止まる」のように一続きの停車駅列だけ同じsequenceIdを付ける
+- sequenceIdは停車駅列だけでなく、同じ意味を持つ駅mention列を表す
+- 「A、B、Cの順に止まる」はstopとして同じsequenceIdを付ける
+- 「A、B、C方面」のように複数の方面駅が連続する場合、stopとは断定せずdirectionとして同じsequenceIdを付ける
+- destinationはdirectionやstopと同じsequenceへ混ぜず、単独のdestinationとして返す
 - 種別変更前後は必要なら別sequenceにし、変更地点はservice_change_pointとして両区間の意味が分かるようにする
-- destination、direction、transfer、unknownのsequenceIdは原則null
+- 単独mentionのsequenceIdはnullでもよいが、複数mentionからなるdirection列には必ずsequenceIdを付ける
 - falseの場合もmentionsは原文だけから抽出し、metadataはnull、categoryはother、summaryはnull
 
 入力:

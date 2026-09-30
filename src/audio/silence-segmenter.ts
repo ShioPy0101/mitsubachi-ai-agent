@@ -339,6 +339,68 @@ function encodeMonoWav(decoded: DecodedAudio, start: number, end: number): Array
   return output;
 }
 
+function encodePcm16Wav(chunks: readonly Int16Array[], sampleRate: number): ArrayBuffer {
+  const sampleCount = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const output = new ArrayBuffer(44 + sampleCount * 2);
+  const view = new DataView(output);
+  writeAscii(view, 0, "RIFF");
+  view.setUint32(4, output.byteLength - 8, true);
+  writeAscii(view, 8, "WAVE");
+  writeAscii(view, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeAscii(view, 36, "data");
+  view.setUint32(40, sampleCount * 2, true);
+  let outputIndex = 0;
+  for (const chunk of chunks) {
+    for (const sample of chunk) {
+      view.setInt16(44 + outputIndex * 2, sample, true);
+      outputIndex += 1;
+    }
+  }
+  return output;
+}
+
+export async function transcodeMp3ToMonoWav(audio: ArrayBuffer, targetSampleRate = 16_000): Promise<ArrayBuffer> {
+  const parser = new CodecParser<CodecFrame>("audio/mpeg", { enableFrameCRC32: false });
+  const frames = parser.parseAll(new Uint8Array(audio));
+  if (frames.length === 0) throw new Error("MP3 parser produced no frames");
+  const MPEGDecoder = await loadMp3Decoder();
+  const decoder = new MPEGDecoder({ enableGapless: false });
+  const pcmChunks: Int16Array[] = [];
+  try {
+    await decoder.ready;
+    for (let offset = 0; offset < frames.length; offset += mp3DecodeBatchFrames) {
+      const batch = frames.slice(offset, offset + mp3DecodeBatchFrames);
+      const decoded = decoder.decodeFrames(batch.map((frame) => frame.data));
+      if (decoded.channelData.length === 0 || decoded.sampleRate < 1 || decoded.samplesDecoded < 1) {
+        throw new Error("MP3 decoder produced no samples");
+      }
+      const outputSamples = Math.max(1, Math.floor(decoded.samplesDecoded * targetSampleRate / decoded.sampleRate));
+      const pcm = new Int16Array(outputSamples);
+      for (let outputIndex = 0; outputIndex < outputSamples; outputIndex += 1) {
+        const sourceIndex = Math.min(
+          decoded.samplesDecoded - 1,
+          Math.floor(outputIndex * decoded.sampleRate / targetSampleRate),
+        );
+        let value = 0;
+        for (const channel of decoded.channelData) value += channel[sourceIndex] ?? 0;
+        value = Math.max(-1, Math.min(1, value / decoded.channelData.length));
+        pcm[outputIndex] = value < 0 ? Math.round(value * 0x8000) : Math.round(value * 0x7fff);
+      }
+      pcmChunks.push(pcm);
+    }
+  } finally {
+    decoder.free();
+  }
+  return encodePcm16Wav(pcmChunks, targetSampleRate);
+}
+
 export async function splitAudioOnSilence(
   audio: ArrayBuffer,
   contentType: string | null,

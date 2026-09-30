@@ -8,6 +8,12 @@ export type TranscriptionResult = {
   language: string | null;
   text: string;
   segments: TranscriptionSegment[];
+  audioPreparation?: {
+    strategy: "original" | "mp3_to_wav_fallback";
+    originalBytes: number;
+    submittedBytes: number;
+    initialDecodeError: string | null;
+  };
 };
 
 export type TranscriptionInput = {

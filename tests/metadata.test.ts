@@ -73,13 +73,47 @@ describe("two-stage Gemini metadata boundary", () => {
     expect(firstPrompt).toContain("textは必ずtranscriptionに実在する連続部分");
     expect(firstPrompt).toContain("destination");
     expect(firstPrompt).toContain("sequenceId");
+    expect(firstPrompt).toContain("A、B、C方面");
+    expect(firstPrompt).toContain("複数mentionからなるdirection列には必ずsequenceId");
 
     const secondPrompt = buildGeminiNormalizationPrompt("A、B、C", analysis, []);
-    expect(secondPrompt).toContain("stop sequenceごと");
+    expect(secondPrompt).toContain("役割別sequenceごと");
+    expect(secondPrompt).toContain("文法的な崩れ、重複、不自然な助詞");
     expect(secondPrompt).toContain("候補経路だけを根拠に停車駅列全体を再構成しない");
     expect(secondPrompt).toContain("destination、direction、transfer、stop");
     expect(secondPrompt).toContain("exact matchでも");
     expect(secondPrompt).toContain("長大な迂回経路");
+    expect(secondPrompt).toContain("補正を支持する「証拠」");
+    expect(secondPrompt).toContain("採用必須の制約や答えではない");
+    expect(secondPrompt).toContain("固有名詞は、経路上に存在するという理由だけで変更しない");
+  });
+
+  it("passes direction and destination context to full-transcription normalization", () => {
+    const directionMentions = [
+      { text: "伊野", start: 0, end: 2, role: "direction" as const, sequenceId: 1 },
+      { text: "佐川", start: 3, end: 5, role: "direction" as const, sequenceId: 1 },
+      { text: "須崎", start: 6, end: 8, role: "direction" as const, sequenceId: 1 },
+    ];
+    const destination = {
+      text: "久保川", start: 15, end: 18, role: "destination" as const, sequenceId: null,
+    };
+    const prompt = buildGeminiNormalizationPrompt(
+      "伊野、佐川、須崎方面、久保川行き",
+      { ...analysis, mentions: [...directionMentions, destination] },
+      [{
+        id: 1,
+        role: "direction",
+        mentions: directionMentions,
+        contextMentions: [destination],
+        stationCandidates: [],
+        mentionCandidates: [],
+        routeHypotheses: [],
+      }],
+    );
+
+    expect(prompt).toContain('"role":"direction"');
+    expect(prompt).toContain('"contextMentions":[{"text":"久保川","role":"destination"}]');
+    expect(prompt).toContain("normalizedTranscriptionを生成");
   });
 
   it("keeps only verbatim Gemini #1 mentions and preserves their spoken order", async () => {

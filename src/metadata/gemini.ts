@@ -168,7 +168,7 @@ export class GeminiMetadataService {
         responseBlockedCategories.length > 0 ? responseBlockedCategories : [candidate?.finishReason ?? "SAFETY"],
       );
     }
-    const responseText = candidate?.content?.parts[0]?.text;
+    const responseText = candidate?.content?.parts?.[0]?.text;
     if (responseText === undefined) throw new Error("Gemini response did not contain JSON text");
     return {
       parsedJson: JSON.parse(responseText) as unknown,

@@ -1,4 +1,5 @@
 import type { GeminiAnalysisExtraction, GeminiDiagnostics } from "../metadata/gemini";
+import type { SequenceRole } from "../metadata/service";
 import type { RailwayAnnouncementMetadata } from "../railway/types";
 import type { StationCandidateDiagnostics } from "../stations/candidate-service";
 import { STATION_MATCH_WEIGHTS, type StationResolution } from "../stations/types";
@@ -20,7 +21,9 @@ export type DemoDiagnostics = {
   analysis: GeminiAnalysisExtraction;
   sequenceSearches: Array<{
     id: number;
+    role: SequenceRole;
     mentions: GeminiAnalysisExtraction["mentions"];
+    contextMentions: GeminiAnalysisExtraction["mentions"];
     stationSearch: StationCandidateDiagnostics;
   }>;
   gemini: GeminiDiagnostics;
@@ -74,8 +77,13 @@ function routeSummary(diagnostics: StationCandidateDiagnostics): unknown {
     context: diagnostics.context,
     algorithmLimits: {
       candidatePool: 100,
+      perMentionCandidatePool: 40,
       anchors: 12,
       routeCandidates: 5,
+      localFallbackRoutes: 30,
+      maximumStationGap: { stops: 4, direction: 16 },
+      minimumSequenceLexicalCoverage: 0.5,
+      minimumSequenceScore: 0.43,
       minimumCandidateScore: 0.35,
       finalCandidates: 24,
     },
@@ -83,6 +91,11 @@ function routeSummary(diagnostics: StationCandidateDiagnostics): unknown {
     candidatePoolCount: diagnostics.pool.length,
     eligiblePoolCount: diagnostics.eligiblePool.length,
     anchorsInSpokenOrder: diagnostics.anchorNames,
+    anchorSearchStatus: diagnostics.anchorSearchStatus,
+    routeSearchStatus: diagnostics.routeSearchStatus,
+    sequenceFallbackAttempted: diagnostics.sequenceFallbackAttempted,
+    fallbackSearchStatus: diagnostics.fallbackSearchStatus,
+    mentionCandidates: diagnostics.mentionCandidates,
     searchedRouteCandidates: diagnostics.routeCandidates.map((route, rank) => ({
       rank,
       anchorCoverage: route.anchorCoverage,
@@ -90,6 +103,8 @@ function routeSummary(diagnostics: StationCandidateDiagnostics): unknown {
       transferCount: route.transferCount,
       pathLength: route.pathLength,
       score: route.score,
+      source: route.source,
+      mentionMatches: route.mentionMatches,
       path: route.stations.map(({ station, routeIndex }) => ({
         routeIndex,
         id: station.id,
@@ -115,12 +130,14 @@ export function formatDemoDiagnostics(value: DemoDiagnostics): string[] {
     ...codeMessages("7. Gemini #1 raw response", "json", json(value.gemini.analysis.response)),
     ...codeMessages("8. parsed station mentions", "json", json(value.analysis.mentions)),
     ...value.sequenceSearches.flatMap((sequence) => [
-      ...codeMessages(`9.${sequence.id}. stop sequence ${sequence.id} 構造`, "json", json({
+      ...codeMessages(`9.${sequence.id}. ${sequence.role} sequence ${sequence.id} 構造`, "json", json({
         id: sequence.id,
+        role: sequence.role,
         mentions: sequence.mentions,
+        contextMentions: sequence.contextMentions,
         search: routeSummary(sequence.stationSearch),
       })),
-      ...codeMessages(`10.${sequence.id}. stop sequence ${sequence.id} 駅候補`, "json", json(sequence.stationSearch.candidates)),
+      ...codeMessages(`10.${sequence.id}. ${sequence.role} sequence ${sequence.id} 駅候補`, "json", json(sequence.stationSearch.candidates)),
     ]),
     ...codeMessages("11. Gemini #2 リクエスト（秘密値除外）", "json", json(value.gemini.normalization.request)),
     ...codeMessages("12. Gemini #2 完全なプロンプト", "text", value.gemini.normalization.prompt),
@@ -141,8 +158,11 @@ export function formatDemoDiagnosticPreviews(value: DemoDiagnostics): string[] {
   const sequenceSummary = value.sequenceSearches.map((sequence) => {
     const routes = sequence.stationSearch.routeCandidates.slice(0, 3).map((route) =>
       `${route.stations.map(({ station }) => station.name).join(" → ")} (score=${route.score.toFixed(3)})`).join("\n");
-    return `sequence ${sequence.id}: ${sequence.mentions.map(({ text, role }) => `${text}[${role}]`).join(" → ")}\n${routes || "経路候補なし"}`;
-  }).join("\n\n") || "stop sequenceなし";
+    const context = sequence.contextMentions.length === 0
+      ? ""
+      : ` / context=${sequence.contextMentions.map(({ text, role }) => `${text}[${role}]`).join(" → ")}`;
+    return `sequence ${sequence.id} [${sequence.role}]: ${sequence.mentions.map(({ text, role }) => `${text}[${role}]`).join(" → ")}${context}\nstatus=${sequence.stationSearch.routeSearchStatus} / fallback=${sequence.stationSearch.sequenceFallbackAttempted}\n${routes || "経路候補なし"}`;
+  }).join("\n\n") || "経路探索sequenceなし";
   const analysisRequest = value.gemini.analysis.request as { endpoint?: unknown };
   const normalizationRequest = value.gemini.normalization.request as { endpoint?: unknown };
 

@@ -35,7 +35,40 @@ export type RoutePathCandidate = {
   transferCount: number;
   pathLength: number;
   score: number;
+  source?: "anchor" | "sequence_fallback";
+  mentionMatches?: MentionRouteMatch[];
 };
+
+export type MentionRouteMatch = {
+  mentionIndex: number;
+  mentionText: string;
+  station: Station;
+  routeIndex: number;
+  nameSimilarity: number;
+  kanaSimilarity: number;
+  lexicalSimilarity: number;
+};
+
+export type StationMatchStrength = "hard" | "soft";
+
+export type MentionStationCandidate = {
+  mentionIndex: number;
+  mentionText: string;
+  station: Station;
+  nameSimilarity: number;
+  kanaSimilarity: number;
+  lexicalScore: number;
+  matchStrength: StationMatchStrength;
+  routeHypothesisIds: number[];
+  bestRouteScore: number | null;
+  finalScore: number;
+};
+
+export type RouteSearchStatus =
+  | "matched"
+  | "insufficient_anchors"
+  | "inconsistent_anchors"
+  | "no_route_match";
 
 export type StationCandidate = {
   station: Station;

@@ -3,7 +3,7 @@ import { StationCandidateService, scoreStation, type StationRepository } from ".
 import { buildStationLinePositions, generateStationsSql, parseStationsCsv } from "../src/stations/import";
 import { normalizeKana, normalizeStationName } from "../src/stations/normalization";
 import { resolveStation } from "../src/stations/resolver";
-import { groupStopSequences } from "../src/stations/stop-sequences";
+import { groupStationSequences, groupStopSequences } from "../src/stations/stop-sequences";
 import { levenshteinDistance, stationKanaSimilarity } from "../src/stations/similarity";
 import type { RoutePathCandidate, Station, StationContext } from "../src/stations/types";
 import { iseStations } from "./fixtures/stations";
@@ -29,7 +29,58 @@ describe("station normalization and ranking", () => {
       { text: "C", start: 20, end: 21, role: "stop" as const, sequenceId: 1 },
     ];
 
-    expect(groupStopSequences(mentions)).toEqual([{ id: 1, mentions: mentions.slice(3) }]);
+    expect(groupStopSequences(mentions)).toEqual([{
+      id: 1, role: "stops", mentions: mentions.slice(3), contextMentions: [],
+    }]);
+  });
+
+  it("groups a multi-station 方面案内 as direction and attaches a later destination as context", () => {
+    const mentions = [
+      { text: "伊野", start: 0, end: 2, role: "direction" as const, sequenceId: 1 },
+      { text: "佐川", start: 3, end: 5, role: "direction" as const, sequenceId: 1 },
+      { text: "須崎", start: 6, end: 8, role: "direction" as const, sequenceId: 1 },
+      { text: "久保川", start: 18, end: 21, role: "destination" as const, sequenceId: null },
+    ];
+
+    expect(groupStationSequences(mentions)).toMatchObject([
+      { id: 1, role: "direction", mentions: mentions.slice(0, 3), contextMentions: [mentions[3]] },
+      { role: "destination", mentions: [mentions[3]], contextMentions: [] },
+    ]);
+  });
+
+  it("does not combine direction, destination and unrelated exact-looking mentions into one sequence", () => {
+    const mentions = [
+      { text: "名鉄名古屋", start: 0, end: 5, role: "direction" as const, sequenceId: 1 },
+      { text: "名古屋", start: 6, end: 9, role: "direction" as const, sequenceId: 1 },
+      { text: "名鉄一宮", start: 10, end: 14, role: "destination" as const, sequenceId: null },
+      { text: "一宮", start: 15, end: 17, role: "destination" as const, sequenceId: null },
+      { text: "青山", start: 18, end: 20, role: "unknown" as const, sequenceId: null },
+      { text: "奈良", start: 21, end: 23, role: "unknown" as const, sequenceId: null },
+      { text: "半田", start: 24, end: 26, role: "unknown" as const, sequenceId: null },
+    ];
+    const sequences = groupStationSequences(mentions);
+
+    expect(sequences.map(({ role, mentions: values }) => ({ role, values: values.map(({ text }) => text) })))
+      .toEqual([
+        { role: "direction", values: ["名鉄名古屋", "名古屋"] },
+        { role: "destination", values: ["名鉄一宮"] },
+        { role: "destination", values: ["一宮"] },
+      ]);
+    expect(sequences.every(({ mentions: values }) => values.length < mentions.length)).toBe(true);
+  });
+
+  it("keeps direction, destination and explicit stops as separate sequence roles", () => {
+    const mentions = [
+      { text: "伊野", start: 0, end: 2, role: "direction" as const, sequenceId: 1 },
+      { text: "佐川", start: 3, end: 5, role: "direction" as const, sequenceId: 1 },
+      { text: "窪川", start: 6, end: 8, role: "destination" as const, sequenceId: null },
+      { text: "朝倉", start: 9, end: 11, role: "stop" as const, sequenceId: 2 },
+      { text: "伊野", start: 12, end: 14, role: "stop" as const, sequenceId: 2 },
+    ];
+
+    expect(groupStationSequences(mentions).map(({ role }) => role)).toEqual([
+      "direction", "stops", "destination",
+    ]);
   });
 
   it("normalizes name, kana script and small-ke variants", () => {
