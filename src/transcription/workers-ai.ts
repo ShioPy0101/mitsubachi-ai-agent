@@ -22,6 +22,7 @@ export interface WhisperAiRunner {
   run(
     model: "@cf/openai/whisper-large-v3-turbo",
     input: Ai_Cf_Openai_Whisper_Large_V3_Turbo_Input,
+    options?: { signal?: AbortSignal },
   ): Promise<unknown>;
 }
 
@@ -79,11 +80,11 @@ export class CloudflareWhisperTranscriptionService implements TranscriptionServi
     private readonly rebuildMp3: Mp3Rebuilder = rebuildMp3FromFrames,
   ) {}
 
-  private async run(audio: ArrayBuffer): Promise<TranscriptionResult> {
+  private async run(audio: ArrayBuffer, signal?: AbortSignal): Promise<TranscriptionResult> {
     const output = await this.ai.run(whisperModel, {
       audio: encodeBase64(audio),
       ...whisperSettings,
-    });
+    }, { ...(signal === undefined ? {} : { signal }) });
     const parsed = WorkersAiWhisperResponseSchema.parse(output);
     return {
       language: parsed.transcription_info?.language ?? null,
@@ -100,7 +101,7 @@ export class CloudflareWhisperTranscriptionService implements TranscriptionServi
     if (isMp3TranscriptionInput(input)) {
       let initialError: unknown;
       try {
-        const result = await this.run(input.audio);
+        const result = await this.run(input.audio, input.signal);
         return {
           ...result,
           audioPreparation: {
@@ -129,7 +130,7 @@ export class CloudflareWhisperTranscriptionService implements TranscriptionServi
       }
       if (rebuiltAudio !== null) {
         try {
-          const result = await this.run(rebuiltAudio);
+          const result = await this.run(rebuiltAudio, input.signal);
           console.info("whisper_mp3_rebuilt_transcription_completed", {
             filename: input.filename,
             originalBytes: input.audio.byteLength,
@@ -156,7 +157,7 @@ export class CloudflareWhisperTranscriptionService implements TranscriptionServi
       });
       throw new WhisperAudioDecodeError(initialError, rebuiltError);
     }
-    const result = await this.run(input.audio);
+    const result = await this.run(input.audio, input.signal);
     return {
       ...result,
       audioPreparation: {

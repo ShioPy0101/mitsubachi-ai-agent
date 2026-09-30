@@ -22,6 +22,7 @@ export type TranscriptionInput = {
   contentType: string | null;
   filename: string;
   durationSecs?: number | null;
+  signal?: AbortSignal;
 };
 
 export interface TranscriptionService {

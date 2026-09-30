@@ -76,7 +76,7 @@ function errorDetails(error: unknown): { errorName: string; errorMessage: string
 export async function runStage<T>(
   jobId: string,
   stage: string,
-  operation: () => Promise<T>,
+  operation: (signal: AbortSignal) => Promise<T>,
   monitor?: JobMonitor,
   timeoutMs?: number,
 ): Promise<T> {
@@ -85,15 +85,29 @@ export async function runStage<T>(
   await monitor?.assertNotCancelled(jobId, stage);
   console.info("audio_job_stage_started", { jobId, stage });
   const operationStartedAt = Date.now();
+  const controller = new AbortController();
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  if (timeoutMs !== undefined) {
+    timeoutId = setTimeout(() => {
+      controller.abort(new AudioJobProcessingTimeoutError(timeoutMs));
+    }, timeoutMs);
+  }
   let refreshPending: Promise<void> | null = null;
   const refreshTimer = monitor?.enabled
     ? setInterval(() => {
       if (refreshPending !== null) return;
-      refreshPending = monitor.refresh(jobId).finally(() => { refreshPending = null; });
+      refreshPending = Promise.all([
+        monitor.refresh(jobId),
+        monitor.assertNotCancelled(jobId, stage),
+      ]).then(() => undefined).catch((error: unknown) => {
+        if (error instanceof JobCancellationRequestedError) controller.abort(error);
+        else console.error("audio_job_monitor_refresh_failed", { jobId, stage, ...errorDetails(error) });
+      }).finally(() => { refreshPending = null; });
     }, jobMonitorRefreshIntervalMs)
     : undefined;
   try {
-    const result = await operation();
+    const result = await operation(controller.signal);
+    if (controller.signal.aborted) throw controller.signal.reason;
     if (timeoutMs !== undefined && Date.now() - operationStartedAt >= timeoutMs) {
       throw new AudioJobProcessingTimeoutError(timeoutMs);
     }
@@ -101,10 +115,12 @@ export async function runStage<T>(
     console.info("audio_job_stage_completed", { jobId, stage });
     return result;
   } catch (error) {
-    if (typeof error === "object" && error !== null) errorStages.set(error, stage);
-    console.error("audio_job_stage_failed", { jobId, stage, ...errorDetails(error) });
-    throw error;
+    const stageError = controller.signal.aborted ? controller.signal.reason : error;
+    if (typeof stageError === "object" && stageError !== null) errorStages.set(stageError, stage);
+    console.error("audio_job_stage_failed", { jobId, stage, ...errorDetails(stageError) });
+    throw stageError;
   } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
     if (refreshTimer !== undefined) clearInterval(refreshTimer);
     if (refreshPending !== null) await refreshPending;
   }
@@ -366,7 +382,11 @@ async function processJob(
   const alertsEnabled = resources?.sendAlerts ?? true;
   const showDemoProgress = resources?.showDemoDiagnostics ?? false;
   const discord = new DiscordRestClient(env.DISCORD_BOT_TOKEN, env.DISCORD_APPLICATION_ID);
-  const runJobStage = <T>(stage: string, operation: () => Promise<T>, timeoutMs?: number): Promise<T> =>
+  const runJobStage = <T>(
+    stage: string,
+    operation: (signal: AbortSignal) => Promise<T>,
+    timeoutMs?: number,
+  ): Promise<T> =>
     runStage(job.id, stage, operation, monitor, timeoutMs);
   const attachment = attachmentFor(job);
   let audio: ArrayBuffer | null = null;
@@ -392,22 +412,43 @@ async function processJob(
       showDemoProgress,
     );
     const whisperTimeoutMs = whisperProcessingTimeoutMs(job.durationSecs);
-    const transcription = await runJobStage("whisper_transcription", async () => {
+    const transcription = await runJobStage("whisper_transcription", async (signal) => {
+      const startedAt = Date.now();
+      let progressPending: Promise<void> | null = null;
+      const progressTimer = showDemoProgress
+        ? setInterval(() => {
+          if (progressPending !== null) return;
+          const elapsedSeconds = (Date.now() - startedAt) / 1000;
+          const timeoutSeconds = whisperTimeoutMs / 1000;
+          progressPending = updateProgress(
+            job,
+            `Whisper文字起こし処理中（経過 ${elapsedSeconds.toFixed(0)}秒 / タイムアウト ${timeoutSeconds.toFixed(0)}秒）…`,
+            callbacks,
+            discord,
+            true,
+          ).finally(() => { progressPending = null; });
+        }, 30_000)
+        : undefined;
       if (isMp3TranscriptionInput(transcriptionInput)) {
         await monitor?.stageProgress(job.id, "MP3原本をWhisperへ直接送信中");
       }
-      return new CloudflareWhisperTranscriptionService(
-        env.AI,
-        async ({ phase }) => {
-          if (phase === "rebuild_started") {
-            const detail = "MP3直接decode失敗・フレームのみ再構成して再送中";
-            await Promise.all([
-              updateProgress(job, `${detail}…`, callbacks, discord, showDemoProgress),
-              monitor?.stageProgress(job.id, detail),
-            ]);
-          }
-        },
-      ).transcribe(transcriptionInput);
+      try {
+        return await new CloudflareWhisperTranscriptionService(
+          env.AI,
+          async ({ phase }) => {
+            if (phase === "rebuild_started") {
+              const detail = "MP3直接decode失敗・フレームのみ再構成して再送中";
+              await Promise.all([
+                updateProgress(job, `${detail}…`, callbacks, discord, showDemoProgress),
+                monitor?.stageProgress(job.id, detail),
+              ]);
+            }
+          },
+        ).transcribe({ ...transcriptionInput, signal });
+      } finally {
+        if (progressTimer !== undefined) clearInterval(progressTimer);
+        if (progressPending !== null) await progressPending;
+      }
     }, whisperTimeoutMs);
     transcriptionResult = transcription;
     if (showDemoProgress) {

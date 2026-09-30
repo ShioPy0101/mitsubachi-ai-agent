@@ -49,6 +49,15 @@ export type GeminiCallDiagnostics = {
 
 export type NormalizationGuard = {
   accepted: boolean;
+  risk: "low" | "medium" | "high";
+  warnings: Array<{
+    type:
+      | "unsupported_factual_addition"
+      | "unsupported_entity_correction"
+      | "large_non_entity_rewrite"
+      | "output_format_failure";
+    entities?: string[];
+  }>;
   similarity: number;
   editDistance: number;
   globalSimilarity: number;
@@ -62,7 +71,12 @@ export type NormalizationGuard = {
     | "route_supported_entity_corrections"
     | "unsupported_factual_addition"
     | "unsupported_entity_insertion"
-    | "unsupported_non_entity_rewrite";
+    | "unsupported_non_entity_rewrite"
+    | "catastrophic_deletion"
+    | "catastrophic_expansion"
+    | "unrelated_rewrite"
+    | "empty_output"
+    | "invalid_output";
 };
 
 export type GeminiDiagnostics = {
@@ -299,20 +313,49 @@ export function checkNormalization(
   );
   const unsupportedFactualAddition = hasUnsupportedFactualAddition(transcription, normalized);
   const unsupportedEntityInsertion = unsupportedEntities.length > 0;
+  const catastrophicDeletion = raw.length >= 30
+    && corrected.length < raw.length * 0.35;
+  const catastrophicExpansion = raw.length >= 20
+    && corrected.length > Math.max(raw.length * 2, raw.length + 100);
+  const unrelatedRewrite = raw.length >= 30
+    && corrected.length >= 30
+    && globalSimilarity < 0.25
+    && nonEntitySimilarity < 0.25;
+  // Unsupported operational facts (time/platform/transfer) can change the meaning of
+  // an announcement. Entity uncertainty and ordinary rewrite volume are diagnostics;
+  // they must not discard an otherwise useful full-transcription correction.
   const accepted = !unsupportedFactualAddition
-    && !unsupportedEntityInsertion
-    && (!globallyLargeRewrite || routeExplainsRewrite);
-  const reason: NormalizationGuard["reason"] = unsupportedFactualAddition
-    ? "unsupported_factual_addition"
-    : unsupportedEntityInsertion
-      ? "unsupported_entity_insertion"
-    : !globallyLargeRewrite
-      ? "accepted"
-      : routeExplainsRewrite
-        ? "route_supported_entity_corrections"
-        : "unsupported_non_entity_rewrite";
+    && !catastrophicDeletion
+    && !catastrophicExpansion
+    && !unrelatedRewrite;
+  const reason: NormalizationGuard["reason"] = catastrophicDeletion
+    ? "catastrophic_deletion"
+    : catastrophicExpansion
+      ? "catastrophic_expansion"
+      : unrelatedRewrite
+        ? "unrelated_rewrite"
+        : unsupportedFactualAddition
+          ? "unsupported_factual_addition"
+          : unsupportedEntityInsertion
+            ? "unsupported_entity_insertion"
+            : !globallyLargeRewrite
+              ? "accepted"
+              : routeExplainsRewrite
+                ? "route_supported_entity_corrections"
+                : "unsupported_non_entity_rewrite";
+  const warnings: NormalizationGuard["warnings"] = [];
+  if (unsupportedFactualAddition) warnings.push({ type: "unsupported_factual_addition" });
+  if (unsupportedEntityInsertion) {
+    warnings.push({ type: "unsupported_entity_correction", entities: unsupportedEntities });
+  }
+  if (globallyLargeRewrite && !routeExplainsRewrite) warnings.push({ type: "large_non_entity_rewrite" });
+  const risk: NormalizationGuard["risk"] = accepted
+    ? warnings.length === 0 ? "low" : "medium"
+    : "high";
   return {
     accepted,
+    risk,
+    warnings,
     similarity: globalSimilarity,
     editDistance,
     globalSimilarity,
@@ -339,7 +382,22 @@ function sanitizeMentions(transcription: string, mentions: readonly StationMenti
   return sanitized.sort((left, right) => (left.start ?? 0) - (right.start ?? 0));
 }
 
-type GeneratedJson = { parsedJson: unknown; diagnostics: GeminiCallDiagnostics };
+type GeneratedJson = { responseText: string; diagnostics: GeminiCallDiagnostics };
+
+function failedNormalizationGuard(
+  transcription: string,
+  analysis: AnnouncementAnalysis,
+  sequences: readonly StopSequenceContext[],
+  reason: "empty_output" | "invalid_output",
+): NormalizationGuard {
+  return {
+    ...checkNormalization(transcription, "", analysis, sequences),
+    accepted: false,
+    risk: "high",
+    warnings: [{ type: "output_format_failure" }],
+    reason,
+  };
+}
 
 export class GeminiMetadataService {
   constructor(
@@ -406,7 +464,7 @@ export class GeminiMetadataService {
     const responseText = candidate?.content?.parts?.[0]?.text;
     if (responseText === undefined) throw new Error("Gemini response did not contain JSON text");
     return {
-      parsedJson: JSON.parse(responseText) as unknown,
+      responseText,
       diagnostics: {
         prompt,
         request: {
@@ -423,7 +481,7 @@ export class GeminiMetadataService {
 
   async analyze(transcription: string): Promise<GeminiAnalysisExtraction> {
     const generated = await this.generate(buildGeminiAnalysisPrompt(transcription), geminiAnalysisJsonSchema);
-    const parsed = GeminiAnalysisSchema.parse(generated.parsedJson);
+    const parsed = GeminiAnalysisSchema.parse(JSON.parse(generated.responseText) as unknown);
     return {
       isTransitAnnouncement: parsed.isTransitAnnouncement,
       mentions: sanitizeMentions(transcription, parsed.mentions),
@@ -454,12 +512,34 @@ export class GeminiMetadataService {
       buildGeminiNormalizationPrompt(transcription, analysis, sequences),
       geminiNormalizationJsonSchema,
     );
-    const raw = generated.parsedJson;
-    const normalizedJson = typeof raw === "object" && raw !== null
-      && "normalizedTranscription" in raw && raw.normalizedTranscription === ""
-      ? { ...raw, normalizedTranscription: transcription }
-      : raw;
-    const parsed = GeminiNormalizationSchema.parse(normalizedJson);
+    let raw: unknown;
+    try {
+      raw = JSON.parse(generated.responseText) as unknown;
+    } catch {
+      return {
+        normalizedTranscription: transcription,
+        diagnostics: generated.diagnostics,
+        normalizationGuard: failedNormalizationGuard(transcription, analysis, sequences, "invalid_output"),
+      };
+    }
+    const emptyOutput = typeof raw === "object" && raw !== null
+      && "normalizedTranscription" in raw && raw.normalizedTranscription === "";
+    if (emptyOutput) {
+      return {
+        normalizedTranscription: transcription,
+        diagnostics: generated.diagnostics,
+        normalizationGuard: failedNormalizationGuard(transcription, analysis, sequences, "empty_output"),
+      };
+    }
+    const parsedResult = GeminiNormalizationSchema.safeParse(raw);
+    if (!parsedResult.success) {
+      return {
+        normalizedTranscription: transcription,
+        diagnostics: generated.diagnostics,
+        normalizationGuard: failedNormalizationGuard(transcription, analysis, sequences, "invalid_output"),
+      };
+    }
+    const parsed = parsedResult.data;
     const normalizationGuard = checkNormalization(
       transcription,
       parsed.normalizedTranscription,

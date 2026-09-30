@@ -1,11 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { DemoJobProducer, JobProducer, type JobQueue, type JobStore } from "../src/jobs/producer";
 import { staleAudioJobCutoff, staleAudioJobTimeoutMs } from "../src/jobs/staleness";
-import {
-  AudioJobProcessingTimeoutError,
-  whisperProcessingTimeoutMs,
-  withAudioJobProcessingTimeout,
-} from "../src/jobs/processing-timeout";
+import { whisperProcessingTimeoutMs } from "../src/jobs/processing-timeout";
 import type { AudioJob, NewAudioJob } from "../src/jobs/types";
 
 const input: NewAudioJob = {
@@ -85,12 +81,5 @@ describe("audio job processing deadline", () => {
     expect(whisperProcessingTimeoutMs(240)).toBe(720_000);
     expect(whisperProcessingTimeoutMs(600)).toBe(840_000);
     expect(whisperProcessingTimeoutMs(null)).toBe(10 * 60 * 1000);
-  });
-
-  it("rejects an operation that never settles", async () => {
-    await expect(withAudioJobProcessingTimeout(
-      async () => await new Promise<never>(() => {}),
-      5,
-    )).rejects.toEqual(new AudioJobProcessingTimeoutError(5));
   });
 });

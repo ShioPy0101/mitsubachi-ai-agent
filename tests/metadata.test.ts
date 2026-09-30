@@ -202,17 +202,40 @@ describe("two-stage Gemini metadata boundary", () => {
     const result = await new GeminiMetadataService("secret", "gemini-test", fetcher)
       .normalize("補正前の駅放送", analysis, []);
     expect(result.normalizedTranscription).toBe("補正前の駅放送");
+    expect(result.normalizationGuard).toMatchObject({
+      accepted: false,
+      risk: "high",
+      reason: "empty_output",
+    });
   });
 
-  it("rejects a wholesale plausible-sounding rewrite of a damaged transcription", async () => {
+  it("falls back to raw text when Gemini #2 returns malformed JSON", async () => {
+    const fetcher = async (): Promise<Response> => Response.json({
+      candidates: [{ content: { parts: [{ text: "{not-json" }] } }],
+    });
+    const result = await new GeminiMetadataService("secret", "gemini-test", fetcher)
+      .normalize("補正前の駅放送", analysis, []);
+    expect(result.normalizedTranscription).toBe("補正前の駅放送");
+    expect(result.normalizationGuard).toMatchObject({
+      accepted: false,
+      risk: "high",
+      reason: "invalid_output",
+    });
+  });
+
+  it("keeps a constrained Gemini rewrite while reporting unsupported corrections", async () => {
     const transcription = "2番線に電車か参ります黄色い線までお下かりください名鉄名古屋神宮方面の普通名鉄一宮行き神話口福岐千田竹豊上青山奈良は千田半田の順に止まり千田半田から快速急行に変わり集落園にも止まります";
     const overcorrected = "まもなく2番線に電車が参ります。黄色い線までお下がりください。名鉄名古屋、神宮前方面の普通、名鉄一宮行きです。神宮前、堀田、伝馬、大江、大同町、柴田、聚楽園の順に止まります。聚楽園から快速急行に変わり、太田川にも止まります。";
     const fetcher = async (): Promise<Response> => geminiEnvelope({ normalizedTranscription: overcorrected, entities: [] });
     const result = await new GeminiMetadataService("secret", "gemini-test", fetcher)
       .normalize(transcription, analysis, []);
 
-    expect(result.normalizedTranscription).toBe(transcription);
-    expect(result.normalizationGuard).toMatchObject({ accepted: false, reason: "unsupported_non_entity_rewrite" });
+    expect(result.normalizedTranscription).toBe(overcorrected);
+    expect(result.normalizationGuard).toMatchObject({
+      accepted: true,
+      risk: "medium",
+      reason: "unsupported_non_entity_rewrite",
+    });
     expect(result.normalizationGuard.similarity).toBeLessThan(0.72);
     expect(result.diagnostics.responseText).toContain(overcorrected);
   });
@@ -265,7 +288,7 @@ describe("two-stage Gemini metadata boundary", () => {
     expect(guard).toMatchObject({ accepted: false, reason: "unsupported_factual_addition" });
   });
 
-  it("rejects a station introduced by normalization when no candidate or route context supports it", () => {
+  it("warns about a station unsupported by candidate or route context without discarding the rewrite", () => {
     const raw = "この列車の停車駅は、戸佐山、大桶、小戸屋の順に止まります。";
     const corrected = "この列車の停車駅は、土佐山田、大歩危、琴平、架空中央の順に止まります。";
     const context = routeSupportedSequence([
@@ -275,9 +298,11 @@ describe("two-stage Gemini metadata boundary", () => {
     expect(checkNormalization(raw, corrected, context.analysis, context.sequences, [{
       text: "架空中央", kind: "station", sourceText: "戸佐山",
     }])).toMatchObject({
-      accepted: false,
+      accepted: true,
+      risk: "medium",
       reason: "unsupported_entity_insertion",
       unsupportedEntities: ["架空中央"],
+      warnings: [{ type: "unsupported_entity_correction", entities: ["架空中央"] }],
     });
   });
 
@@ -317,14 +342,66 @@ describe("two-stage Gemini metadata boundary", () => {
     });
   });
 
-  it("rejects a large rewrite of non-entity prose", () => {
+  it("falls back for an unrelated rewrite of non-entity prose", async () => {
     const raw = "まもなく列車が到着します。危険ですので黄色い点字ブロックまでお下がりください。車内では携帯電話をマナーモードにしてください。";
     const corrected = "本日は晴天です。駅前広場では地域のお祭りを開催しています。飲食店や観光案内所も営業していますので、どうぞごゆっくりお楽しみください。";
     const guard = checkNormalization(raw, corrected, analysis, []);
 
     expect(guard.accepted).toBe(false);
-    expect(guard.reason).toBe("unsupported_non_entity_rewrite");
+    expect(guard.reason).toBe("unrelated_rewrite");
+    expect(guard.risk).toBe("high");
     expect(guard.nonEntitySimilarity).toBeLessThan(0.78);
+
+    const fetcher = async (): Promise<Response> => geminiEnvelope({
+      normalizedTranscription: corrected,
+      entities: [],
+    });
+    const result = await new GeminiMetadataService("secret", "gemini-test", fetcher)
+      .normalize(raw, analysis, []);
+    expect(result.normalizedTranscription).toBe(raw);
+  });
+
+  it("prefers an official destination candidate and keeps ordinary prose corrections", async () => {
+    const raw = "普通列車、ワンマン、岩大津行きとなります。電池ブロックまでお下がりください。一両平成です。";
+    const corrected = "普通列車、ワンマン、伊予大洲行きとなります。点字ブロックまでお下がりください。一両編成です。";
+    const context = routeSupportedSequence([["岩大津", "伊予大洲"]]);
+    context.analysis.mentions[0] = { ...context.analysis.mentions[0]!, role: "destination" };
+    context.sequences[0] = { ...context.sequences[0]!, role: "destination" };
+    const prompt = buildGeminiNormalizationPrompt(raw, context.analysis, context.sequences);
+    expect(prompt).toContain('"rawMention":"岩大津"');
+    expect(prompt).toContain('"stationName":"伊予大洲"');
+    expect(prompt).toContain("候補外の似た中間的名称を独自生成しない");
+    expect(prompt).toContain("伊予大津");
+
+    const fetcher = async (): Promise<Response> => geminiEnvelope({
+      normalizedTranscription: corrected,
+      entities: [{ text: "伊予大洲", kind: "destination", sourceText: "岩大津" }],
+    });
+    const result = await new GeminiMetadataService("secret", "gemini-test", fetcher)
+      .normalize(raw, context.analysis, context.sequences);
+
+    expect(result.normalizedTranscription).toBe(corrected);
+    expect(result.normalizationGuard.accepted).toBe(true);
+    expect(result.normalizationGuard.unsupportedEntities).toEqual([]);
+  });
+
+  it("does not discard useful prose correction for one unsupported entity", async () => {
+    const raw = "普通列車、ワンマン、岩大津行きです。電池ブロックまでお下がりください。一両平成です。";
+    const corrected = "普通列車、ワンマン、伊予大津行きです。点字ブロックまでお下がりください。一両編成です。";
+    const fetcher = async (): Promise<Response> => geminiEnvelope({
+      normalizedTranscription: corrected,
+      entities: [{ text: "伊予大津", kind: "destination", sourceText: "岩大津" }],
+    });
+    const result = await new GeminiMetadataService("secret", "gemini-test", fetcher)
+      .normalize(raw, analysis, []);
+
+    expect(result.normalizedTranscription).toBe(corrected);
+    expect(result.normalizationGuard).toMatchObject({
+      accepted: true,
+      risk: "medium",
+      reason: "unsupported_entity_insertion",
+      unsupportedEntities: ["伊予大津"],
+    });
   });
 
   it("preserves Gemini HTTP error details", async () => {

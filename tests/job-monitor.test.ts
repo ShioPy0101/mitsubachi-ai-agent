@@ -4,6 +4,7 @@ import { JobMonitorRepository } from "../src/db/job-monitor-repository";
 import type { DiscordRestClient } from "../src/discord/rest-client";
 import { runStage } from "../src/jobs/consumer";
 import { JobCancellationRequestedError, JobMonitor } from "../src/jobs/job-monitor";
+import { AudioJobProcessingTimeoutError } from "../src/jobs/processing-timeout";
 import type { AudioJob } from "../src/jobs/types";
 import { handleAdminJobStopInteraction } from "../src/routes/interactions";
 
@@ -120,6 +121,21 @@ describe("audio job monitor", () => {
     expect(monitor.refresh).toHaveBeenCalledWith("job-id");
     finish();
     await running;
+  });
+
+  it("aborts an in-flight provider operation at the stage deadline", async () => {
+    vi.useFakeTimers();
+    const receivedSignals: AbortSignal[] = [];
+    const running = runStage("job-id", "whisper_transcription", async (signal) => {
+      receivedSignals.push(signal);
+      return await new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    }, undefined, 5_000);
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    await expect(running).rejects.toEqual(new AudioJobProcessingTimeoutError(5_000));
+    expect(receivedSignals[0]?.aborted).toBe(true);
   });
 
   it("disables the stop button and displays terminal details", async () => {

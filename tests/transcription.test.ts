@@ -96,6 +96,24 @@ describe("Workers AI response adapter", () => {
     expect(result.segments).toHaveLength(1);
   });
 
+  it("passes the cancellation signal to the Workers AI binding", async () => {
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    const ai: WhisperAiRunner = {
+      run: async (_model, _input, options) => {
+        receivedSignal = options?.signal;
+        return { text: "announcement", segments: [] };
+      },
+    };
+
+    await new CloudflareWhisperTranscriptionService(ai).transcribe({
+      audio: wavWithSilence(), contentType: "audio/wav", filename: "announcement.wav",
+      signal: controller.signal,
+    });
+
+    expect(receivedSignal).toBe(controller.signal);
+  });
+
   it("fails explicitly when both the original and rebuilt MP3 are rejected", async () => {
     const inputs: Ai_Cf_Openai_Whisper_Large_V3_Turbo_Input[] = [];
     const decodeError = Object.assign(new Error("3030: Failed to decode audio file"), { code: 3030 });
