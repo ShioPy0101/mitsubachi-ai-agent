@@ -10,6 +10,7 @@ import {
 } from "../discord/schemas";
 import {
   SEARCH_COMMAND_NAME,
+  type ParsedDemoCommand,
   deferredResponse,
   ephemeralErrorResponse,
   ephemeralMessageResponse,
@@ -17,9 +18,50 @@ import {
 } from "../discord/interactions";
 import { formatSearchResults } from "../discord/messages";
 import { verifyDiscordSignature } from "../discord/signatures";
-import { JobProducer } from "../jobs/producer";
+import { DemoJobProducer, JobProducer, type JobQueue } from "../jobs/producer";
+import { sendAudioJobAlert } from "../jobs/alerts";
 
 export const interactionRoutes = new Hono<{ Bindings: Env }>();
+
+type DemoCommandEnv = {
+  AUDIO_JOBS: JobQueue;
+  DISCORD_CONTROL_USER_IDS: string;
+  MAX_AUDIO_BYTES: string;
+};
+
+export async function handleDemoCommand(command: ParsedDemoCommand, env: DemoCommandEnv): Promise<Response> {
+  if (!canControlGuild(env.DISCORD_CONTROL_USER_IDS, command.userId)) {
+    return ephemeralErrorResponse("この操作を実行する権限がありません。");
+  }
+  if (!isSupportedAudioAttachment(command.attachment)) {
+    return ephemeralErrorResponse("対応していない音声形式です。mp3 / wav / m4a / aac / flac / ogg を指定してください。");
+  }
+  const configuredMaximum = Number(env.MAX_AUDIO_BYTES);
+  const maximumBytes = Number.isSafeInteger(configuredMaximum) && configuredMaximum > 0
+    ? configuredMaximum
+    : 25 * 1024 * 1024;
+  if (command.attachment.size > maximumBytes) {
+    return ephemeralErrorResponse("音声ファイルのサイズが上限を超えています。");
+  }
+  try {
+    await new DemoJobProducer(env.AUDIO_JOBS).enqueue({
+      kind: "demo",
+      interactionId: command.interactionId,
+      interactionToken: command.interactionToken,
+      userId: command.userId as string,
+      attachment: command.attachment,
+    });
+    return deferredResponse();
+  } catch (error) {
+    console.error("demo_audio_job_enqueue_failed", {
+      errorName: error instanceof Error ? error.name : "UnknownError",
+      errorMessage: error instanceof Error ? error.message : String(error),
+      interaction_id: command.interactionId,
+      timestamp: new Date().toISOString(),
+    });
+    return ephemeralErrorResponse("処理を受け付けられませんでした。時間をおいて再実行してください。");
+  }
+}
 
 function parseTemporaryExpiry(url: string): string | null {
   try {
@@ -51,9 +93,6 @@ interactionRoutes.post("/interactions", async (context) => {
   if (!(await verifyDiscordSignature(context.env.DISCORD_PUBLIC_KEY, signature, timestamp, body))) {
     return context.text("invalid request signature", 401);
   }
-  context.executionCtx.waitUntil(
-    new CallbackSecretsRepository(context.env.DB).deleteExpired(new Date().toISOString()),
-  );
   let input: unknown;
   try {
     input = JSON.parse(body);
@@ -65,6 +104,9 @@ interactionRoutes.post("/interactions", async (context) => {
 
   const searchQuery = parseSearchQuery(input);
   if (searchQuery !== null) {
+    context.executionCtx.waitUntil(
+      new CallbackSecretsRepository(context.env.DB).deleteExpired(new Date().toISOString()),
+    );
     const guildId = interaction.success ? interaction.data.guild_id : undefined;
     if (guildId === undefined || !(await new GuildAccessRepository(context.env.DB).isEnabled(guildId))) {
       return ephemeralErrorResponse("このサーバーでは利用が許可されていません。");
@@ -75,6 +117,12 @@ interactionRoutes.post("/interactions", async (context) => {
 
   const command = parsePlatformCommand(input);
   if (!command.ok) return ephemeralErrorResponse(command.error);
+  if (command.value.kind === "demo") {
+    return handleDemoCommand(command.value, context.env);
+  }
+  context.executionCtx.waitUntil(
+    new CallbackSecretsRepository(context.env.DB).deleteExpired(new Date().toISOString()),
+  );
   if (command.value.kind === "access") {
     if (command.value.guildId === null) return ephemeralErrorResponse("サーバー内でのみ実行できます。");
     if (!canControlGuild(context.env.DISCORD_CONTROL_USER_IDS, command.value.userId)) {
@@ -143,13 +191,24 @@ interactionRoutes.post("/interactions", async (context) => {
     );
     return deferredResponse();
   } catch (error) {
+    const errorName = error instanceof Error ? error.name : "UnknownError";
+    const errorMessage = error instanceof Error ? error.message : String(error);
     console.error("audio_job_enqueue_failed", {
-      errorName: error instanceof Error ? error.name : "UnknownError",
-      errorMessage: error instanceof Error ? error.message : String(error),
+      errorName,
+      errorMessage,
       guild_id: command.value.guildId,
       attachment_id: command.value.attachment.id,
       timestamp: new Date().toISOString(),
     });
+    context.executionCtx.waitUntil(sendAudioJobAlert(context.env, {
+      interactionId: command.value.interactionId,
+      guildId: command.value.guildId,
+      attachmentId: command.value.attachment.id,
+      filename: command.value.attachment.filename,
+      stage: "enqueue",
+      errorName,
+      errorMessage,
+    }));
     return ephemeralErrorResponse("処理を受け付けられませんでした。時間をおいて再実行してください。");
   }
 });

@@ -12,4 +12,15 @@ describe("Discord command registration", () => {
     expect(discordCommands.map((command) => command.name)).toContain("platform-ai-agent-allow");
     expect(discordCommands.map((command) => command.name)).toContain("platform-ai-agent-deny");
   });
+
+  it("keeps public commands public and defaults every management command to nobody", () => {
+    for (const name of ["platform-ai-agent", "platform-search"]) {
+      const command = discordCommands.find((candidate) => candidate.name === name);
+      expect(command).not.toHaveProperty("default_member_permissions");
+    }
+    for (const name of ["platform-ai-agent-allow", "platform-ai-agent-deny", "platform-ai-agent-demo"]) {
+      const command = discordCommands.find((candidate) => candidate.name === name);
+      expect(command).toMatchObject({ default_member_permissions: "0", dm_permission: false });
+    }
+  });
 });

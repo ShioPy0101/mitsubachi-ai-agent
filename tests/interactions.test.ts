@@ -77,6 +77,22 @@ describe("/platform-ai-agent interaction", () => {
     }
   });
 
+  it("parses the owner demo as a distinct non-persistent command", () => {
+    const result = parsePlatformCommand({
+      ...interaction,
+      data: { ...interaction.data, name: "platform-ai-agent-demo" },
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toMatchObject({
+      kind: "demo",
+      interactionId: "100",
+      interactionToken: "callback-token",
+      userId: "600",
+      attachment: { id: "500", filename: "station.mp3" },
+    });
+  });
+
   it("rejects unsupported MIME or extension combinations", () => {
     expect(isSupportedAudioAttachment({
       id: "1", filename: "station.exe", size: 1, url: "https://example.com/a", contentType: "audio/mpeg", durationSecs: null,

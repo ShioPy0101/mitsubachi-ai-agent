@@ -28,6 +28,9 @@
       }
     ]
   },
+  "triggers": {
+    "crons": ["*/5 * * * *"]
+  },
   "vars": {
     "DISCORD_CONTROL_USER_IDS": "[\"398465248253837314\"]",
     "MAX_AUDIO_BYTES": "26214400",

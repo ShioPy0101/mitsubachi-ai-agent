@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { JobProducer, type JobQueue, type JobStore } from "../src/jobs/producer";
+import { DemoJobProducer, JobProducer, type JobQueue, type JobStore } from "../src/jobs/producer";
+import { staleAudioJobCutoff, staleAudioJobTimeoutMs } from "../src/jobs/staleness";
 import type { AudioJob, NewAudioJob } from "../src/jobs/types";
 
 const input: NewAudioJob = {
@@ -45,5 +46,29 @@ describe("job producer", () => {
     const send = vi.fn().mockResolvedValue(undefined);
     await new JobProducer(store(false), { send }).createAndEnqueue(input, job.createdAt);
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("queues demo input without creating a persistent job", async () => {
+    const send = vi.fn().mockResolvedValue(undefined);
+    const message = {
+      kind: "demo" as const,
+      interactionId: "interaction",
+      interactionToken: "token",
+      userId: "owner",
+      attachment: {
+        id: "attachment", filename: "audio.ogg", size: 100, url: "https://example.com/audio.ogg",
+        contentType: "audio/ogg", durationSecs: null,
+      },
+    };
+    await new DemoJobProducer({ send }).enqueue(message);
+    expect(send).toHaveBeenCalledWith(message, { contentType: "json" });
+  });
+});
+
+describe("stale audio jobs", () => {
+  it("uses a 15 minute cutoff", () => {
+    expect(staleAudioJobTimeoutMs).toBe(15 * 60 * 1000);
+    expect(staleAudioJobCutoff(new Date("2026-09-30T08:00:00.000Z")))
+      .toBe("2026-09-30T07:45:00.000Z");
   });
 });

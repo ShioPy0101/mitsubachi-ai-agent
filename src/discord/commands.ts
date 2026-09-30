@@ -16,11 +16,30 @@ export const discordCommands = [
     name: "platform-ai-agent-allow",
     description: "このサーバーでコマンドを有効化",
     type: 1,
+    default_member_permissions: "0",
+    dm_permission: false,
   },
   {
     name: "platform-ai-agent-deny",
     description: "このサーバーでコマンドを無効化",
     type: 1,
+    default_member_permissions: "0",
+    dm_permission: false,
+  },
+  {
+    name: "platform-ai-agent-demo",
+    description: "オーナー専用: 保存せずに案内放送を解析",
+    type: 1,
+    default_member_permissions: "0",
+    dm_permission: false,
+    options: [
+      {
+        name: "audio",
+        description: "音声ファイル",
+        type: 11,
+        required: true,
+      },
+    ],
   },
   {
     name: "platform-search",

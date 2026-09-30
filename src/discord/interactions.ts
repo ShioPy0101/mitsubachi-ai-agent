@@ -3,6 +3,7 @@ import { DiscordAttachmentSchema, DiscordInteractionSchema, type DiscordAttachme
 export const PLATFORM_COMMAND_NAME = "platform-ai-agent";
 export const PLATFORM_ALLOW_COMMAND_NAME = "platform-ai-agent-allow";
 export const PLATFORM_DENY_COMMAND_NAME = "platform-ai-agent-deny";
+export const PLATFORM_DEMO_COMMAND_NAME = "platform-ai-agent-demo";
 export const SEARCH_COMMAND_NAME = "platform-search";
 const attachmentOptionType = 11;
 
@@ -23,8 +24,10 @@ export type ParsedAccessCommand = {
   userId: string | null;
 };
 
+export type ParsedDemoCommand = Omit<ParsedAudioCommand, "kind"> & { kind: "demo" };
+
 export type PlatformCommandParseResult =
-  | { ok: true; value: ParsedAudioCommand | ParsedAccessCommand }
+  | { ok: true; value: ParsedAudioCommand | ParsedAccessCommand | ParsedDemoCommand }
   | { ok: false; error: string };
 
 export function parsePlatformCommand(input: unknown): PlatformCommandParseResult {
@@ -45,7 +48,10 @@ export function parsePlatformCommand(input: unknown): PlatformCommandParseResult
       },
     };
   }
-  if (interaction.data.name !== PLATFORM_COMMAND_NAME) return { ok: false, error: "未対応のコマンドです。" };
+  const isDemo = interaction.data.name === PLATFORM_DEMO_COMMAND_NAME;
+  if (interaction.data.name !== PLATFORM_COMMAND_NAME && !isDemo) {
+    return { ok: false, error: "未対応のコマンドです。" };
+  }
   const option = interaction.data.options?.find(
     (candidate) => candidate.name === "audio" && candidate.type === attachmentOptionType && candidate.value !== undefined,
   );
@@ -56,7 +62,7 @@ export function parsePlatformCommand(input: unknown): PlatformCommandParseResult
   return {
     ok: true,
     value: {
-      kind: "audio",
+      kind: isDemo ? "demo" : "audio",
       interactionId: interaction.id,
       interactionToken: interaction.token,
       guildId: interaction.guild_id ?? null,

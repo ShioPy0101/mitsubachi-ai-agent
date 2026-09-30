@@ -38,6 +38,8 @@ Whisperの結果は、Geminiの厳格なSafety Settingsと公共交通案内の�
 
 Discord guildは既定で無効。`DISCORD_CONTROL_USER_IDS` に登録されたユーザーがサーバー内で `/platform-ai-agent-allow` を実行したguildだけが音声解析と検索を利用でき、`/platform-ai-agent-deny` で停止できる。
 
+`/platform-ai-agent-demo` は同じ `DISCORD_CONTROL_USER_IDS` をBotオーナー設定として使用する。同期受付でIDを照合してからQueueへ完全な一時入力を渡し、Consumerは通常ジョブと同じ解析関数をインメモリのno-op永続化アダプタで実行する。したがってD1は駅候補の読み取りにだけ使われ、audio job、callback secret、文字起こしcheckpoint、clip、利用記録、ログの書き込みや後続cleanupは行わない。demo-only Queue batchではstale-job cleanupも起動しない。
+
 Allowed terminal outcomes are `partial` and `failed`.
 
 ## Operational setup

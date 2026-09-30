@@ -11,11 +11,43 @@ import { StationCandidateService } from "../stations/candidate-service";
 import { resolveStation } from "../stations/resolver";
 import { CloudflareWhisperTranscriptionService } from "../transcription/workers-ai";
 import { formatAudioJobAlert } from "./alerts";
-import type { AudioJob, AudioJobMessage } from "./types";
+import { staleAudioJobCutoff, staleAudioJobTimeoutMs } from "./staleness";
+import type { AudioJob, AudioJobMessage, DemoAudioJobMessage } from "./types";
 
-const AudioJobMessageSchema = z.object({ jobId: z.string().uuid() });
+const PersistedAudioJobMessageSchema = z.object({
+  kind: z.literal("persisted").optional(),
+  jobId: z.string().uuid(),
+});
+const DemoAudioJobMessageSchema = z.object({
+  kind: z.literal("demo"),
+  interactionId: z.string().min(1),
+  interactionToken: z.string().min(1),
+  userId: z.string().min(1),
+  attachment: z.object({
+    id: z.string().min(1),
+    filename: z.string().min(1),
+    size: z.number().int().nonnegative(),
+    url: z.url(),
+    contentType: z.string().nullable(),
+    durationSecs: z.number().nonnegative().nullable(),
+  }),
+});
+const AudioJobMessageSchema = z.union([DemoAudioJobMessageSchema, PersistedAudioJobMessageSchema]);
 const terminalStatuses = new Set(["completed", "partial", "failed"]);
 const errorStages = new WeakMap<object, string>();
+
+type ProcessingJobs = Pick<JobsRepository,
+  "updateStatus" | "isActive" | "discardTranscription" | "saveTranscription" | "clearEphemeral"
+>;
+type ProcessingCallbacks = Pick<CallbackSecretsRepository, "get">;
+type ProcessingClips = Pick<ClipsRepository, "save">;
+
+type ProcessingResources = {
+  jobs: ProcessingJobs;
+  callbacks: ProcessingCallbacks;
+  clips: ProcessingClips;
+  sendAlerts: boolean;
+};
 
 function errorDetails(error: unknown): { errorName: string; errorMessage: string } {
   if (error instanceof Error) return { errorName: error.name, errorMessage: error.message };
@@ -88,7 +120,7 @@ function attachmentFor(job: AudioJob): { id: string; filename: string; size: num
 async function editOriginalResponse(
   job: AudioJob,
   content: string,
-  callbacks: CallbackSecretsRepository,
+  callbacks: ProcessingCallbacks,
   discord: DiscordRestClient,
   kind: "progress" | "result",
   file?: DiscordFile,
@@ -121,7 +153,7 @@ async function editOriginalResponse(
 async function updateProgress(
   job: AudioJob,
   content: string,
-  callbacks: CallbackSecretsRepository,
+  callbacks: ProcessingCallbacks,
   discord: DiscordRestClient,
 ): Promise<void> {
   try {
@@ -134,7 +166,7 @@ async function updateProgress(
 async function notify(
   job: AudioJob,
   content: string,
-  callbacks: CallbackSecretsRepository,
+  callbacks: ProcessingCallbacks,
   discord: DiscordRestClient,
   file?: DiscordFile,
 ): Promise<boolean> {
@@ -161,11 +193,48 @@ async function notify(
 
 const rejectedContentMessage = "この音声は利用条件に合わないため処理できませんでした。";
 const emptyTranscriptionMessage = "音声から文字を認識できませんでした。別の音声ファイルでお試しください。";
+const staleJobMessage = "音声処理がタイムアウトしたため停止しました。お手数ですが、もう一度コマンドを実行してください。";
 
-async function processJob(job: AudioJob, env: Env, attempt: number): Promise<void> {
+export async function stopStaleAudioJobs(env: Env, now = new Date()): Promise<number> {
   const jobs = new JobsRepository(env.DB);
   const callbacks = new CallbackSecretsRepository(env.DB);
-  const clips = new ClipsRepository(env.DB);
+  const discord = new DiscordRestClient(env.DISCORD_BOT_TOKEN, env.DISCORD_APPLICATION_ID);
+  const staleJobs = await jobs.findStaleActive(staleAudioJobCutoff(now));
+  let stopped = 0;
+
+  for (const job of staleJobs) {
+    const didStop = await jobs.failIfActive(job.id, "processing_timeout", now.toISOString());
+    if (!didStop) continue;
+    stopped += 1;
+    const error = new Error(
+      `audio job exceeded ${staleAudioJobTimeoutMs / 60_000} minute limit `
+      + `(status=${job.status}, createdAt=${job.createdAt}, startedAt=${job.startedAt ?? "none"})`,
+    );
+    console.error("audio_job_stale_stopped", { jobId: job.id, ...errorDetails(error) });
+    await sendAlert(env, discord, job.id, "processing_timeout", error);
+    try {
+      await notify(job, staleJobMessage, callbacks, discord);
+    } catch (notificationError) {
+      console.error("audio_job_timeout_notification_failed", {
+        jobId: job.id,
+        ...errorDetails(notificationError),
+      });
+    }
+    await jobs.clearEphemeral(job.id);
+  }
+  return stopped;
+}
+
+async function processJob(
+  job: AudioJob,
+  env: Env,
+  attempt: number,
+  resources?: ProcessingResources,
+): Promise<void> {
+  const jobs = resources?.jobs ?? new JobsRepository(env.DB);
+  const callbacks = resources?.callbacks ?? new CallbackSecretsRepository(env.DB);
+  const clips = resources?.clips ?? new ClipsRepository(env.DB);
+  const alertsEnabled = resources?.sendAlerts ?? true;
   const discord = new DiscordRestClient(env.DISCORD_BOT_TOKEN, env.DISCORD_APPLICATION_ID);
   const attachment = attachmentFor(job);
   let audio: ArrayBuffer | null = null;
@@ -182,6 +251,10 @@ async function processJob(job: AudioJob, env: Env, attempt: number): Promise<voi
         audio: audio as ArrayBuffer, contentType: job.contentType, filename: job.originalFilename,
         durationSecs: job.durationSecs,
       }));
+    if (!(await jobs.isActive(job.id))) {
+      console.warn("audio_job_processing_stopped", { jobId: job.id, stage: "whisper_transcription" });
+      return;
+    }
     transcriptionText = transcription.text;
     needsTranscriptionCheckpoint = true;
   } else {
@@ -204,6 +277,10 @@ async function processJob(job: AudioJob, env: Env, attempt: number): Promise<voi
     extracted = await runStage(job.id, "gemini_metadata", () =>
       new GeminiMetadataService(env.GEMINI_API_KEY, env.GEMINI_MODEL).extract(transcriptionText, candidates));
   } catch (error) {
+    if (!(await jobs.isActive(job.id))) {
+      console.warn("audio_job_processing_stopped", { jobId: job.id, stage: "gemini_metadata" });
+      return;
+    }
     if (error instanceof GeminiSafetyBlockedError) {
       console.warn("audio_job_safety_blocked", {
         user_id: job.source.userId,
@@ -220,11 +297,17 @@ async function processJob(job: AudioJob, env: Env, attempt: number): Promise<voi
     }
     if (isRetryableGeminiError(error)) throw error;
     console.warn("audio_job_metadata_rejected", { jobId: job.id, ...errorDetails(error) });
-    await sendAlert(env, discord, job.id, errorStage(error, "metadata_processing"), error, attempt);
+    if (alertsEnabled) {
+      await sendAlert(env, discord, job.id, errorStage(error, "metadata_processing"), error, attempt);
+    }
     await jobs.discardTranscription(job.id);
     await jobs.updateStatus(job.id, "failed", "metadata_extraction_failed");
     await notify(job, formatFailure("processing_failed"), callbacks, discord);
     await jobs.clearEphemeral(job.id);
+    return;
+  }
+  if (!(await jobs.isActive(job.id))) {
+    console.warn("audio_job_processing_stopped", { jobId: job.id, stage: "gemini_metadata" });
     return;
   }
   if (!extracted.isTransitAnnouncement) {
@@ -247,6 +330,10 @@ async function processJob(job: AudioJob, env: Env, attempt: number): Promise<voi
   const resolution = resolveStation(candidates, extracted.metadata.station);
   const metadata = { ...extracted.metadata, station: resolution.stationName };
   const filename = generateRailwayFilename(metadata, job.originalFilename);
+  if (!(await jobs.isActive(job.id))) {
+    console.warn("audio_job_processing_stopped", { jobId: job.id, stage: "before_clip_save" });
+    return;
+  }
   await runStage(job.id, "clip_save", () => clips.save({
     jobId: job.id, clipIndex: 1, rawTranscription: transcriptionText,
     normalizedTranscription: extracted.normalizedTranscription, metadata, resolution,
@@ -256,6 +343,10 @@ async function processJob(job: AudioJob, env: Env, attempt: number): Promise<voi
     await updateProgress(job, "解析済みの音声ファイルを添付しています…", callbacks, discord);
     audio = await runStage(job.id, "attachment_download_for_result", () =>
       discord.downloadTemporaryAttachment(attachment, maxAudioBytes(env)));
+  }
+  if (!(await jobs.isActive(job.id))) {
+    console.warn("audio_job_processing_stopped", { jobId: job.id, stage: "before_result_notification" });
+    return;
   }
   const delivered = await notify(
     job,
@@ -269,10 +360,59 @@ async function processJob(job: AudioJob, env: Env, attempt: number): Promise<voi
   await runStage(job.id, "ephemeral_cleanup", () => jobs.clearEphemeral(job.id));
 }
 
+function demoJob(message: DemoAudioJobMessage): AudioJob {
+  return {
+    id: `demo:${message.interactionId}`,
+    source: {
+      type: "interaction",
+      guildId: null,
+      channelId: null,
+      userId: message.userId,
+      interactionId: message.interactionId,
+      attachmentId: message.attachment.id,
+      temporaryReference: { url: message.attachment.url, expiresAt: null },
+    },
+    originalFilename: message.attachment.filename,
+    contentType: message.attachment.contentType,
+    sizeBytes: message.attachment.size,
+    durationSecs: message.attachment.durationSecs,
+    status: "queued",
+    errorMessage: null,
+    transcriptionText: null,
+    createdAt: new Date().toISOString(),
+    startedAt: null,
+    completedAt: null,
+  };
+}
+
+function demoResources(message: DemoAudioJobMessage): ProcessingResources {
+  return {
+    jobs: {
+      updateStatus: async () => {},
+      isActive: async () => true,
+      discardTranscription: async () => {},
+      saveTranscription: async () => {},
+      clearEphemeral: async () => {},
+    },
+    callbacks: {
+      get: async () => ({ token: message.interactionToken, expiresAt: "9999-12-31T23:59:59.999Z" }),
+    },
+    clips: { save: async () => {} },
+    sendAlerts: false,
+  };
+}
+
+async function processDemoMessage(
+  message: DemoAudioJobMessage,
+  env: Env,
+  attempt: number,
+): Promise<void> {
+  await processJob(demoJob(message), env, attempt, demoResources(message));
+}
+
 export async function consumeAudioJobs(batch: MessageBatch<AudioJobMessage>, env: Env): Promise<void> {
-  const jobs = new JobsRepository(env.DB);
-  const callbacks = new CallbackSecretsRepository(env.DB);
   const discord = new DiscordRestClient(env.DISCORD_BOT_TOKEN, env.DISCORD_APPLICATION_ID);
+  let staleJobsChecked = false;
   for (const message of batch.messages) {
     console.info("audio_job_message_received", { queueMessageId: message.id, attempt: message.attempts });
     const parsed = AudioJobMessageSchema.safeParse(message.body);
@@ -281,6 +421,52 @@ export async function consumeAudioJobs(batch: MessageBatch<AudioJobMessage>, env
       message.ack();
       continue;
     }
+    if (parsed.data.kind === "demo") {
+      const job = demoJob(parsed.data);
+      const resources = demoResources(parsed.data);
+      try {
+        await processDemoMessage(parsed.data, env, message.attempts);
+        console.info("demo_audio_job_message_acked", {
+          interactionId: parsed.data.interactionId,
+          queueMessageId: message.id,
+          attempt: message.attempts,
+        });
+        message.ack();
+      } catch (error) {
+        const details = errorDetails(error);
+        if (error instanceof AttachmentUnavailableError || message.attempts >= 5) {
+          console.error("demo_audio_job_processing_terminal", {
+            interactionId: parsed.data.interactionId,
+            queueMessageId: message.id,
+            attempt: message.attempts,
+            ...details,
+          });
+          await notify(
+            job,
+            formatFailure(error instanceof AttachmentUnavailableError ? "attachment_unavailable" : "processing_failed"),
+            resources.callbacks,
+            discord,
+          );
+          message.ack();
+        } else {
+          const delaySeconds = Math.min(300, 2 ** message.attempts * 5);
+          await updateProgress(
+            job,
+            `処理中に一時的なエラーが発生しました。再試行を待っています（次回 ${message.attempts + 1}/5）…`,
+            resources.callbacks,
+            discord,
+          );
+          message.retry({ delaySeconds });
+        }
+      }
+      continue;
+    }
+    if (!staleJobsChecked) {
+      await stopStaleAudioJobs(env);
+      staleJobsChecked = true;
+    }
+    const jobs = new JobsRepository(env.DB);
+    const callbacks = new CallbackSecretsRepository(env.DB);
     const job = await jobs.findById(parsed.data.jobId);
     if (job === null || terminalStatuses.has(job.status)) {
       console.info("audio_job_message_skipped", {

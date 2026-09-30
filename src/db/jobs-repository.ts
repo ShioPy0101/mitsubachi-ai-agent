@@ -130,9 +130,41 @@ export class JobsRepository {
     const startedAt = status === "transcribing" ? now : null;
     const completedAt = ["completed", "partial", "failed"].includes(status) ? now : null;
     await this.db
-      .prepare(`UPDATE audio_jobs SET status = ?, error_message = ?, started_at = COALESCE(started_at, ?), completed_at = COALESCE(?, completed_at) WHERE id = ?`)
+      .prepare(`
+        UPDATE audio_jobs
+        SET status = ?, error_message = ?, started_at = COALESCE(started_at, ?), completed_at = COALESCE(?, completed_at)
+        WHERE id = ? AND status NOT IN ('completed', 'partial', 'failed')
+      `)
       .bind(status, errorMessage, startedAt, completedAt, id)
       .run();
+  }
+
+  async findStaleActive(cutoff: string): Promise<AudioJob[]> {
+    const rows = await this.db.prepare(`
+      ${selectJobSql}
+      WHERE j.status IN ('pending', 'queued', 'transcribing', 'metadata_extracting')
+        AND COALESCE(j.started_at, j.created_at) <= ?
+      ORDER BY j.created_at
+    `).bind(cutoff).all();
+    return rows.results.map(toJob);
+  }
+
+  async failIfActive(id: string, errorMessage: string, completedAt: string): Promise<boolean> {
+    const result = await this.db.prepare(`
+      UPDATE audio_jobs
+      SET status = 'failed', error_message = ?, completed_at = ?
+      WHERE id = ? AND status IN ('pending', 'queued', 'transcribing', 'metadata_extracting')
+    `).bind(errorMessage, completedAt, id).run();
+    return result.meta.changes === 1;
+  }
+
+  async isActive(id: string): Promise<boolean> {
+    const row = await this.db.prepare(`
+      SELECT 1 AS active
+      FROM audio_jobs
+      WHERE id = ? AND status IN ('pending', 'queued', 'transcribing', 'metadata_extracting')
+    `).bind(id).first();
+    return row !== null;
   }
 
   async saveTranscription(id: string, transcriptionText: string): Promise<void> {

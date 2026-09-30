@@ -1,4 +1,4 @@
-import type { AudioJob, NewAudioJob } from "./types";
+import type { AudioJob, AudioJobMessage, DemoAudioJobMessage, NewAudioJob } from "./types";
 
 export interface JobStore {
   create(input: NewAudioJob, now: string): Promise<{ job: AudioJob; created: boolean }>;
@@ -6,7 +6,7 @@ export interface JobStore {
 }
 
 export interface JobQueue {
-  send(message: { jobId: string }, options: { contentType: "json" }): Promise<unknown>;
+  send(message: AudioJobMessage, options: { contentType: "json" }): Promise<unknown>;
 }
 
 export class JobProducer {
@@ -25,5 +25,13 @@ export class JobProducer {
       throw error;
     }
     return result;
+  }
+}
+
+export class DemoJobProducer {
+  constructor(private readonly queue: JobQueue) {}
+
+  async enqueue(message: DemoAudioJobMessage): Promise<void> {
+    await this.queue.send(message, { contentType: "json" });
   }
 }
