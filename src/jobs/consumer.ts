@@ -10,7 +10,12 @@ import {
   type DemoDiagnostics,
 } from "../discord/demo-diagnostics";
 import { formatAnalysisResult, formatFailure } from "../discord/messages";
-import { GeminiMetadataService, GeminiSafetyBlockedError, isRetryableGeminiError } from "../metadata/gemini";
+import {
+  applyNormalizedEntitiesToMetadata,
+  GeminiMetadataService,
+  GeminiSafetyBlockedError,
+  isRetryableGeminiError,
+} from "../metadata/gemini";
 import { generateRailwayFilename } from "../railway/filename";
 import { StationCandidateService } from "../stations/candidate-service";
 import { resolveStation } from "../stations/resolver";
@@ -636,7 +641,10 @@ async function processJob(
   }
 
   const resolution = resolveStation(candidates, analysis.metadata.station);
-  const metadata = { ...analysis.metadata, station: resolution.stationName };
+  const metadata = applyNormalizedEntitiesToMetadata(
+    { ...analysis.metadata, station: resolution.stationName },
+    normalization.entities,
+  );
   const filename = generateRailwayFilename(metadata, job.originalFilename);
   if (showDemoProgress) {
     await updateProgress(job, `解析結果を組み立てました（生成ファイル名: ${filename}）。`, callbacks, discord, true);

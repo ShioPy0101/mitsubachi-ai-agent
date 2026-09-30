@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyNormalizedEntitiesToMetadata,
   GeminiApiError,
   GeminiMetadataService,
   GeminiRequestTimeoutError,
@@ -15,6 +16,7 @@ import {
   geminiNormalizationJsonSchema,
 } from "../src/metadata/schema";
 import type { AnnouncementAnalysis, StationMention } from "../src/metadata/service";
+import { generateRailwayFilename } from "../src/railway/filename";
 import type { Station } from "../src/stations/types";
 
 const validAnalysisOutput = {
@@ -381,8 +383,25 @@ describe("two-stage Gemini metadata boundary", () => {
       .normalize(raw, context.analysis, context.sequences);
 
     expect(result.normalizedTranscription).toBe(corrected);
+    expect(result.entities).toEqual([
+      { text: "伊予大洲", kind: "destination", sourceText: "岩大津" },
+    ]);
     expect(result.normalizationGuard.accepted).toBe(true);
     expect(result.normalizationGuard.unsupportedEntities).toEqual([]);
+
+    const correctedMetadata = applyNormalizedEntitiesToMetadata({
+      ...analysis.metadata,
+      destination: "岩大津",
+    }, result.entities);
+    expect(correctedMetadata.destination).toBe("伊予大洲");
+    expect(generateRailwayFilename(correctedMetadata, "recording.mp3")).toContain("伊予大洲行き");
+  });
+
+  it("does not treat a normalized stop as the recording station", () => {
+    const metadata = applyNormalizedEntitiesToMetadata(analysis.metadata, [{
+      text: "伊予大洲", kind: "station", sourceText: "岩大津",
+    }]);
+    expect(metadata).toEqual(analysis.metadata);
   });
 
   it("does not discard useful prose correction for one unsupported entity", async () => {

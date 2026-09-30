@@ -9,6 +9,7 @@ import type { z } from "zod";
 import { buildGeminiAnalysisPrompt } from "./analysis-prompt";
 import { buildGeminiNormalizationPrompt, type StopSequenceContext } from "./prompt";
 import type { AnnouncementAnalysis, StationMention } from "./service";
+import type { RailwayAnnouncementMetadata } from "../railway/types";
 import { levenshteinDistance, stringSimilarity } from "../stations/similarity";
 
 export class GeminiSafetyBlockedError extends Error {
@@ -88,6 +89,7 @@ export type GeminiDiagnostics = {
 export type GeminiAnalysisExtraction = AnnouncementAnalysis & { diagnostics: GeminiCallDiagnostics };
 export type GeminiNormalizationExtraction = {
   normalizedTranscription: string;
+  entities: NormalizedEntity[];
   diagnostics: GeminiCallDiagnostics;
   normalizationGuard: NormalizationGuard;
 };
@@ -107,7 +109,26 @@ type EntityCorrectionAssessment = {
   unsupported: number;
 };
 
-type NormalizedEntity = z.output<typeof GeminiNormalizationSchema>["entities"][number];
+export type NormalizedEntity = z.output<typeof GeminiNormalizationSchema>["entities"][number];
+
+export function applyNormalizedEntitiesToMetadata(
+  metadata: RailwayAnnouncementMetadata,
+  entities: readonly NormalizedEntity[],
+): RailwayAnnouncementMetadata {
+  const corrected = { ...metadata };
+  const fields = {
+    destination: "destination",
+    line: "line",
+    train_name: "trainName",
+    train_type: "trainType",
+  } as const;
+  for (const entity of entities) {
+    const field = fields[entity.kind as keyof typeof fields];
+    if (field === undefined || entity.sourceText === null) continue;
+    if (corrected[field] === entity.sourceText) corrected[field] = entity.text;
+  }
+  return corrected;
+}
 
 function routeSupportedTargets(sequence: StopSequenceContext, mentionIndex: number): string[] {
   const fromMentionCandidates = (sequence.mentionCandidates[mentionIndex] ?? [])
@@ -518,6 +539,7 @@ export class GeminiMetadataService {
     } catch {
       return {
         normalizedTranscription: transcription,
+        entities: [],
         diagnostics: generated.diagnostics,
         normalizationGuard: failedNormalizationGuard(transcription, analysis, sequences, "invalid_output"),
       };
@@ -527,6 +549,7 @@ export class GeminiMetadataService {
     if (emptyOutput) {
       return {
         normalizedTranscription: transcription,
+        entities: [],
         diagnostics: generated.diagnostics,
         normalizationGuard: failedNormalizationGuard(transcription, analysis, sequences, "empty_output"),
       };
@@ -535,6 +558,7 @@ export class GeminiMetadataService {
     if (!parsedResult.success) {
       return {
         normalizedTranscription: transcription,
+        entities: [],
         diagnostics: generated.diagnostics,
         normalizationGuard: failedNormalizationGuard(transcription, analysis, sequences, "invalid_output"),
       };
@@ -549,6 +573,7 @@ export class GeminiMetadataService {
     );
     return {
       normalizedTranscription: normalizationGuard.accepted ? parsed.normalizedTranscription : transcription,
+      entities: normalizationGuard.accepted ? parsed.entities : [],
       diagnostics: generated.diagnostics,
       normalizationGuard,
     };
