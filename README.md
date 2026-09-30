@@ -9,6 +9,7 @@ Cloudflare Workers上で動作する、公共交通機関の案内放送向けDi
 3. D1 database、`mitsubachi-audio-jobs` Queue、DLQを作成
 4. `pnpm wrangler secret put DISCORD_APPLICATION_ID`、`DISCORD_BOT_TOKEN`、`DISCORD_PUBLIC_KEY`、`GEMINI_API_KEY`
    - 任意: `pnpm wrangler secret put DISCORD_ALERT_CHANNEL_ID` を設定すると、処理エラーの詳細をそのDiscordチャンネルへ通知します。
+   - 任意: `ADMIN_JOBS_CHANNEL_ID` を管理用チャンネルIDに設定すると、AudioJobごとの進行状況と停止ボタンを同じメッセージ上に表示します。停止操作はそのチャンネル内かつAdministratorまたはManage Guild権限を持つメンバーに限定されます。`ADMIN_GUILD_ID` は不要です。
    - `DISCORD_CONTROL_USER_IDS` を、Botオーナー（およびサーバー利用可否を変更できるユーザー）のDiscord user IDのJSON配列（例: `["123456789012345678"]`）に設定します。空配列・不正なJSONの場合は誰も管理操作とdemoを実行できません。
 5. `pnpm wrangler types`
 6. `pnpm wrangler d1 migrations apply mitsubachi-ai-agent --remote`
@@ -19,7 +20,7 @@ Cloudflare Workers上で動作する、公共交通機関の案内放送向けDi
 
 デプロイ後、許可ユーザーが対象サーバー内で `/platform-ai-agent-allow` を実行すると音声解析と検索が有効になります。停止は `/platform-ai-agent-deny` です。どちらもサーバー内でのみ実行でき、応答は実行者にだけ表示されます。
 
-`/platform-ai-agent-demo audio:<attachment>` は `DISCORD_CONTROL_USER_IDS` に明示したオーナー専用です。通常の文字起こし・Gemini補正・入力サイズ制限を使いますが、guildの許可リストと通常利用制限は参照せず、ジョブ、callback token、文字起こし、clip、利用記録、処理ログをD1へ書き込みません。駅候補データはD1から読み取ります。オーナーIDが未設定、不正、または実行者と不一致なら、添付取得、Queue送信、外部AI呼び出しより前に拒否します。
+`/platform-ai-agent-demo audio:<attachment>` は `DISCORD_CONTROL_USER_IDS` に明示したオーナー専用です。通常の文字起こし・Gemini補正・入力サイズ制限を使いますが、guildの許可リストと通常利用制限は参照せず、通常のjob、callback token、文字起こし、clip、利用記録をD1へ書き込みません。`ADMIN_JOBS_CHANNEL_ID` が設定されている場合だけ、監視・停止用の一時状態を `job_monitor_messages` に保存します。駅候補データはD1から読み取ります。オーナーIDが未設定、不正、または実行者と不一致なら、添付取得、Queue送信、外部AI呼び出しより前に拒否します。
 
 ### Discord上の管理コマンド権限
 

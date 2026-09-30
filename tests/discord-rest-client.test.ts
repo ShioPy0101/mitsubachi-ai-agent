@@ -82,6 +82,33 @@ describe("DiscordRestClient", () => {
     );
   });
 
+  it("creates and edits a channel message with Discord components", async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(Response.json({ id: "message-id" }))
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }));
+    const client = new DiscordRestClient("bot-token", "application-id", fetcher);
+    const components = [{
+      type: 1 as const,
+      components: [{ type: 2 as const, style: 4, custom_id: "admin_job_stop:job", label: "停止" }],
+    }];
+
+    await expect(client.createChannelMessage("channel-id", "running", components))
+      .resolves.toEqual({ ok: true, messageId: "message-id" });
+    await expect(client.editChannelMessage("channel-id", "message-id", "done", components))
+      .resolves.toEqual({ ok: true });
+
+    expect(fetcher).toHaveBeenNthCalledWith(1, "https://discord.com/api/v10/channels/channel-id/messages", {
+      method: "POST",
+      headers: { Authorization: "Bot bot-token", "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "running", components, allowed_mentions: { parse: [] } }),
+    });
+    expect(fetcher).toHaveBeenNthCalledWith(2, "https://discord.com/api/v10/channels/channel-id/messages/message-id", {
+      method: "PATCH",
+      headers: { Authorization: "Bot bot-token", "Content-Type": "application/json" },
+      body: JSON.stringify({ content: "done", components, allowed_mentions: { parse: [] } }),
+    });
+  });
+
   it("returns Discord error details without throwing them away", async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response('{"message":"Unknown Webhook","code":10015}', { status: 404 }));
     const client = new DiscordRestClient("bot-token", "application-id", fetcher);

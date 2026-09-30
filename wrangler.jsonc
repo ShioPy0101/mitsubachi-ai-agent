@@ -33,6 +33,7 @@
   },
   "vars": {
     "DISCORD_CONTROL_USER_IDS": "[\"398465248253837314\"]",
+    "ADMIN_JOBS_CHANNEL_ID": "",
     "MAX_AUDIO_BYTES": "26214400",
     "GEMINI_MODEL": "gemini-3.1-flash-lite"
   }

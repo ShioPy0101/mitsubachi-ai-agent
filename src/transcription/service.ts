@@ -9,10 +9,11 @@ export type TranscriptionResult = {
   text: string;
   segments: TranscriptionSegment[];
   audioPreparation?: {
-    strategy: "original" | "mp3_to_wav_fallback";
+    strategy: "original" | "mp3_streaming_wav_chunks";
     originalBytes: number;
     submittedBytes: number;
     initialDecodeError: string | null;
+    chunkCount?: number;
   };
 };
 

@@ -95,45 +95,83 @@ describe("Workers AI response adapter", () => {
     expect(result.segments).toHaveLength(1);
   });
 
-  it("retries a provider MP3 decode failure once with locally transcoded WAV audio", async () => {
+  it("transcribes MP3 as bounded WAV chunks without retaining a full PCM file", async () => {
     const inputs: Ai_Cf_Openai_Whisper_Large_V3_Turbo_Input[] = [];
     const decodeError = Object.assign(new Error("3030: Failed to decode audio file"), { code: 3030 });
     const ai: WhisperAiRunner = {
       run: async (_model, input) => {
         inputs.push(input);
         if (inputs.length === 1) throw decodeError;
-        return { transcription_info: { language: "ja" }, text: "復旧しました", segments: [] };
+        const chunkNumber = inputs.length - 1;
+        return {
+          transcription_info: { language: "ja" },
+          text: `チャンク${chunkNumber}`,
+          segments: [{ start: 0, end: 1, text: `チャンク${chunkNumber}` }],
+        };
       },
     };
-    const wav = new Uint8Array([82, 73, 70, 70]).buffer;
-    const transcode = async (): Promise<ArrayBuffer> => wav;
+    const transcode = async function* () {
+      yield { audio: new Uint8Array([82, 73, 70, 70]).buffer, index: 0, startSec: 0, endSec: 45 };
+      yield { audio: new Uint8Array([87, 65, 86, 69]).buffer, index: 1, startSec: 45, endSec: 70 };
+    };
+    const progress: number[] = [];
 
-    const result = await new CloudflareWhisperTranscriptionService(ai, transcode).transcribe({
+    const result = await new CloudflareWhisperTranscriptionService(
+      ai,
+      transcode,
+      async ({ phase, completedChunks }) => {
+        if (phase === "chunk_completed") progress.push(completedChunks);
+      },
+    ).transcribe({
       audio: new Uint8Array([1, 2, 3]).buffer,
       contentType: "audio/mpeg",
       filename: "problem.mp3",
     });
 
-    expect(inputs).toHaveLength(2);
-    expect(inputs[1]?.audio).toBe("UklGRg==");
+    expect(inputs.map(({ audio }) => audio)).toEqual(["AQID", "UklGRg==", "V0FWRQ=="]);
+    expect(progress).toEqual([1, 2]);
     expect(result).toMatchObject({
-      text: "復旧しました",
+      text: "チャンク1\nチャンク2",
+      segments: [
+        { startSec: 0, endSec: 1, text: "チャンク1" },
+        { startSec: 45, endSec: 46, text: "チャンク2" },
+      ],
       audioPreparation: {
-        strategy: "mp3_to_wav_fallback",
+        strategy: "mp3_streaming_wav_chunks",
         originalBytes: 3,
-        submittedBytes: 4,
+        submittedBytes: 8,
         initialDecodeError: "3030: Failed to decode audio file",
+        chunkCount: 2,
       },
     });
+  });
+
+  it("submits a compatible MP3 directly without invoking the local decoder", async () => {
+    const ai = new FakeAi({ transcription_info: { language: "ja" }, text: "直接成功", segments: [] });
+    let transcodeCalls = 0;
+    const service = new CloudflareWhisperTranscriptionService(ai, async function* () {
+      transcodeCalls += 1;
+      yield { audio: new ArrayBuffer(1), index: 0, startSec: 0, endSec: 1 };
+    });
+
+    const result = await service.transcribe({
+      audio: new Uint8Array([1, 2, 3]).buffer,
+      contentType: "audio/mpeg",
+      filename: "compatible.mp3",
+    });
+
+    expect(ai.inputs).toHaveLength(1);
+    expect(transcodeCalls).toBe(0);
+    expect(result.audioPreparation).toMatchObject({ strategy: "original", submittedBytes: 3 });
   });
 
   it("does not retry decode errors for non-MP3 input", async () => {
     const decodeError = new Error("3030: Failed to decode audio file");
     let transcodeCalls = 0;
     const ai: WhisperAiRunner = { run: async () => { throw decodeError; } };
-    const service = new CloudflareWhisperTranscriptionService(ai, async () => {
+    const service = new CloudflareWhisperTranscriptionService(ai, async function* () {
       transcodeCalls += 1;
-      return new ArrayBuffer(1);
+      yield { audio: new ArrayBuffer(1), index: 0, startSec: 0, endSec: 1 };
     });
 
     await expect(service.transcribe({

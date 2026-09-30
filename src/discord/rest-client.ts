@@ -22,6 +22,19 @@ export class AttachmentUnavailableError extends Error {
 }
 
 export type DiscordApiResult = { ok: true } | { ok: false; status: number; responseBody: string };
+export type DiscordMessageResult = { ok: true; messageId: string } | { ok: false; status: number; responseBody: string };
+
+export type DiscordMessageComponent = {
+  type: 1;
+  components: Array<{
+    type: 2;
+    style: number;
+    custom_id: string;
+    label: string;
+    emoji?: { name: string };
+    disabled?: boolean;
+  }>;
+};
 
 export type DiscordFile = {
   data: ArrayBuffer;
@@ -160,6 +173,40 @@ export class DiscordRestClient {
           ? { Authorization: `Bot ${this.botToken}` }
           : { Authorization: `Bot ${this.botToken}`, "Content-Type": payload.contentTypeHeader },
       body: payload.body,
+    });
+    return apiResult(response);
+  }
+
+  async createChannelMessage(
+    channelId: string,
+    content: string,
+    components: DiscordMessageComponent[] = [],
+  ): Promise<DiscordMessageResult> {
+    const response = await this.request(`https://discord.com/api/v10/channels/${channelId}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bot ${this.botToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ content, components, allowed_mentions: { parse: [] } }),
+    });
+    if (!response.ok) {
+      return { ok: false, status: response.status, responseBody: (await response.text()).slice(0, 500) };
+    }
+    const body = await response.json().catch(() => null) as { id?: unknown } | null;
+    if (typeof body?.id !== "string") {
+      return { ok: false, status: response.status, responseBody: "Discord response did not contain a message id" };
+    }
+    return { ok: true, messageId: body.id };
+  }
+
+  async editChannelMessage(
+    channelId: string,
+    messageId: string,
+    content: string,
+    components: DiscordMessageComponent[] = [],
+  ): Promise<DiscordApiResult> {
+    const response = await this.request(`https://discord.com/api/v10/channels/${channelId}/messages/${messageId}`, {
+      method: "PATCH",
+      headers: { Authorization: `Bot ${this.botToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ content, components, allowed_mentions: { parse: [] } }),
     });
     return apiResult(response);
   }

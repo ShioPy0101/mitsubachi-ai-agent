@@ -3,6 +3,7 @@ import { DemoJobProducer, JobProducer, type JobQueue, type JobStore } from "../s
 import { staleAudioJobCutoff, staleAudioJobTimeoutMs } from "../src/jobs/staleness";
 import {
   AudioJobProcessingTimeoutError,
+  whisperProcessingTimeoutMs,
   withAudioJobProcessingTimeout,
 } from "../src/jobs/processing-timeout";
 import type { AudioJob, NewAudioJob } from "../src/jobs/types";
@@ -78,6 +79,14 @@ describe("stale audio jobs", () => {
 });
 
 describe("audio job processing deadline", () => {
+  it("keeps the Whisper safety deadline outside normal processing time", () => {
+    expect(whisperProcessingTimeoutMs(125.4)).toBe(600_000);
+    expect(whisperProcessingTimeoutMs(5)).toBe(600_000);
+    expect(whisperProcessingTimeoutMs(240)).toBe(720_000);
+    expect(whisperProcessingTimeoutMs(600)).toBe(840_000);
+    expect(whisperProcessingTimeoutMs(null)).toBe(10 * 60 * 1000);
+  });
+
   it("rejects an operation that never settles", async () => {
     await expect(withAudioJobProcessingTimeout(
       async () => await new Promise<never>(() => {}),

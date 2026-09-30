@@ -366,13 +366,28 @@ function encodePcm16Wav(chunks: readonly Int16Array[], sampleRate: number): Arra
   return output;
 }
 
-export async function transcodeMp3ToMonoWav(audio: ArrayBuffer, targetSampleRate = 16_000): Promise<ArrayBuffer> {
+export type Mp3WavChunk = {
+  audio: ArrayBuffer;
+  index: number;
+  startSec: number;
+  endSec: number;
+};
+
+export async function* transcodeMp3ToMonoWavChunks(
+  audio: ArrayBuffer,
+  targetSampleRate = 16_000,
+  maximumChunkSec = 45,
+): AsyncGenerator<Mp3WavChunk> {
   const parser = new CodecParser<CodecFrame>("audio/mpeg", { enableFrameCRC32: false });
   const frames = parser.parseAll(new Uint8Array(audio));
   if (frames.length === 0) throw new Error("MP3 parser produced no frames");
   const MPEGDecoder = await loadMp3Decoder();
   const decoder = new MPEGDecoder({ enableGapless: false });
-  const pcmChunks: Int16Array[] = [];
+  let pcmChunks: Int16Array[] = [];
+  let bufferedSamples = 0;
+  let emittedSamples = 0;
+  let chunkIndex = 0;
+  const maximumChunkSamples = Math.max(targetSampleRate, Math.floor(targetSampleRate * maximumChunkSec));
   try {
     await decoder.ready;
     for (let offset = 0; offset < frames.length; offset += mp3DecodeBatchFrames) {
@@ -394,11 +409,29 @@ export async function transcodeMp3ToMonoWav(audio: ArrayBuffer, targetSampleRate
         pcm[outputIndex] = value < 0 ? Math.round(value * 0x8000) : Math.round(value * 0x7fff);
       }
       pcmChunks.push(pcm);
+      bufferedSamples += pcm.length;
+      if (bufferedSamples >= maximumChunkSamples) {
+        const startSec = emittedSamples / targetSampleRate;
+        emittedSamples += bufferedSamples;
+        const wav = encodePcm16Wav(pcmChunks, targetSampleRate);
+        pcmChunks = [];
+        bufferedSamples = 0;
+        yield { audio: wav, index: chunkIndex++, startSec, endSec: emittedSamples / targetSampleRate };
+      }
+    }
+    if (bufferedSamples > 0) {
+      const startSec = emittedSamples / targetSampleRate;
+      emittedSamples += bufferedSamples;
+      yield {
+        audio: encodePcm16Wav(pcmChunks, targetSampleRate),
+        index: chunkIndex,
+        startSec,
+        endSec: emittedSamples / targetSampleRate,
+      };
     }
   } finally {
     decoder.free();
   }
-  return encodePcm16Wav(pcmChunks, targetSampleRate);
 }
 
 export async function splitAudioOnSilence(

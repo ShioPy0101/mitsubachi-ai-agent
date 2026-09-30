@@ -39,11 +39,15 @@ export const DiscordInteractionSchema = z.object({
   token: z.string(),
   guild_id: z.string().optional(),
   channel_id: z.string().optional(),
-  member: z.object({ user: z.object({ id: z.string() }) }).optional(),
+  member: z.object({
+    user: z.object({ id: z.string() }),
+    permissions: z.string().optional(),
+  }).optional(),
   user: z.object({ id: z.string() }).optional(),
   data: z
     .object({
-      name: z.string(),
+      name: z.string().optional(),
+      custom_id: z.string().optional(),
       options: z.array(InteractionOptionSchema).optional(),
       resolved: z
         .object({

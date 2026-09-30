@@ -20,6 +20,7 @@ import { formatSearchResults } from "../discord/messages";
 import { verifyDiscordSignature } from "../discord/signatures";
 import { DemoJobProducer, JobProducer, type JobQueue } from "../jobs/producer";
 import { sendAudioJobAlert } from "../jobs/alerts";
+import { adminJobsChannelId, createJobMonitor } from "../jobs/job-monitor";
 
 export const interactionRoutes = new Hono<{ Bindings: Env }>();
 
@@ -85,6 +86,45 @@ function parseSearchQuery(input: unknown): string | null {
   return option?.value?.trim() || null;
 }
 
+const administratorPermission = 1n << 3n;
+const manageGuildPermission = 1n << 5n;
+
+function hasJobControlPermission(permissions: string | undefined): boolean {
+  if (permissions === undefined) return false;
+  try {
+    const bits = BigInt(permissions);
+    return (bits & (administratorPermission | manageGuildPermission)) !== 0n;
+  } catch {
+    return false;
+  }
+}
+
+export async function handleAdminJobStopInteraction(
+  input: unknown,
+  env: Env,
+): Promise<Response | null> {
+  const parsed = DiscordInteractionSchema.safeParse(input);
+  if (!parsed.success || parsed.data.type !== 3) return null;
+  const customId = parsed.data.data?.custom_id;
+  if (customId === undefined || !customId.startsWith("admin_job_stop:")) return null;
+  const configuredChannelId = adminJobsChannelId(env);
+  if (configuredChannelId === null || parsed.data.channel_id !== configuredChannelId) {
+    return ephemeralErrorResponse("この場所からジョブを停止することはできません。");
+  }
+  if (!hasJobControlPermission(parsed.data.member?.permissions)) {
+    return ephemeralErrorResponse("ジョブを停止する管理権限がありません。");
+  }
+  const jobId = customId.slice("admin_job_stop:".length);
+  if (jobId.length === 0) return ephemeralErrorResponse("ジョブIDが不正です。");
+  const monitor = createJobMonitor(env);
+  const record = await monitor.requestCancellation(jobId);
+  if (record === null) return ephemeralErrorResponse("対象のジョブが見つかりません。");
+  if (["stopped", "completed", "failed", "timed_out"].includes(record.state)) {
+    return ephemeralMessageResponse(`このジョブはすでに ${record.state} です。`);
+  }
+  return ephemeralMessageResponse("停止を要求しました。現在のフェーズ終了後までに停止します。");
+}
+
 interactionRoutes.post("/interactions", async (context) => {
   const signature = context.req.header("x-signature-ed25519");
   const timestamp = context.req.header("x-signature-timestamp");
@@ -101,6 +141,9 @@ interactionRoutes.post("/interactions", async (context) => {
   }
   const interaction = DiscordInteractionSchema.safeParse(input);
   if (interaction.success && interaction.data.type === 1) return Response.json({ type: 1 });
+
+  const adminJobStopResponse = await handleAdminJobStopInteraction(input, context.env);
+  if (adminJobStopResponse !== null) return adminJobStopResponse;
 
   const searchQuery = parseSearchQuery(input);
   if (searchQuery !== null) {
