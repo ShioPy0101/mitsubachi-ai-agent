@@ -2,14 +2,14 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "mitsubachi-ai-agent",
   "main": "src/index.ts",
-  "compatibility_date": "2026-09-27",
+  "compatibility_date": "2026-09-26",
   "workers_dev": true,
   "ai": { "binding": "AI" },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "mitsubachi-ai-agent",
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "6e9c8fe0-678b-45e5-ac23-e1c1d98571e5",
       "migrations_dir": "migrations"
     }
   ],
@@ -29,6 +29,7 @@
     ]
   },
   "vars": {
+    "DISCORD_CONTROL_USER_IDS": "[\"398465248253837314\"]",
     "MAX_AUDIO_BYTES": "26214400",
     "GEMINI_MODEL": "gemini-3.1-flash-lite"
   }

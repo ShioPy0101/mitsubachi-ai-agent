@@ -158,5 +158,6 @@ describe("station CSV import", () => {
     expect(generateStationsSql(rows)).toBe(first);
     expect(first).toContain("ON CONFLICT DO UPDATE");
     expect(first).toContain("'いすずかおか'");
+    expect(first).not.toContain("BEGIN TRANSACTION");
   });
 });

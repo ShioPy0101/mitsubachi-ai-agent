@@ -93,5 +93,7 @@ export function generateStationsSql(rows: readonly StationImportRow[]): string {
     ].join(", ");
     return `INSERT INTO stations (name, kana, kana_source, operator_name, line_name, prefecture, prev_station, next_station, longitude, latitude, postal, normalized_name, normalized_kana) VALUES (${values}) ON CONFLICT DO UPDATE SET kana=excluded.kana, kana_source=excluded.kana_source, prefecture=excluded.prefecture, prev_station=excluded.prev_station, next_station=excluded.next_station, longitude=excluded.longitude, latitude=excluded.latitude, postal=excluded.postal, normalized_name=excluded.normalized_name, normalized_kana=excluded.normalized_kana;`;
   });
-  return ["BEGIN TRANSACTION;", ...statements, "COMMIT;", ""].join("\n");
+  // `wrangler d1 execute --remote --file` wraps bulk uploads itself. Explicit
+  // transactions are rejected by the remote execution API.
+  return [...statements, ""].join("\n");
 }
