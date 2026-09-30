@@ -37,6 +37,8 @@ export type RoutePathCandidate = {
   score: number;
   source?: "anchor" | "sequence_fallback";
   mentionMatches?: MentionRouteMatch[];
+  exactAnchorCoverage?: number;
+  hardAnchorViolations?: number;
 };
 
 export type MentionRouteMatch = {

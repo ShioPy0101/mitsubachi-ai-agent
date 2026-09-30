@@ -124,23 +124,36 @@ function alignMentionsToRoute(
   mentionTexts: readonly string[],
   route: RoutePathCandidate,
   source: "anchor" | "sequence_fallback",
+  hardAnchorNamesByMention: readonly ReadonlySet<string>[],
   maximumStationGap = 4,
 ): RoutePathCandidate | null {
   if (mentionTexts.length < 2 || route.stations.length < mentionTexts.length) return null;
+  const effectiveMaximumStationGap = Math.min(
+    16,
+    Math.max(maximumStationGap, Math.ceil(route.stations.length / mentionTexts.length) * 2),
+  );
+  const alignmentValue = (mentionIndex: number, station: Station): number => {
+    const lexical = lexicalSimilarities(mentionTexts[mentionIndex] ?? "", station).lexicalSimilarity;
+    const hardNames = hardAnchorNamesByMention[mentionIndex] ?? new Set<string>();
+    if (hardNames.size === 0) return lexical * 0.75;
+    return lexical * 0.75 + (hardNames.has(station.name) ? 0.5 : -0.35);
+  };
   type Alignment = { value: number; indexes: number[] };
   let previous = route.stations.map((item, routeIndex): Alignment => {
-    const lexical = lexicalSimilarities(mentionTexts[0] ?? "", item.station).lexicalSimilarity;
-    return { value: lexical * 0.75, indexes: [routeIndex] };
+    return { value: alignmentValue(0, item.station), indexes: [routeIndex] };
   });
   for (let mentionIndex = 1; mentionIndex < mentionTexts.length; mentionIndex += 1) {
     const current = route.stations.map((item, routeIndex): Alignment => {
-      const lexical = lexicalSimilarities(mentionTexts[mentionIndex] ?? "", item.station).lexicalSimilarity;
       let best: Alignment | null = null;
-      for (let previousIndex = Math.max(0, routeIndex - maximumStationGap); previousIndex < routeIndex; previousIndex += 1) {
+      for (
+        let previousIndex = Math.max(0, routeIndex - effectiveMaximumStationGap);
+        previousIndex < routeIndex;
+        previousIndex += 1
+      ) {
         const prior = previous[previousIndex];
         if (prior === undefined) continue;
         const gap = routeIndex - previousIndex;
-        const value = prior.value + lexical * 0.75 + 0.2 - (gap - 1) * 0.04;
+        const value = prior.value + alignmentValue(mentionIndex, item.station) + 0.2 - (gap - 1) * 0.04;
         if (best === null || value > best.value) best = { value, indexes: [...prior.indexes, routeIndex] };
       }
       return best ?? { value: Number.NEGATIVE_INFINITY, indexes: [] };
@@ -163,6 +176,24 @@ function alignMentionsToRoute(
     };
   });
   const lexicalValues = mentionMatches.map(({ lexicalSimilarity }) => lexicalSimilarity);
+  const hardAnchorMatches = mentionMatches.filter((match) => {
+    const hardNames = hardAnchorNamesByMention[match.mentionIndex] ?? new Set<string>();
+    return hardNames.size > 0 && hardNames.has(match.station.name);
+  }).length;
+  const hardAnchorViolations = mentionMatches.filter((match) => {
+    const hardNames = hardAnchorNamesByMention[match.mentionIndex] ?? new Set<string>();
+    return hardNames.size > 0 && !hardNames.has(match.station.name);
+  });
+  const hardAnchorCount = hardAnchorNamesByMention.filter((names) => names.size > 0).length;
+  const exactAnchorCoverage = hardAnchorCount === 0 ? 1 : hardAnchorMatches / hardAnchorCount;
+  const hardAnchorViolationRatio = hardAnchorCount === 0 ? 0 : hardAnchorViolations.length / hardAnchorCount;
+  // A coherent route that already explains most hard anchors must not discard
+  // another hard station with a zero-similarity replacement. When several exact
+  // ASR matches contradict one another (for example accidental real station
+  // names), retain the existing sequence-level route comparison instead.
+  const coherentHardEvidence = hardAnchorCount === 1 || exactAnchorCoverage >= 0.6;
+  if (coherentHardEvidence
+    && hardAnchorViolations.some(({ lexicalSimilarity }) => lexicalSimilarity === 0)) return null;
   const covered = lexicalValues.filter((value) => value >= 0.25).length;
   const strong = lexicalValues.filter((value) => value >= 0.65).length;
   const gaps = best.indexes.slice(1).map((value, index) => value - (best.indexes[index] ?? value));
@@ -176,6 +207,8 @@ function alignMentionsToRoute(
       + anchorCoverage * 0.25
       + continuity * 0.2
       + (strong / mentionTexts.length) * 0.15
+      + (hardAnchorCount === 0 ? 0 : exactAnchorCoverage * 0.15)
+      - hardAnchorViolationRatio * 0.05
       - route.transferCount * 0.08,
   ));
   if (covered < Math.max(2, Math.ceil(mentionTexts.length * 0.5)) || score < 0.43) return null;
@@ -189,6 +222,8 @@ function alignMentionsToRoute(
     pathLength: stations.length,
     score,
     source,
+    exactAnchorCoverage,
+    hardAnchorViolations: hardAnchorViolations.length,
   };
 }
 
@@ -234,15 +269,23 @@ export class StationCandidateService {
     const eligiblePool = pool.filter((station) => isEligibleStationMention(station, transcription));
     const initial = eligiblePool
       .map((station) => scoreStation(station, transcription, context));
-    const anchorNames = [...new Map(
-      initial
-        .filter((candidate) => candidate.nameSimilarity === 1 || candidate.kanaSimilarity === 1)
-        .map((candidate) => [candidate.station.name, mentionIndex(candidate.station, transcription)]),
-    )]
-      .filter(([, index]) => index >= 0)
-      .sort((left, right) => left[1] - right[1])
-      .map(([name]) => name)
-      .slice(0, 12);
+    const hardAnchorNamesByMention = (mentionTexts ?? []).map((mention) => new Set(pool
+      .filter((station) => {
+        const similarities = lexicalSimilarities(mention, station);
+        return similarities.nameSimilarity === 1 || similarities.kanaSimilarity === 1;
+      })
+      .map(({ name }) => name)));
+    const anchorNames = mentionTexts === null
+      ? [...new Map(
+        initial
+          .filter((candidate) => candidate.nameSimilarity === 1 || candidate.kanaSimilarity === 1)
+          .map((candidate) => [candidate.station.name, mentionIndex(candidate.station, transcription)]),
+      )]
+        .filter(([, index]) => index >= 0)
+        .sort((left, right) => left[1] - right[1])
+        .map(([name]) => name)
+        .slice(0, 12)
+      : [...new Set(hardAnchorNamesByMention.flatMap((names) => [...names]))].slice(0, 12);
     const anchorRouteCandidates = anchorNames.length >= 2
       ? await this.repository.findRouteCandidates(anchorNames, 5, 2)
       : [];
@@ -253,6 +296,7 @@ export class StationCandidateService {
           mentionTexts,
           route,
           "anchor",
+          hardAnchorNamesByMention,
           options.sequenceRole === "direction" ? 16 : 4,
         ))
         .filter((route): route is RoutePathCandidate => route !== null);
@@ -284,7 +328,13 @@ export class StationCandidateService {
         stationRadius,
       );
       fallbackRoutes = localRoutes
-        .map((route) => alignMentionsToRoute(mentionTexts, route, "sequence_fallback", maximumStationGap))
+        .map((route) => alignMentionsToRoute(
+          mentionTexts,
+          route,
+          "sequence_fallback",
+          hardAnchorNamesByMention,
+          maximumStationGap,
+        ))
         .filter((route): route is RoutePathCandidate => route !== null);
     }
     const routeCandidates = deduplicateRoutes([...alignedAnchorRoutes, ...fallbackRoutes])
@@ -381,9 +431,11 @@ export class StationCandidateService {
           null,
         );
         const conflictsWithMatchedRoute = routeCandidates.length > 0 && supportingRoutes.length === 0;
+        const hardMatch = nameSimilarity === 1 || kanaSimilarity === 1 || lexicalSimilarity >= 0.85;
         const lexicalBase = Math.min(0.7, nameSimilarity * 0.35 + kanaSimilarity * 0.35);
         const finalScore = Math.min(1,
-          lexicalBase * (conflictsWithMatchedRoute ? 0.25 : 1) + (bestRouteScore ?? 0) * 0.4,
+          lexicalBase * (conflictsWithMatchedRoute ? 0.25 : 1)
+            + (bestRouteScore ?? 0) * 0.4,
         );
         return {
           mentionIndex,
@@ -392,9 +444,7 @@ export class StationCandidateService {
           nameSimilarity,
           kanaSimilarity,
           lexicalScore: lexicalSimilarity,
-          matchStrength: nameSimilarity === 1 || kanaSimilarity === 1 || lexicalSimilarity >= 0.85
-            ? "hard"
-            : "soft",
+          matchStrength: hardMatch ? "hard" : "soft",
           routeHypothesisIds: supportingRoutes.map(({ routeHypothesisId }) => routeHypothesisId),
           bestRouteScore,
           finalScore,

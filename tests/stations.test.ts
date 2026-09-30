@@ -247,6 +247,91 @@ describe("station normalization and ranking", () => {
     });
   });
 
+  it("keeps 鶴橋 as a hard anchor while route context resolves ambiguous preceding stops", async () => {
+    const base = {
+      kanaSource: "pykakasi", operatorName: "近畿日本鉄道", lineName: "近鉄大阪線",
+      prefecture: "大阪府", prevStation: null, nextStation: null,
+      longitude: null, latitude: null, postal: null,
+    };
+    const makeStation = (id: number, name: string, kana = name): Station => ({
+      ...base, id, name, kana,
+    });
+    const correctStations = [
+      makeStation(1, "桜井", "さくらい"),
+      makeStation(2, "大和八木", "やまとやぎ"),
+      makeStation(3, "大和高田", "やまとたかだ"),
+      makeStation(4, "五位堂", "ごいどう"),
+      makeStation(5, "河内国分", "かわちこくぶ"),
+      makeStation(6, "布施", "ふせ"),
+      makeStation(7, "鶴橋", "つるはし"),
+    ];
+    const wrongTail = [
+      correctStations[0]!, correctStations[1]!, correctStations[2]!,
+      makeStation(8, "五位堂", "ごいどう"),
+      makeStation(9, "近鉄下田", "きんてつしもだ"),
+      makeStation(10, "二上", "にじょう"),
+      makeStation(11, "関屋", "せきや"),
+    ];
+    const route = (stations: Station[]): RoutePathCandidate => ({
+      stations: stations.map((station, routeIndex) => ({ station, routeIndex })),
+      anchorCoverage: 1,
+      orderConsistency: 1,
+      transferCount: 0,
+      pathLength: stations.length,
+      score: 0.9,
+    });
+    const diagnostics = await new StationCandidateService(new FixtureRepository(
+      [...correctStations, ...wrongTail],
+      [route(wrongTail), route(correctStations)],
+    )).analyzeMentions([
+      "桜井", "大和八木", "大和高田", "五井堂", "河内国部", "伏瀬", "鶴橋",
+    ]);
+
+    expect(diagnostics.anchorNames).toEqual(["桜井", "大和八木", "大和高田", "鶴橋"]);
+    expect(diagnostics.routeCandidates).toHaveLength(1);
+    expect(diagnostics.routeCandidates[0]?.mentionMatches?.map(({ station }) => station.name)).toEqual([
+      "桜井", "大和八木", "大和高田", "五位堂", "河内国分", "布施", "鶴橋",
+    ]);
+    expect(diagnostics.routeCandidates[0]).toMatchObject({
+      exactAnchorCoverage: 1,
+      hardAnchorViolations: 0,
+    });
+    const tsuruhashi = diagnostics.mentionCandidates[6]?.find(({ station }) => station.name === "鶴橋");
+    expect(tsuruhashi).toMatchObject({
+      lexicalScore: 1,
+      matchStrength: "hard",
+      routeHypothesisIds: [0],
+    });
+    expect(diagnostics.routeCandidates.flatMap(({ mentionMatches }) => mentionMatches ?? [])
+      .some(({ mentionText, station, lexicalSimilarity }) =>
+        mentionText === "鶴橋" && station.name === "関屋" && lexicalSimilarity === 0)).toBe(false);
+  });
+
+  it("still allows a zero-similarity route correction when the mention has no hard candidate", async () => {
+    const base = {
+      kanaSource: "pykakasi", operatorName: null, lineName: "本線", prefecture: null,
+      prevStation: null, nextStation: null, longitude: null, latitude: null, postal: null,
+    };
+    const start: Station = { ...base, id: 1, name: "始点", kana: "してん" };
+    const middle: Station = { ...base, id: 2, name: "中間", kana: "ちゅうかん" };
+    const end: Station = { ...base, id: 3, name: "終点", kana: "しゅうてん" };
+    const route: RoutePathCandidate = {
+      stations: [start, middle, end].map((station, routeIndex) => ({ station, routeIndex })),
+      anchorCoverage: 1, orderConsistency: 1, transferCount: 0, pathLength: 3, score: 0.9,
+    };
+    const diagnostics = await new StationCandidateService(
+      new FixtureRepository([start, middle, end], [route]),
+    ).analyzeMentions(["始点", "謎語", "終点"]);
+
+    expect(diagnostics.routeCandidates[0]?.mentionMatches?.[1]).toMatchObject({
+      mentionText: "謎語",
+      station: { name: "中間" },
+      lexicalSimilarity: 0,
+    });
+    expect(diagnostics.mentionCandidates[1]?.find(({ station }) => station.name === "中間"))
+      .toMatchObject({ routeHypothesisIds: [0] });
+  });
+
   it("does not treat a one-character station as a substring of another station", async () => {
     const fuku: Station = {
       id: 2971,

@@ -62,6 +62,8 @@ export function buildGeminiNormalizationPrompt(
           transferCount: route.transferCount,
           pathLength: route.pathLength,
           score: route.score,
+          exactAnchorCoverage: route.exactAnchorCoverage ?? null,
+          hardAnchorViolations: route.hardAnchorViolations ?? null,
           source: route.source,
           mentionMatches: route.mentionMatches?.map((match) => ({
             mentionIndex: match.mentionIndex,
