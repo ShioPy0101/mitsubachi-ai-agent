@@ -1,6 +1,6 @@
 import { WorkersAiWhisperResponseSchema } from "./schemas";
 import type { TranscriptionInput, TranscriptionResult, TranscriptionService } from "./service";
-import { transcodeMp3ToMonoWavChunks, type Mp3WavChunk } from "../audio/silence-segmenter";
+import { rebuildMp3FromFrames } from "../audio/silence-segmenter";
 
 export const railwayAnnouncementPrompt = [
   "日本の鉄道駅構内放送。駅名、路線名、列車名、時刻、番線。",
@@ -58,34 +58,25 @@ export function isWorkersAiAudioDecodeError(error: unknown): boolean {
 }
 
 export class WhisperAudioDecodeError extends Error {
-  constructor(initialError: unknown, fallbackError: unknown) {
+  constructor(initialError: unknown, rebuiltError: unknown) {
     super(
-      "MP3の原本とWAV変換後の両方をWhisperがデコードできませんでした。"
-      + ` original=${errorMessage(initialError)}; fallback=${errorMessage(fallbackError)}`,
+      "MP3の原本とフレーム再構成後の両方をWhisperがデコードできませんでした。"
+      + ` original=${errorMessage(initialError)}; rebuilt=${errorMessage(rebuiltError)}`,
     );
     this.name = "WhisperAudioDecodeError";
   }
 }
 
-export class WhisperMp3TranscodeError extends Error {
-  constructor(error: unknown) {
-    super(`MP3をWhisper互換WAVへ変換できませんでした: ${errorMessage(error)}`);
-    this.name = "WhisperMp3TranscodeError";
-  }
-}
-
-type Mp3ChunkTranscoder = (audio: ArrayBuffer) => AsyncIterable<Mp3WavChunk>;
+type Mp3Rebuilder = (audio: ArrayBuffer) => ArrayBuffer;
 type Mp3Progress = {
-  phase: "fallback_started" | "chunk_completed";
-  completedChunks: number;
-  processedSeconds: number;
+  phase: "rebuild_started";
 };
 
 export class CloudflareWhisperTranscriptionService implements TranscriptionService {
   constructor(
     private readonly ai: WhisperAiRunner,
-    private readonly transcodeMp3: Mp3ChunkTranscoder = transcodeMp3ToMonoWavChunks,
     private readonly onMp3Progress?: (progress: Mp3Progress) => Promise<void>,
+    private readonly rebuildMp3: Mp3Rebuilder = rebuildMp3FromFrames,
   ) {}
 
   private async run(audio: ArrayBuffer): Promise<TranscriptionResult> {
@@ -123,61 +114,47 @@ export class CloudflareWhisperTranscriptionService implements TranscriptionServi
         if (!isWorkersAiAudioDecodeError(error)) throw error;
         initialError = error;
       }
-      console.warn("whisper_mp3_decode_fallback_started", {
+      console.warn("whisper_mp3_rebuild_started", {
         filename: input.filename,
         originalBytes: input.audio.byteLength,
         error: errorMessage(initialError),
       });
-      await this.onMp3Progress?.({ phase: "fallback_started", completedChunks: 0, processedSeconds: 0 });
-      const results: Array<{ result: TranscriptionResult; startSec: number }> = [];
-      let submittedBytes = 0;
-      let chunks: AsyncIterator<Mp3WavChunk>;
+      await this.onMp3Progress?.({ phase: "rebuild_started" });
+      let rebuiltError: unknown;
+      let rebuiltAudio: ArrayBuffer | null = null;
       try {
-        chunks = this.transcodeMp3(input.audio)[Symbol.asyncIterator]();
+        rebuiltAudio = this.rebuildMp3(input.audio);
       } catch (error) {
-        throw new WhisperMp3TranscodeError(error);
+        rebuiltError = error;
       }
-      while (true) {
-        let next: IteratorResult<Mp3WavChunk>;
+      if (rebuiltAudio !== null) {
         try {
-          next = await chunks.next();
+          const result = await this.run(rebuiltAudio);
+          console.info("whisper_mp3_rebuilt_transcription_completed", {
+            filename: input.filename,
+            originalBytes: input.audio.byteLength,
+            rebuiltBytes: rebuiltAudio.byteLength,
+          });
+          return {
+            ...result,
+            audioPreparation: {
+              strategy: "mp3_rebuilt",
+              originalBytes: input.audio.byteLength,
+              submittedBytes: rebuiltAudio.byteLength,
+              initialDecodeError: errorMessage(initialError),
+              rebuiltDecodeError: null,
+            },
+          };
         } catch (error) {
-          throw new WhisperMp3TranscodeError(error);
+          if (!isWorkersAiAudioDecodeError(error)) throw error;
+          rebuiltError = error;
         }
-        if (next.done) break;
-        const chunk = next.value;
-        const result = await this.run(chunk.audio);
-        results.push({ result, startSec: chunk.startSec });
-        submittedBytes += chunk.audio.byteLength;
-        await this.onMp3Progress?.({
-          phase: "chunk_completed",
-          completedChunks: results.length,
-          processedSeconds: chunk.endSec,
-        });
       }
-      if (results.length === 0) throw new WhisperMp3TranscodeError(new Error("MP3 decoder produced no chunks"));
-      console.info("whisper_mp3_chunked_transcription_completed", {
+      console.warn("whisper_mp3_rebuilt_decode_failed", {
         filename: input.filename,
-        originalBytes: input.audio.byteLength,
-        chunkCount: results.length,
-        submittedBytes,
+        error: errorMessage(rebuiltError),
       });
-      return {
-        language: results.map(({ result }) => result.language).find((language) => language !== null) ?? null,
-        text: results.map(({ result }) => result.text.trim()).filter((text) => text !== "").join("\n"),
-        segments: results.flatMap(({ result, startSec }) => result.segments.map((segment) => ({
-          ...segment,
-          startSec: segment.startSec + startSec,
-          endSec: segment.endSec + startSec,
-        }))),
-        audioPreparation: {
-          strategy: "mp3_streaming_wav_chunks",
-          originalBytes: input.audio.byteLength,
-          submittedBytes,
-          initialDecodeError: errorMessage(initialError),
-          chunkCount: results.length,
-        },
-      };
+      throw new WhisperAudioDecodeError(initialError, rebuiltError);
     }
     const result = await this.run(input.audio);
     return {

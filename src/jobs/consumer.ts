@@ -305,7 +305,7 @@ function formatDemoFailure(error: unknown, stage: string, attempt: number): stri
   const retrySummary = stage.startsWith("gemini_")
     ? "同じ文字起こしを使ったGemini再試行（最大3回）も完了できませんでした。"
     : details.errorName === "WhisperAudioDecodeError"
-      ? "MP3原本の3030エラー後、16kHz mono WAVへ変換した再送も完了できませんでした。"
+      ? "MP3原本の3030エラー後、MP3フレームのみ再構成した再送もdecodeできませんでした。WAV変換は行っていません。"
     : "この失敗では処理全体を再実行しません。";
   return [
     "❌ **デモ処理に失敗しました**",
@@ -385,7 +385,7 @@ async function processJob(
     await updateProgress(
       job,
       isMp3TranscriptionInput(transcriptionInput)
-        ? "MP3をWhisperへ直接送信しています（decode失敗時のみ省メモリWAVチャンクへ切り替えます）…"
+        ? "MP3をWhisperへ送信し、文字起こししています…"
         : "音声をWhisperへ送信し、文字起こししています…",
       callbacks,
       discord,
@@ -393,46 +393,26 @@ async function processJob(
     );
     const whisperTimeoutMs = whisperProcessingTimeoutMs(job.durationSecs);
     const transcription = await runJobStage("whisper_transcription", async () => {
-      const whisperStartedAt = Date.now();
       if (isMp3TranscriptionInput(transcriptionInput)) {
         await monitor?.stageProgress(job.id, "MP3原本をWhisperへ直接送信中");
       }
       return new CloudflareWhisperTranscriptionService(
         env.AI,
-        undefined,
-        async ({ phase, completedChunks, processedSeconds }) => {
-          if (phase === "fallback_started") {
-            const detail = "MP3直接decode失敗・省メモリWAVチャンクへ切替中";
+        async ({ phase }) => {
+          if (phase === "rebuild_started") {
+            const detail = "MP3直接decode失敗・フレームのみ再構成して再送中";
             await Promise.all([
               updateProgress(job, `${detail}…`, callbacks, discord, showDemoProgress),
               monitor?.stageProgress(job.id, detail),
             ]);
-            return;
-          }
-          const durationProgress = job.durationSecs === null
-            ? `${processedSeconds.toFixed(1)}秒地点`
-            : `${processedSeconds.toFixed(1)} / ${job.durationSecs.toFixed(1)}秒`;
-          const detail = `${completedChunks}チャンク完了・${durationProgress}`;
-          await Promise.all([
-            updateProgress(
-              job,
-              `MP3を省メモリ変換しながらWhisperで処理しています（${detail}）…`,
-              callbacks,
-              discord,
-              showDemoProgress,
-            ),
-            monitor?.stageProgress(job.id, detail),
-          ]);
-          if (Date.now() - whisperStartedAt >= whisperTimeoutMs) {
-            throw new AudioJobProcessingTimeoutError(whisperTimeoutMs);
           }
         },
       ).transcribe(transcriptionInput);
     }, whisperTimeoutMs);
     transcriptionResult = transcription;
     if (showDemoProgress) {
-      const preparation = transcription.audioPreparation?.strategy === "mp3_streaming_wav_chunks"
-        ? `、MP3を省メモリWAVチャンクで処理（${transcription.audioPreparation.chunkCount ?? 0}件、累計${transcription.audioPreparation.submittedBytes} bytes）`
+      const preparation = transcription.audioPreparation?.strategy === "mp3_rebuilt"
+        ? `、MP3フレーム再構成で復旧（${transcription.audioPreparation.submittedBytes} bytes）`
         : "";
       await updateProgress(
         job,
