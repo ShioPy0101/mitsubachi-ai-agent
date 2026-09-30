@@ -7,6 +7,8 @@ describe("Discord command registration", () => {
     expect(platform?.options.map((option) => [option.name, option.type])).toEqual([
       ["audio", 11],
     ]);
+    expect(platform?.description).toBe("案内放送を登録");
+    expect(platform?.options[0]?.description).toBe("音声ファイル");
     expect(discordCommands.map((command) => command.name)).toContain("platform-ai-agent-allow");
     expect(discordCommands.map((command) => command.name)).toContain("platform-ai-agent-deny");
   });

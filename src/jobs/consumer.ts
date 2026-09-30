@@ -246,7 +246,7 @@ async function processJob(job: AudioJob, env: Env, attempt: number): Promise<voi
   }
   const resolution = resolveStation(candidates, extracted.metadata.station);
   const metadata = { ...extracted.metadata, station: resolution.stationName };
-  const filename = generateRailwayFilename(1, metadata, job.originalFilename);
+  const filename = generateRailwayFilename(metadata, job.originalFilename);
   await runStage(job.id, "clip_save", () => clips.save({
     jobId: job.id, clipIndex: 1, rawTranscription: transcriptionText,
     normalizedTranscription: extracted.normalizedTranscription, metadata, resolution,
