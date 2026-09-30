@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { announcementCategories } from "../railway/types";
+import { stationMentionRoles } from "./service";
 
 const TimeSchema = z.string().regex(/^\d{2}:\d{2}$/u);
 
@@ -21,6 +22,22 @@ export const TransitAnnouncementSchema = z.object({
 });
 
 export type ParsedTransitAnnouncement = z.output<typeof TransitAnnouncementSchema>;
+
+export const StationMentionSchema = z.object({
+  text: z.string().min(1),
+  start: z.number().int().nonnegative().nullable(),
+  end: z.number().int().nonnegative().nullable(),
+  role: z.enum(stationMentionRoles),
+  sequenceId: z.number().int().positive().nullable(),
+});
+
+export const GeminiAnalysisSchema = TransitAnnouncementSchema.omit({ normalizedTranscription: true }).extend({
+  mentions: z.array(StationMentionSchema),
+});
+
+export const GeminiNormalizationSchema = z.object({
+  normalizedTranscription: z.string().trim().min(1),
+});
 
 export const GeminiResponseSchema = z.object({
   promptFeedback: z.object({
@@ -69,4 +86,54 @@ export const transitAnnouncementJsonSchema = {
     category: { type: "string", enum: [...announcementCategories] },
     summary: { type: ["string", "null"], maxLength: 30 },
   },
+} as const;
+
+const metadataProperties = {
+  isTransitAnnouncement: { type: "boolean" },
+  station: { type: "null" },
+  line: { type: ["string", "null"] },
+  trainType: { type: ["string", "null"] },
+  trainName: { type: ["string", "null"] },
+  trainNumber: { type: ["string", "null"] },
+  destination: { type: ["string", "null"] },
+  departureTime: { type: ["string", "null"], pattern: "^\\d{2}:\\d{2}$" },
+  arrivalTime: { type: ["string", "null"], pattern: "^\\d{2}:\\d{2}$" },
+  platform: { type: ["string", "null"] },
+  nextStation: { type: ["string", "null"] },
+  category: { type: "string", enum: [...announcementCategories] },
+  summary: { type: ["string", "null"], maxLength: 30 },
+} as const;
+
+export const geminiAnalysisJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "isTransitAnnouncement", "mentions", "station", "line", "trainType", "trainName", "trainNumber",
+    "destination", "departureTime", "arrivalTime", "platform", "nextStation", "category", "summary",
+  ],
+  properties: {
+    ...metadataProperties,
+    mentions: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["text", "start", "end", "role", "sequenceId"],
+        properties: {
+          text: { type: "string", minLength: 1 },
+          start: { type: ["integer", "null"], minimum: 0 },
+          end: { type: ["integer", "null"], minimum: 0 },
+          role: { type: "string", enum: [...stationMentionRoles] },
+          sequenceId: { type: ["integer", "null"], minimum: 1 },
+        },
+      },
+    },
+  },
+} as const;
+
+export const geminiNormalizationJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["normalizedTranscription"],
+  properties: { normalizedTranscription: { type: "string", minLength: 1 } },
 } as const;

@@ -1,12 +1,33 @@
 import type { RailwayAnnouncementMetadata } from "../railway/types";
-import type { StationCandidate } from "../stations/types";
+
+export const stationMentionRoles = [
+  "destination",
+  "direction",
+  "stop",
+  "next_stop",
+  "transfer",
+  "service_change_point",
+  "unknown",
+] as const;
+
+export type StationMentionRole = (typeof stationMentionRoles)[number];
+
+export type StationMention = {
+  text: string;
+  start: number | null;
+  end: number | null;
+  role: StationMentionRole;
+  sequenceId: number | null;
+};
+
+export type AnnouncementAnalysis = {
+  isTransitAnnouncement: boolean;
+  mentions: StationMention[];
+  metadata: RailwayAnnouncementMetadata;
+};
 
 export type MetadataResult = {
   isTransitAnnouncement: boolean;
   normalizedTranscription: string;
   metadata: RailwayAnnouncementMetadata;
 };
-
-export interface MetadataService {
-  extract(transcription: string, stationCandidates: readonly StationCandidate[]): Promise<MetadataResult>;
-}

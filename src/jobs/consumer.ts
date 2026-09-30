@@ -4,12 +4,23 @@ import { ClipsRepository } from "../db/clips-repository";
 import { JobsRepository } from "../db/jobs-repository";
 import { D1StationsRepository } from "../db/stations-repository";
 import { AttachmentUnavailableError, DiscordRestClient, type DiscordFile } from "../discord/rest-client";
+import {
+  formatDemoDiagnosticPreviews,
+  formatDemoDiagnostics,
+  type DemoDiagnostics,
+} from "../discord/demo-diagnostics";
 import { formatAnalysisResult, formatFailure } from "../discord/messages";
 import { GeminiMetadataService, GeminiSafetyBlockedError, isRetryableGeminiError } from "../metadata/gemini";
 import { generateRailwayFilename } from "../railway/filename";
 import { StationCandidateService } from "../stations/candidate-service";
 import { resolveStation } from "../stations/resolver";
-import { CloudflareWhisperTranscriptionService } from "../transcription/workers-ai";
+import { groupStopSequences } from "../stations/stop-sequences";
+import type { TranscriptionResult } from "../transcription/service";
+import {
+  CloudflareWhisperTranscriptionService,
+  whisperModel,
+  whisperSettings,
+} from "../transcription/workers-ai";
 import { formatAudioJobAlert } from "./alerts";
 import { AudioJobProcessingTimeoutError, withAudioJobProcessingTimeout } from "./processing-timeout";
 import { staleAudioJobCutoff, staleAudioJobTimeoutMs } from "./staleness";
@@ -48,6 +59,7 @@ type ProcessingResources = {
   callbacks: ProcessingCallbacks;
   clips: ProcessingClips;
   sendAlerts: boolean;
+  showDemoDiagnostics?: boolean;
 };
 
 function errorDetails(error: unknown): { errorName: string; errorMessage: string } {
@@ -156,9 +168,10 @@ async function updateProgress(
   content: string,
   callbacks: ProcessingCallbacks,
   discord: DiscordRestClient,
+  _asFollowup = false,
 ): Promise<void> {
   try {
-    await editOriginalResponse(job, content, callbacks, discord, "progress");
+    await editOriginalResponse(job, `🔧 ${content}`, callbacks, discord, "progress");
   } catch (error) {
     console.error("audio_job_progress_update_failed", { jobId: job.id, ...errorDetails(error) });
   }
@@ -192,9 +205,89 @@ async function notify(
   return false;
 }
 
+async function notifyDemo(
+  job: AudioJob,
+  diagnostics: DemoDiagnostics,
+  callbacks: ProcessingCallbacks,
+  discord: DiscordRestClient,
+  file: DiscordFile,
+): Promise<boolean> {
+  const callback = await runStage(job.id, "discord_callback_lookup", () => callbacks.get(job.id));
+  if (callback === null || Date.parse(callback.expiresAt) <= Date.now()) return false;
+  const messages = formatDemoDiagnostics(diagnostics);
+  const result = await discord.editOriginalResponse(
+    callback.token,
+    formatAnalysisResult(diagnostics.metadata, diagnostics.normalizedTranscription, diagnostics.filename),
+    file,
+  );
+  if (!result.ok) {
+    console.error("demo_diagnostics_original_edit_failed", {
+      jobId: job.id, status: result.status, responseBody: result.responseBody,
+    });
+    return false;
+  }
+  const debugMarkdown = [
+    "# platform-ai-agent-demo debug output",
+    "",
+    ...messages,
+  ].join("\n\n");
+  const encodedDebug = new TextEncoder().encode(debugMarkdown);
+  const debugFileResult = await discord.sendInteractionFollowup(
+    callback.token,
+    "📎 完全なデバッグ出力です。画面上の表示は各項目の先頭部分だけに制限しています。",
+    {
+      data: encodedDebug.buffer.slice(
+        encodedDebug.byteOffset,
+        encodedDebug.byteOffset + encodedDebug.byteLength,
+      ) as ArrayBuffer,
+      filename: "platform-ai-agent-demo-debug.md",
+      contentType: "text/markdown; charset=utf-8",
+    },
+  );
+  if (!debugFileResult.ok) {
+    console.error("demo_diagnostics_file_failed", {
+      jobId: job.id,
+      status: debugFileResult.status,
+      responseBody: debugFileResult.responseBody,
+    });
+  }
+  const previewMessages = formatDemoDiagnosticPreviews(diagnostics);
+  for (let index = 0; index < previewMessages.length; index += 1) {
+    const followup = await discord.sendInteractionFollowup(callback.token, previewMessages[index]!);
+    if (!followup.ok) {
+      console.error("demo_diagnostics_followup_failed", {
+        jobId: job.id, index, status: followup.status, responseBody: followup.responseBody,
+      });
+      // The analysis result and audio are already delivered. Debug output is best-effort.
+      break;
+    }
+  }
+  return true;
+}
+
 const rejectedContentMessage = "この音声は利用条件に合わないため処理できませんでした。";
 const emptyTranscriptionMessage = "音声から文字を認識できませんでした。別の音声ファイルでお試しください。";
 const staleJobMessage = "音声処理がタイムアウトしたため停止しました。お手数ですが、もう一度コマンドを実行してください。";
+
+function formatDemoFailure(error: unknown, stage: string, attempt: number): string {
+  const details = errorDetails(error);
+  const message = details.errorMessage.slice(0, 1_300).replaceAll("```", "``\u200b`");
+  const retrySummary = stage.startsWith("gemini_")
+    ? "同じ文字起こしを使ったGemini再試行（最大3回）も完了できませんでした。"
+    : "この失敗では処理全体を再実行しません。";
+  return [
+    "❌ **デモ処理に失敗しました**",
+    "",
+    `失敗ステージ: \`${stage}\``,
+    `エラー種別: \`${details.errorName}\``,
+    `Queue受信回数: ${attempt}`,
+    `再試行: ${retrySummary}`,
+    "Queueへの再投入: なし（同じ音声の再文字起こしは行いません）",
+    "",
+    "エラー内容:",
+    `\`\`\`text\n${message}\n\`\`\``,
+  ].join("\n");
+}
 
 export async function stopStaleAudioJobs(env: Env, now = new Date()): Promise<number> {
   const jobs = new JobsRepository(env.DB);
@@ -236,22 +329,34 @@ async function processJob(
   const callbacks = resources?.callbacks ?? new CallbackSecretsRepository(env.DB);
   const clips = resources?.clips ?? new ClipsRepository(env.DB);
   const alertsEnabled = resources?.sendAlerts ?? true;
+  const showDemoProgress = resources?.showDemoDiagnostics ?? false;
   const discord = new DiscordRestClient(env.DISCORD_BOT_TOKEN, env.DISCORD_APPLICATION_ID);
   const attachment = attachmentFor(job);
   let audio: ArrayBuffer | null = null;
   let transcriptionText = job.transcriptionText;
+  let transcriptionResult: TranscriptionResult | null = null;
   let needsTranscriptionCheckpoint = false;
   if (transcriptionText === null) {
     await jobs.updateStatus(job.id, "transcribing");
-    await updateProgress(job, "音声ファイルを取得しています…", callbacks, discord);
+    await updateProgress(job, "音声ファイルを取得しています…", callbacks, discord, showDemoProgress);
     audio = await runStage(job.id, "attachment_download", () =>
       discord.downloadTemporaryAttachment(attachment, maxAudioBytes(env)));
-    await updateProgress(job, "音声を文字起こししています…", callbacks, discord);
+    await updateProgress(job, "音声をWhisperへ送信し、文字起こししています…", callbacks, discord, showDemoProgress);
     const transcription = await runStage(job.id, "whisper_transcription", () =>
       new CloudflareWhisperTranscriptionService(env.AI).transcribe({
         audio: audio as ArrayBuffer, contentType: job.contentType, filename: job.originalFilename,
         durationSecs: job.durationSecs,
       }));
+    transcriptionResult = transcription;
+    if (showDemoProgress) {
+      await updateProgress(
+        job,
+        `Whisperの文字起こしが完了しました（言語: ${transcription.language ?? "不明"}、セグメント: ${transcription.segments.length}件）。`,
+        callbacks,
+        discord,
+        true,
+      );
+    }
     if (!(await jobs.isActive(job.id))) {
       console.warn("audio_job_processing_stopped", { jobId: job.id, stage: "whisper_transcription" });
       return;
@@ -260,7 +365,13 @@ async function processJob(
     needsTranscriptionCheckpoint = true;
   } else {
     console.info("audio_job_transcription_checkpoint_reused", { jobId: job.id, attempt });
-    await updateProgress(job, "保存済みの文字起こしを再利用して、メタデータ解析を再開しています…", callbacks, discord);
+    await updateProgress(
+      job,
+      "保存済みの文字起こしを再利用して、メタデータ解析を再開しています…",
+      callbacks,
+      discord,
+      showDemoProgress,
+    );
   }
   if (transcriptionText.trim() === "") {
     await jobs.discardTranscription(job.id);
@@ -270,16 +381,31 @@ async function processJob(
     return;
   }
   await jobs.updateStatus(job.id, "metadata_extracting");
-  await updateProgress(job, "文字起こしが完了しました。利用条件とメタデータを確認しています…", callbacks, discord);
-  const candidateService = new StationCandidateService(new D1StationsRepository(env.DB));
-  const candidates = await runStage(job.id, "station_candidates", () => candidateService.candidates(transcriptionText));
-  let extracted: Awaited<ReturnType<GeminiMetadataService["extract"]>>;
-  try {
-    extracted = await runStage(job.id, "gemini_metadata", () =>
-      new GeminiMetadataService(env.GEMINI_API_KEY, env.GEMINI_MODEL).extract(transcriptionText, candidates));
-  } catch (error) {
+  const gemini = new GeminiMetadataService(env.GEMINI_API_KEY, env.GEMINI_MODEL);
+  const runGeminiStage = async <T>(stage: string, operation: () => Promise<T>): Promise<T> => {
+    const maximumGeminiAttempts = showDemoProgress ? 3 : 1;
+    let geminiAttempt = 1;
+    while (true) {
+      try {
+        return await runStage(job.id, stage, operation);
+      } catch (error) {
+        if (!showDemoProgress || !isRetryableGeminiError(error) || geminiAttempt >= maximumGeminiAttempts) throw error;
+        const details = errorDetails(error);
+        await updateProgress(
+          job,
+          `${stage}で一時エラーが発生しました（${details.errorName}: ${details.errorMessage.slice(0, 300)}）。同じ文字起こしのままこの段階だけ再試行します（${geminiAttempt + 1}/${maximumGeminiAttempts}）…`,
+          callbacks,
+          discord,
+          true,
+        );
+        await new Promise((resolve) => setTimeout(resolve, geminiAttempt * 1_000));
+        geminiAttempt += 1;
+      }
+    }
+  };
+  const handleGeminiFailure = async (error: unknown, fallbackStage: string): Promise<void> => {
     if (!(await jobs.isActive(job.id))) {
-      console.warn("audio_job_processing_stopped", { jobId: job.id, stage: "gemini_metadata" });
+      console.warn("audio_job_processing_stopped", { jobId: job.id, stage: fallbackStage });
       return;
     }
     if (error instanceof GeminiSafetyBlockedError) {
@@ -299,19 +425,36 @@ async function processJob(
     if (isRetryableGeminiError(error)) throw error;
     console.warn("audio_job_metadata_rejected", { jobId: job.id, ...errorDetails(error) });
     if (alertsEnabled) {
-      await sendAlert(env, discord, job.id, errorStage(error, "metadata_processing"), error, attempt);
+      await sendAlert(env, discord, job.id, errorStage(error, fallbackStage), error, attempt);
     }
     await jobs.discardTranscription(job.id);
     await jobs.updateStatus(job.id, "failed", "metadata_extraction_failed");
     await notify(job, formatFailure("processing_failed"), callbacks, discord);
     await jobs.clearEphemeral(job.id);
+  };
+
+  await updateProgress(job, "Gemini #1で放送構造と明示metadataを解析しています…", callbacks, discord, showDemoProgress);
+  let analysis: Awaited<ReturnType<GeminiMetadataService["analyze"]>>;
+  try {
+    analysis = await runGeminiStage("gemini_analysis", () => gemini.analyze(transcriptionText));
+  } catch (error) {
+    await handleGeminiFailure(error, "gemini_analysis");
     return;
   }
   if (!(await jobs.isActive(job.id))) {
-    console.warn("audio_job_processing_stopped", { jobId: job.id, stage: "gemini_metadata" });
+    console.warn("audio_job_processing_stopped", { jobId: job.id, stage: "gemini_analysis" });
     return;
   }
-  if (!extracted.isTransitAnnouncement) {
+  if (showDemoProgress) {
+    await updateProgress(
+      job,
+      `Gemini #1が完了しました（交通案内判定: ${analysis.isTransitAnnouncement}、駅mention: ${analysis.mentions.length}件）。`,
+      callbacks,
+      discord,
+      true,
+    );
+  }
+  if (!analysis.isTransitAnnouncement) {
     console.warn("audio_job_non_transit_blocked", {
       user_id: job.source.userId,
       guild_id: job.source.guildId,
@@ -328,20 +471,76 @@ async function processJob(
   if (needsTranscriptionCheckpoint) {
     await runStage(job.id, "transcription_checkpoint", () => jobs.saveTranscription(job.id, transcriptionText));
   }
-  const resolution = resolveStation(candidates, extracted.metadata.station);
-  const metadata = { ...extracted.metadata, station: resolution.stationName };
+
+  await updateProgress(job, "stop sequenceごとに駅候補と局所経路を検索しています…", callbacks, discord, showDemoProgress);
+  const candidateService = new StationCandidateService(new D1StationsRepository(env.DB));
+  const sequenceSearches = [];
+  for (const { id, mentions } of groupStopSequences(analysis.mentions)) {
+    const stationSearch = await runStage(job.id, `station_candidates_sequence_${id}`, () =>
+      candidateService.analyze(mentions.map(({ text }) => text).join("、")));
+    sequenceSearches.push({ id, mentions, stationSearch });
+  }
+  const candidates = [...new Map(sequenceSearches.flatMap(({ stationSearch }) => stationSearch.candidates)
+    .map((candidate) => [candidate.station.id, candidate])).values()];
+  if (showDemoProgress) {
+    const routeCount = sequenceSearches.reduce((sum, sequence) => sum + sequence.stationSearch.routeCandidates.length, 0);
+    await updateProgress(
+      job,
+      `sequence別探索が完了しました（sequence: ${sequenceSearches.length}件、経路候補: ${routeCount}件、駅候補: ${candidates.length}件）。`,
+      callbacks,
+      discord,
+      true,
+    );
+  }
+
+  const analysisForNormalization = {
+    isTransitAnnouncement: analysis.isTransitAnnouncement,
+    mentions: analysis.mentions,
+    metadata: analysis.metadata,
+  };
+  const normalizationSequences = sequenceSearches.map(({ id, mentions, stationSearch }) => ({
+    id,
+    mentions,
+    stationCandidates: stationSearch.candidates,
+    routeHypotheses: stationSearch.routeCandidates,
+  }));
+  await updateProgress(job, "Gemini #2で構造とsequence候補に制約された文字起こしを生成しています…", callbacks, discord, showDemoProgress);
+  let normalization: Awaited<ReturnType<GeminiMetadataService["normalize"]>>;
+  try {
+    normalization = await runGeminiStage("gemini_normalization", () =>
+      gemini.normalize(transcriptionText, analysisForNormalization, normalizationSequences));
+  } catch (error) {
+    await handleGeminiFailure(error, "gemini_normalization");
+    return;
+  }
+  if (!(await jobs.isActive(job.id))) {
+    console.warn("audio_job_processing_stopped", { jobId: job.id, stage: "gemini_normalization" });
+    return;
+  }
+
+  const resolution = resolveStation(candidates, analysis.metadata.station);
+  const metadata = { ...analysis.metadata, station: resolution.stationName };
   const filename = generateRailwayFilename(metadata, job.originalFilename);
+  if (showDemoProgress) {
+    await updateProgress(job, `解析結果を組み立てました（生成ファイル名: ${filename}）。`, callbacks, discord, true);
+  }
   if (!(await jobs.isActive(job.id))) {
     console.warn("audio_job_processing_stopped", { jobId: job.id, stage: "before_clip_save" });
     return;
   }
   await runStage(job.id, "clip_save", () => clips.save({
     jobId: job.id, clipIndex: 1, rawTranscription: transcriptionText,
-    normalizedTranscription: extracted.normalizedTranscription, metadata, resolution,
+    normalizedTranscription: normalization.normalizedTranscription, metadata, resolution,
     generatedFilename: filename, createdAt: new Date().toISOString(),
   }));
   if (audio === null) {
-    await updateProgress(job, "解析済みの音声ファイルを添付しています…", callbacks, discord);
+    await updateProgress(
+      job,
+      "解析済みの音声ファイルを添付しています…",
+      callbacks,
+      discord,
+      showDemoProgress,
+    );
     audio = await runStage(job.id, "attachment_download_for_result", () =>
       discord.downloadTemporaryAttachment(attachment, maxAudioBytes(env)));
   }
@@ -349,13 +548,41 @@ async function processJob(
     console.warn("audio_job_processing_stopped", { jobId: job.id, stage: "before_result_notification" });
     return;
   }
-  const delivered = await notify(
-    job,
-    formatAnalysisResult(metadata, extracted.normalizedTranscription, filename),
-    callbacks,
-    discord,
-    { data: audio, filename, contentType: job.contentType },
-  );
+  const resultFile = { data: audio, filename, contentType: job.contentType };
+  const delivered = resources?.showDemoDiagnostics
+    ? await notifyDemo(job, {
+      audioInput: {
+        filename: job.originalFilename,
+        contentType: job.contentType,
+        sizeBytes: job.sizeBytes,
+        durationSecs: job.durationSecs,
+      },
+      whisper: {
+        model: whisperModel,
+        settings: whisperSettings,
+        result: transcriptionResult ?? { language: null, text: transcriptionText, segments: [] },
+      },
+      transcription: transcriptionText,
+      analysis,
+      sequenceSearches,
+      gemini: {
+        analysis: analysis.diagnostics,
+        normalization: normalization.diagnostics,
+        normalizationGuard: normalization.normalizationGuard,
+      },
+      isTransitAnnouncement: analysis.isTransitAnnouncement,
+      normalizedTranscription: normalization.normalizedTranscription,
+      metadata,
+      resolution,
+      filename,
+    }, callbacks, discord, resultFile)
+    : await notify(
+      job,
+      formatAnalysisResult(metadata, normalization.normalizedTranscription, filename),
+      callbacks,
+      discord,
+      resultFile,
+    );
   if (!delivered) throw new Error("Discord result notification failed");
   await jobs.updateStatus(job.id, "completed");
   await runStage(job.id, "ephemeral_cleanup", () => jobs.clearEphemeral(job.id));
@@ -400,6 +627,7 @@ function demoResources(message: DemoAudioJobMessage): ProcessingResources {
     },
     clips: { save: async () => {} },
     sendAlerts: false,
+    showDemoDiagnostics: true,
   };
 }
 
@@ -436,32 +664,25 @@ export async function consumeAudioJobs(batch: MessageBatch<AudioJobMessage>, env
         message.ack();
       } catch (error) {
         const details = errorDetails(error);
-        if (error instanceof AttachmentUnavailableError
-          || error instanceof AudioJobProcessingTimeoutError
-          || message.attempts >= 5) {
-          console.error("demo_audio_job_processing_terminal", {
-            interactionId: demoMessage.interactionId,
-            queueMessageId: message.id,
-            attempt: message.attempts,
-            ...details,
-          });
-          await notify(
-            job,
-            formatFailure(error instanceof AttachmentUnavailableError ? "attachment_unavailable" : "processing_failed"),
-            resources.callbacks,
-            discord,
-          );
-          message.ack();
-        } else {
-          const delaySeconds = Math.min(300, 2 ** message.attempts * 5);
-          await updateProgress(
-            job,
-            `処理中に一時的なエラーが発生しました。再試行を待っています（次回 ${message.attempts + 1}/5）…`,
-            resources.callbacks,
-            discord,
-          );
-          message.retry({ delaySeconds });
-        }
+        const stage = errorStage(error, error instanceof AudioJobProcessingTimeoutError
+          ? "processing_timeout"
+          : "demo_processing");
+        console.error("demo_audio_job_processing_terminal", {
+          interactionId: demoMessage.interactionId,
+          queueMessageId: message.id,
+          attempt: message.attempts,
+          stage,
+          ...details,
+        });
+        await notify(
+          job,
+          error instanceof AttachmentUnavailableError
+            ? formatFailure("attachment_unavailable")
+            : formatDemoFailure(error, stage, message.attempts),
+          resources.callbacks,
+          discord,
+        );
+        message.ack();
       }
       continue;
     }

@@ -73,6 +73,9 @@ describe("owner-only demo", () => {
 
   it("runs the shared async analysis without issuing a D1 write", async () => {
     const sql: string[] = [];
+    const discordContents: string[] = [];
+    const discordFilenames: string[] = [];
+    let geminiRequests = 0;
     const db = {
       prepare(statement: string) {
         sql.push(statement);
@@ -94,9 +97,9 @@ describe("owner-only demo", () => {
         segments: [],
       }),
     };
-    const geminiOutput = {
+    const geminiAnalysisOutput = {
       isTransitAnnouncement: true,
-      normalizedTranscription: "次はテスト駅です",
+      mentions: [{ text: "テスト駅", start: 2, end: 6, role: "stop", sequenceId: 1 }],
       station: null,
       line: "テスト線",
       trainType: null,
@@ -110,7 +113,7 @@ describe("owner-only demo", () => {
       category: "general_information",
       summary: "次駅案内",
     };
-    const fetcher = vi.fn(async (input: string | URL | Request): Promise<Response> => {
+    const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       const url = String(input);
       if (url === demoCommand.attachment.url) {
         return new Response(new Uint8Array([1, 2, 3]), {
@@ -118,11 +121,27 @@ describe("owner-only demo", () => {
         });
       }
       if (url.includes("generativelanguage.googleapis.com")) {
+        geminiRequests += 1;
+        if (geminiRequests === 1) return new Response("temporary Gemini failure", { status: 503 });
+        const output = geminiRequests === 2
+          ? geminiAnalysisOutput
+          : { normalizedTranscription: "次はテスト駅です" };
         return Response.json({
-          candidates: [{ content: { parts: [{ text: JSON.stringify(geminiOutput) }] } }],
+          candidates: [{ content: { parts: [{ text: JSON.stringify(output) }] } }],
         });
       }
-      if (url.includes("/webhooks/")) return new Response(null, { status: 204 });
+      if (url.includes("/webhooks/")) {
+        if (typeof init?.body === "string") {
+          const payload = JSON.parse(init.body) as { content?: string };
+          if (payload.content !== undefined) discordContents.push(payload.content);
+        } else if (init?.body instanceof FormData) {
+          const payload = JSON.parse(String(init.body.get("payload_json"))) as { content?: string };
+          if (payload.content !== undefined) discordContents.push(payload.content);
+          const file = init.body.get("files[0]");
+          if (file instanceof File) discordFilenames.push(file.name);
+        }
+        return new Response(null, { status: 204 });
+      }
       throw new Error(`unexpected fetch: ${url}`);
     });
     vi.stubGlobal("fetch", fetcher);
@@ -162,9 +181,37 @@ describe("owner-only demo", () => {
     expect(ack).toHaveBeenCalledOnce();
     expect(retry).not.toHaveBeenCalled();
     expect(ai.run).toHaveBeenCalledOnce();
+    expect(geminiRequests).toBe(3);
     expect(sql.length).toBeGreaterThan(0);
     expect(sql.every((statement) => !/\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP)\b/iu.test(statement)))
       .toBe(true);
     expect(fetcher.mock.calls.some(([url]) => String(url).includes("/webhooks/"))).toBe(true);
+    expect(discordContents).toContain("🔧 音声ファイルを取得しています…");
+    expect(discordContents).toContain("🔧 音声をWhisperへ送信し、文字起こししています…");
+    expect(discordContents).toContain("🔧 Gemini #1で放送構造と明示metadataを解析しています…");
+    expect(discordContents.some((content) =>
+      content.includes("同じ文字起こしのままこの段階だけ再試行します（2/3）"))).toBe(true);
+    expect(discordContents).toContain("🔧 Gemini #1が完了しました（交通案内判定: true、駅mention: 1件）。");
+    expect(discordContents).toContain("🔧 Gemini #2で構造とsequence候補に制約された文字起こしを生成しています…");
+    expect(discordContents.some((content) => content.startsWith("解析完了\n"))).toBe(true);
+    expect(discordFilenames).toContain("platform-ai-agent-demo-debug.md");
+    const resultCall = fetcher.mock.calls.find(([, init]) => {
+      if (!(init?.body instanceof FormData)) return false;
+      const payload = JSON.parse(String(init.body.get("payload_json"))) as { content?: string };
+      return payload.content?.startsWith("解析完了\n") ?? false;
+    });
+    expect(String(resultCall?.[0])).toContain("/messages/@original");
+    expect((resultCall?.[1]?.body as FormData).get("files[0]")).toBeInstanceOf(File);
+    const diagnostics = discordContents.filter((content) => content.startsWith("**")).join("\n");
+    expect(discordContents.filter((content) => content.startsWith("**"))).toHaveLength(5);
+    expect(diagnostics).toContain("Whisper");
+    expect(diagnostics).toContain("次はテスト駅です");
+    expect(diagnostics).toContain("sequence別の駅・経路探索");
+    expect(diagnostics).toContain("[REDACTED]");
+    expect(diagnostics).toContain("Gemini #1 構造解析");
+    expect(diagnostics).toContain("Gemini #2 raw response");
+    expect(diagnostics).toContain("最終判定");
+    expect(discordContents.filter((content) => content.startsWith("**"))
+      .every((content) => content.length <= 2_000 && content.includes("```"))).toBe(true);
   });
 });

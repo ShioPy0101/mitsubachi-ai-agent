@@ -2,6 +2,7 @@ import type { DiscordAttachment } from "./schemas";
 
 const defaultFetcher: typeof fetch = (input, init) => fetch(input, init);
 const defaultRequestTimeoutMs = 30_000;
+const maximumRateLimitRetries = 5;
 
 export class DiscordRequestTimeoutError extends Error {
   constructor(readonly timeoutMs: number) {
@@ -98,6 +99,22 @@ export class DiscordRestClient {
       body: payload.body,
     });
     return apiResult(response);
+  }
+
+  async sendInteractionFollowup(token: string, content: string, file?: DiscordFile): Promise<DiscordApiResult> {
+    const payload = messagePayload(content, file);
+    for (let attempt = 0; attempt <= maximumRateLimitRetries; attempt += 1) {
+      const response = await this.request(`https://discord.com/api/v10/webhooks/${this.applicationId}/${token}`, {
+        method: "POST",
+        ...(payload.contentTypeHeader === undefined ? {} : { headers: { "Content-Type": payload.contentTypeHeader } }),
+        body: payload.body,
+      });
+      if (response.status !== 429 || attempt === maximumRateLimitRetries) return apiResult(response);
+      const rateLimit = await response.json().catch(() => null) as { retry_after?: unknown } | null;
+      const retryAfterSeconds = typeof rateLimit?.retry_after === "number" ? rateLimit.retry_after : 1;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(10_000, Math.max(100, retryAfterSeconds * 1_000))));
+    }
+    throw new Error("unreachable");
   }
 
   async sendChannelMessage(channelId: string, content: string, file?: DiscordFile): Promise<DiscordApiResult> {

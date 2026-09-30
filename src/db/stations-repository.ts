@@ -182,11 +182,14 @@ function scoreRoute(
   const orderConsistency = coveredAnchors === 0 ? 0 : orderedAnchors / coveredAnchors;
   const pathLength = stations.length;
   const detourRatio = pathLength === 0 ? 1 : Math.max(0, pathLength - shortestLength) / pathLength;
+  const localPathAllowance = Math.max(4, anchorNames.length * 4);
+  const localityPenalty = Math.min(0.55, Math.max(0, pathLength - localPathAllowance) * 0.015);
   const score = Math.max(0, Math.min(1,
     anchorCoverage * 0.55
       + orderConsistency * 0.35
-      - transferCount * 0.05
-      - detourRatio * 0.1,
+      - transferCount * 0.08
+      - detourRatio * 0.1
+      - localityPenalty,
   ));
   return { anchorCoverage, orderConsistency, transferCount, pathLength, score };
 }
@@ -261,9 +264,20 @@ export class D1StationsRepository implements StationRepository {
     return result.results.map(toPositionedStation);
   }
 
-  private async expandPath(path: SegmentPath): Promise<RoutePathStation[]> {
+  private async expandPath(path: SegmentPath, endpointContextStations: number): Promise<RoutePathStation[]> {
+    const segments = path.segments.map((segment) => ({ ...segment }));
+    const first = segments[0];
+    const last = segments.at(-1);
+    if (first !== undefined && endpointContextStations > 0) {
+      const direction = Math.sign(first.toSeq - first.fromSeq);
+      first.fromSeq -= direction * endpointContextStations;
+    }
+    if (last !== undefined && endpointContextStations > 0) {
+      const direction = Math.sign(last.toSeq - last.fromSeq);
+      last.toSeq += direction * endpointContextStations;
+    }
     const stations: Station[] = [];
-    for (const segment of path.segments) {
+    for (const segment of segments) {
       for (const positioned of await this.expandSegment(segment)) {
         if (stations.at(-1)?.name !== positioned.station.name) stations.push(positioned.station);
       }
@@ -271,17 +285,31 @@ export class D1StationsRepository implements StationRepository {
     return stations.map((station, routeIndex) => ({ station, routeIndex }));
   }
 
-  async findRouteCandidates(anchorNames: readonly string[], maxCandidates: number): Promise<RoutePathCandidate[]> {
+  async findRouteCandidates(
+    anchorNames: readonly string[],
+    maxCandidates: number,
+    endpointContextStations = 0,
+  ): Promise<RoutePathCandidate[]> {
     if (anchorNames.length < 2 || maxCandidates < 1) return [];
     const occurrences = await this.findAnchorOccurrences(anchorNames);
-    const starts = occurrences.filter(({ station }) => station.name === anchorNames[0]);
-    const goals = occurrences.filter(({ station }) => station.name === anchorNames.at(-1));
-    if (starts.length === 0 || goals.length === 0) return [];
-    const segmentPaths = enumerateSegmentPaths(starts, goals, await this.findConnections(), maxCandidates * 8);
+    const endpointPairs: Array<readonly [number, number]> = [[0, anchorNames.length - 1]];
+    for (let index = 0; index + 1 < anchorNames.length; index += 1) endpointPairs.push([index, index + 1]);
+    const uniquePairs = [...new Map(endpointPairs.map(([start, end]) => [`${start}:${end}`, [start, end] as const])).values()];
+    const connections = await this.findConnections();
+    const segmentPaths: SegmentPath[] = [];
+    for (const [startIndex, goalIndex] of uniquePairs) {
+      const startName = anchorNames[startIndex];
+      const goalName = anchorNames[goalIndex];
+      if (startName === undefined || goalName === undefined) continue;
+      const starts = occurrences.filter(({ station }) => station.name === startName);
+      const goals = occurrences.filter(({ station }) => station.name === goalName);
+      segmentPaths.push(...enumerateSegmentPaths(starts, goals, connections, maxCandidates * 8));
+    }
+    if (segmentPaths.length === 0) return [];
     const expanded: Array<{ stations: RoutePathStation[]; transferCount: number }> = [];
     const stationSignatures = new Set<string>();
     for (const path of segmentPaths) {
-      const stations = await this.expandPath(path);
+      const stations = await this.expandPath(path, endpointContextStations);
       const signature = stations.map(({ station }) => station.id).join(",");
       if (stations.length === 0 || stationSignatures.has(signature)) continue;
       stationSignatures.add(signature);

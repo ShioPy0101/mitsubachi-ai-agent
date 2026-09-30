@@ -12,8 +12,8 @@ External values cross runtime-validation adapters before reaching domain code. G
 
 1. `/platform-ai-agent audio:<attachment>` validates the interaction signature and attachment, inserts a job idempotently by Interaction ID, enqueues `{ jobId }`, and immediately returns a public deferred ACK. Progress and the final result update the same channel-visible message.
 2. `/platform-search query:<text>` performs a bounded repository search and returns an immediate ephemeral response.
-3. The Queue consumer reloads the interaction attachment reference from its short-lived table, downloads it with a configured byte cap, transcribes it through Workers AI, checkpoints the raw transcription for retry, generates station candidates from D1, parses metadata through Gemini structured JSON plus Zod, stores the clip, and edits the Interaction response with the normalized transcription and renamed audio attachment.
-4. Whisper success followed by Gemini failure is stored as `partial`; other terminal failures are `failed` after retry policy is exhausted.
+3. The Queue consumer reloads the interaction attachment reference from its short-lived table, downloads it with a configured byte cap, and transcribes it through Workers AI. Gemini #1 classifies the domain, extracts explicit metadata, and labels verbatim station mentions by semantic role and stop-sequence ID without correcting text. The app checkpoints the safe raw transcription, searches D1 independently for each stop sequence, then Gemini #2 produces a constrained normalized transcription from that structure and those local route hypotheses. The clip is stored and the Interaction response is edited with the normalized transcription and renamed audio attachment.
+4. Whisper success followed by either Gemini-stage failure is stored as `partial`; other terminal failures are `failed` after retry policy is exhausted.
 
 ## Decisions and technical risks
 
@@ -22,7 +22,7 @@ External values cross runtime-validation adapters before reaching domain code. G
 - **Slash attachments:** an attachment command invocation does not expose a durable source message ID. Its Interaction ID plus attachment ID is the stable identity. The received CDN URL and follow-up token live in dedicated short-lived tables, are excluded from search/domain metadata, and are deleted after terminal notification or expiry cleanup. If queue delay exceeds Discord's webhook-token lifetime and a channel is available, the bot falls back to a channel message.
 - **Audio limits/chunking:** the input is bounded before download. PCM WAV is decoded directly and MP3 is decoded with a compact WebAssembly decoder. Sustained silent intervals produce valid mono PCM WAV chunks, which are transcribed independently and rejoined in time order. Unsupported codecs retain the previous single-request behavior; compressed bytes are never split arbitrarily.
 - **Multilingual audio:** Whisper language detection is automatic and receives multilingual public-transit context through `initial_prompt`; it still runs only once per audio file. Gemini preserves Japanese, English, Chinese, Korean, and other language blocks in their original language and order; equivalent blocks in different languages are not deduplicated.
-- **Gemini:** Gemini is only a metadata parser/normalizer. It receives a JSON schema, a non-inference prompt, and its JSON is parsed with Zod. Filenames are deterministic domain output.
+- **Gemini:** Gemini #1 is an analysis-only boundary: it cannot correct text and returns explicit metadata plus verbatim mentions with `destination` / `direction` / `stop` / `service_change_point` roles and sequence IDs. Only `stop` and `service_change_point` mentions from the same sequence enter D1 route search. Gemini #2 receives those isolated sequence hypotheses as non-authoritative context and returns only `normalizedTranscription`; a deterministic edit-distance guard rejects wholesale rewrites. Both calls use JSON schemas and Zod. Filenames remain deterministic domain output.
 - **Retry checkpoint:** A successful Whisper transcription is stored on the job. Transient Gemini or D1 failures resume from that text instead of paying for and waiting on Whisper again. Audio bytes remain ephemeral and are re-downloaded only when a retried job needs to attach the result.
 - **Reprocessing:** the normal insert path is idempotent. Explicit reprocess is not exposed in the MVP; when added it must create a distinct attempt record rather than weaken the unique Discord attachment constraint.
 - **Search:** MVP uses escaped `LIKE` predicates behind `ClipsRepository`; moving to FTS5 does not affect command/domain code.
@@ -32,7 +32,7 @@ External values cross runtime-validation adapters before reaching domain code. G
 
 ## Status transitions
 
-`pending -> queued -> transcribing -> Gemini safety/domain check -> metadata_extracting -> completed`
+`pending -> queued -> transcribing -> Gemini #1 safety/domain/structure -> sequence-scoped D1 routes -> Gemini #2 normalization -> completed`
 
 Whisperの結果は、Geminiの厳格なSafety Settingsと公共交通案内のドメイン判定を通過するまで保存しない。Safety Block、公共交通以外、判定不能、Gemini障害はfail-closedとし、本文をD1へ保存せず後段処理を中断する。
 

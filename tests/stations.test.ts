@@ -3,6 +3,7 @@ import { StationCandidateService, scoreStation, type StationRepository } from ".
 import { buildStationLinePositions, generateStationsSql, parseStationsCsv } from "../src/stations/import";
 import { normalizeKana, normalizeStationName } from "../src/stations/normalization";
 import { resolveStation } from "../src/stations/resolver";
+import { groupStopSequences } from "../src/stations/stop-sequences";
 import { levenshteinDistance, stationKanaSimilarity } from "../src/stations/similarity";
 import type { RoutePathCandidate, Station, StationContext } from "../src/stations/types";
 import { iseStations } from "./fixtures/stations";
@@ -18,6 +19,19 @@ class FixtureRepository implements StationRepository {
 }
 
 describe("station normalization and ranking", () => {
+  it("keeps destination and direction mentions out of ordered stop sequences", () => {
+    const mentions = [
+      { text: "名鉄名古屋", start: 0, end: 6, role: "direction" as const, sequenceId: null },
+      { text: "神宮前", start: 7, end: 10, role: "direction" as const, sequenceId: null },
+      { text: "名鉄一宮", start: 11, end: 15, role: "destination" as const, sequenceId: null },
+      { text: "A", start: 16, end: 17, role: "stop" as const, sequenceId: 1 },
+      { text: "B", start: 18, end: 19, role: "stop" as const, sequenceId: 1 },
+      { text: "C", start: 20, end: 21, role: "stop" as const, sequenceId: 1 },
+    ];
+
+    expect(groupStopSequences(mentions)).toEqual([{ id: 1, mentions: mentions.slice(3) }]);
+  });
+
   it("normalizes name, kana script and small-ke variants", () => {
     expect(normalizeStationName(" 五十鈴ヶ丘 ")).toBe(normalizeStationName("五十鈴ケ丘"));
     expect(normalizeKana("いすずゖおか")).toBe(normalizeKana("イスズガオカ"));
@@ -109,6 +123,76 @@ describe("station normalization and ranking", () => {
       onExactPath: true,
       routeCandidateIds: [0],
       anchor: false,
+    });
+  });
+
+  it("downweights an exact station-name match that conflicts with its stop-sequence route", async () => {
+    const base = {
+      kanaSource: "pykakasi", operatorName: null, lineName: "案内線", prefecture: "テスト県",
+      prevStation: null, nextStation: null, longitude: null, latitude: null, postal: null,
+    };
+    const start: Station = { ...base, id: 1, name: "始点", kana: "してん" };
+    const falseExact: Station = { ...base, id: 2, name: "奈良", kana: "なら", lineName: "別路線" };
+    const end: Station = { ...base, id: 3, name: "終点", kana: "しゅうてん" };
+    const route: RoutePathCandidate = {
+      stations: [start, end].map((station, routeIndex) => ({ station, routeIndex })),
+      anchorCoverage: 2 / 3,
+      orderConsistency: 1,
+      transferCount: 0,
+      pathLength: 2,
+      score: 0.7,
+    };
+    const transcription = "始点、奈良、終点の順に止まります";
+
+    const candidates = await new StationCandidateService(
+      new FixtureRepository([start, falseExact, end], [route]),
+    ).candidates(transcription);
+    const nara = candidates.find(({ station }) => station.name === "奈良");
+
+    expect(scoreStation(falseExact, transcription, {}).nameSimilarity).toBe(1);
+    expect(nara).toBeUndefined();
+    expect(candidates[0]?.station.name).not.toBe("奈良");
+  });
+
+  it("re-evaluates 武生 from the ordered ? → 鯖江 → 福井 route context", async () => {
+    const base = {
+      kanaSource: "pykakasi", operatorName: null, lineName: "ハピラインふくい線", prefecture: "福井県",
+      longitude: null, latitude: null, postal: null,
+    };
+    const takefu: Station = {
+      ...base, id: 1, name: "武生", kana: "たけふ", prevStation: "王子保", nextStation: "鯖江",
+    };
+    const sabae: Station = {
+      ...base, id: 2, name: "鯖江", kana: "さばえ", prevStation: "武生", nextStation: "北鯖江",
+    };
+    const fukui: Station = {
+      ...base, id: 3, name: "福井", kana: "ふくい", prevStation: "越前花堂", nextStation: "森田",
+    };
+    const route: RoutePathCandidate = {
+      stations: [takefu, sabae, fukui].map((station, routeIndex) => ({ station, routeIndex })),
+      anchorCoverage: 1,
+      orderConsistency: 1,
+      transferCount: 0,
+      pathLength: 3,
+      score: 0.9,
+    };
+
+    const diagnostics = await new StationCandidateService(
+      new FixtureRepository([sabae, fukui], [route]),
+    ).analyze("竹府、鯖江、福井");
+
+    expect(diagnostics.anchorNames).toEqual(["鯖江", "福井"]);
+    expect(diagnostics.candidates.find(({ station }) => station.name === "武生")).toMatchObject({
+      routeSupported: true,
+      onExactPath: true,
+      routeOrderConsistent: true,
+      routeIndex: 0,
+      previousAnchor: "鯖江",
+      nextAnchor: "福井",
+      routeCandidateIds: [0],
+      bestRouteRank: 0,
+      anchor: false,
+      routeContextBonus: 0.25,
     });
   });
 

@@ -10,8 +10,22 @@ import {
 
 export interface StationRepository {
   findCandidatePool(searchText: string, context: StationContext, limit: number): Promise<Station[]>;
-  findRouteCandidates(anchorNames: readonly string[], maxCandidates: number): Promise<RoutePathCandidate[]>;
+  findRouteCandidates(
+    anchorNames: readonly string[],
+    maxCandidates: number,
+    endpointContextStations?: number,
+  ): Promise<RoutePathCandidate[]>;
 }
+
+export type StationCandidateDiagnostics = {
+  searchText: string;
+  context: StationContext;
+  pool: Station[];
+  eligiblePool: Station[];
+  anchorNames: string[];
+  routeCandidates: RoutePathCandidate[];
+  candidates: StationCandidate[];
+};
 
 function adjacencyScore(station: Station, context: StationContext): number {
   const previous = context.previousStation;
@@ -80,10 +94,14 @@ export class StationCandidateService {
   constructor(private readonly repository: StationRepository) {}
 
   async candidates(transcription: string, context: StationContext = {}): Promise<StationCandidate[]> {
+    return (await this.analyze(transcription, context)).candidates;
+  }
+
+  async analyze(transcription: string, context: StationContext = {}): Promise<StationCandidateDiagnostics> {
     const searchText = extractStationSearchText(transcription);
     const pool = await this.repository.findCandidatePool(searchText, context, 100);
-    const initial = pool
-      .filter((station) => isEligibleStationMention(station, transcription))
+    const eligiblePool = pool.filter((station) => isEligibleStationMention(station, transcription));
+    const initial = eligiblePool
       .map((station) => scoreStation(station, transcription, context));
     const anchorNames = [...new Map(
       initial
@@ -95,12 +113,13 @@ export class StationCandidateService {
       .map(([name]) => name)
       .slice(0, 12);
     const routeCandidates = anchorNames.length >= 2
-      ? await this.repository.findRouteCandidates(anchorNames, 5)
+      ? await this.repository.findRouteCandidates(anchorNames, 5, 2)
       : [];
     const routeById = new Map<number, {
       station: Station;
       routeCandidateIds: number[];
       bestRouteRank: number;
+      bestRouteScore: number;
       routeIndex: number;
       routeOrderConsistent: boolean;
     }>();
@@ -112,6 +131,7 @@ export class StationCandidateService {
             station: item.station,
             routeCandidateIds: [rank],
             bestRouteRank: rank,
+            bestRouteScore: route.score,
             routeIndex: item.routeIndex,
             routeOrderConsistent: route.orderConsistency === 1,
           });
@@ -120,19 +140,22 @@ export class StationCandidateService {
         }
       }
     });
-    const combined = new Map(
-      pool.filter((station) => isEligibleStationMention(station, transcription)).map((station) => [station.id, station]),
-    );
+    const combined = new Map(eligiblePool.map((station) => [station.id, station]));
     for (const match of routeById.values()) {
       if (isEligibleStationMention(match.station, transcription)) combined.set(match.station.id, match.station);
     }
-    return [...combined.values()]
+    const candidates = [...combined.values()]
       .map((station) => scoreStation(station, transcription, context))
       .map((candidate): StationCandidate => {
         const route = routeById.get(candidate.station.id);
-        if (route === undefined) return candidate;
+        if (route === undefined) {
+          const exactButRouteInconsistent = routeCandidates.length > 0
+            && (candidate.nameSimilarity === 1 || candidate.kanaSimilarity === 1);
+          return exactButRouteInconsistent ? { ...candidate, score: candidate.score * 0.6 } : candidate;
+        }
         const routeRankFactor = Math.max(0.4, 1 - route.bestRouteRank * 0.15);
-        const routeContextBonus = STATION_MATCH_WEIGHTS.exactPath * routeRankFactor;
+        const routeQualityFactor = route.bestRouteScore >= 0.8 ? 1 : route.bestRouteScore;
+        const routeContextBonus = STATION_MATCH_WEIGHTS.exactPath * routeRankFactor * routeQualityFactor;
         return {
           ...candidate,
           onExactPath: true,
@@ -154,5 +177,6 @@ export class StationCandidateService {
       .filter((candidate, index, ranked) =>
         ranked.findIndex((item) => item.station.name === candidate.station.name) === index)
       .slice(0, 24);
+    return { searchText, context, pool, eligiblePool, anchorNames, routeCandidates, candidates };
   }
 }

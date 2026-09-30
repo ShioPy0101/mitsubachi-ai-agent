@@ -66,6 +66,22 @@ describe("DiscordRestClient", () => {
     expect((file as File).size).toBe(3);
   });
 
+  it("sends interaction followups without exposing bot authorization", async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+    const client = new DiscordRestClient("bot-token", "application-id", fetcher);
+
+    await expect(client.sendInteractionFollowup("interaction-token", "debug"))
+      .resolves.toEqual({ ok: true });
+    expect(fetcher).toHaveBeenCalledWith(
+      "https://discord.com/api/v10/webhooks/application-id/interaction-token",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content: "debug", allowed_mentions: { parse: [] } }),
+      },
+    );
+  });
+
   it("returns Discord error details without throwing them away", async () => {
     const fetcher = vi.fn().mockResolvedValue(new Response('{"message":"Unknown Webhook","code":10015}', { status: 404 }));
     const client = new DiscordRestClient("bot-token", "application-id", fetcher);

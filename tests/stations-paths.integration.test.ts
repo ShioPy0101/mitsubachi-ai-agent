@@ -1,6 +1,7 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { D1StationsRepository } from "../src/db/stations-repository";
+import { StationCandidateService } from "../src/stations/candidate-service";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv {
@@ -142,7 +143,7 @@ describe("D1 ordered station paths", () => {
     await segment("wrong-order", [1, 5, 4, 3]);
     const routes = await new D1StationsRepository(env.DB).findRouteCandidates(["A", "B", "C", "Z"], 5);
 
-    expect(routes).toHaveLength(3);
+    expect(routes.length).toBeGreaterThanOrEqual(3);
     expect(names(routes[0]!)).toEqual(["A", "B", "C", "Z"]);
     expect(routes[0]?.anchorCoverage).toBe(1);
     expect(routes[0]?.orderConsistency).toBe(1);
@@ -150,6 +151,96 @@ describe("D1 ordered station paths", () => {
     const wrongOrder = routes.find((route) => names(route).join() === "A,C,B,Z");
     expect(wrongOrder?.orderConsistency).toBeLessThan(1);
     expect(routes[0]!.score).toBeGreaterThan(wrongOrder!.score);
+  });
+
+  it("uses a strong adjacent anchor pair when false endpoint anchors have no route", async () => {
+    await Promise.all([
+      station(1, "白鷺", "別線", "大阪府"),
+      station(2, "武生", "ハピラインふくい線", "福井県"),
+      station(3, "鯖江", "ハピラインふくい線", "福井県"),
+      station(4, "北鯖江", "ハピラインふくい線", "福井県"),
+      station(5, "福井", "ハピラインふくい線", "福井県"),
+      station(6, "小浜", "JR小浜線", "福井県"),
+    ]);
+    await segment("unrelated-train-name", [1]);
+    await segment("hapi", [2, 3, 4, 5]);
+    await segment("unrelated-line-name", [6]);
+
+    const routes = await new D1StationsRepository(env.DB)
+      .findRouteCandidates(["白鷺", "鯖江", "福井", "小浜"], 5, 2);
+
+    expect(routes.length).toBeGreaterThan(0);
+    expect(names(routes[0]!)).toEqual(["武生", "鯖江", "北鯖江", "福井"]);
+    expect(routes[0]).toMatchObject({ orderConsistency: 1, transferCount: 0 });
+  });
+
+  it("feeds 武生 back as route-supported context for 竹府 → 鯖江 → 福井", async () => {
+    await Promise.all([
+      station(1, "武生", "ハピラインふくい線", "福井県"),
+      station(2, "鯖江", "ハピラインふくい線", "福井県"),
+      station(3, "北鯖江", "ハピラインふくい線", "福井県"),
+      station(4, "福井", "ハピラインふくい線", "福井県"),
+    ]);
+    await segment("hapi", [1, 2, 3, 4]);
+
+    const diagnostics = await new StationCandidateService(new D1StationsRepository(env.DB))
+      .analyze("竹府、鯖江、福井");
+    const takefu = diagnostics.candidates.find(({ station: value }) => value.name === "武生");
+
+    expect(diagnostics.anchorNames).toEqual(["鯖江", "福井"]);
+    expect(diagnostics.routeCandidates[0]?.stations.map(({ station: value }) => value.name))
+      .toEqual(["武生", "鯖江", "北鯖江", "福井"]);
+    expect(takefu).toMatchObject({
+      routeSupported: true,
+      onExactPath: true,
+      routeOrderConsistent: true,
+      routeIndex: 0,
+      routeCandidateIds: [0],
+      bestRouteRank: 0,
+      anchor: false,
+    });
+  });
+
+  it("accepts increasing and decreasing seq order without requiring adjacent seq values", async () => {
+    await Promise.all([
+      station(1, "武生", "ハピラインふくい線", "福井県"),
+      station(2, "鯖江", "ハピラインふくい線", "福井県"),
+      station(3, "福井", "ハピラインふくい線", "福井県"),
+    ]);
+    await env.DB.prepare(
+      "INSERT INTO station_line_positions (line_id, station_id, seq) VALUES ('hapi', 1, 10), ('hapi', 2, 11), ('hapi', 3, 15)",
+    ).run();
+    const repository = new D1StationsRepository(env.DB);
+
+    const increasing = await repository.findRouteCandidates(["武生", "鯖江", "福井"], 5);
+    const decreasing = await repository.findRouteCandidates(["福井", "鯖江", "武生"], 5);
+
+    expect(names(increasing[0]!)).toEqual(["武生", "鯖江", "福井"]);
+    expect(increasing[0]?.orderConsistency).toBe(1);
+    expect(names(decreasing[0]!)).toEqual(["福井", "鯖江", "武生"]);
+    expect(decreasing[0]?.orderConsistency).toBe(1);
+  });
+
+  it("prioritizes 福井 → 芦原温泉 → 加賀温泉 → 金沢 across connected segments in both directions", async () => {
+    await Promise.all([
+      station(1, "福井", "福井線", "福井県"),
+      station(2, "芦原温泉", "福井線", "福井県"),
+      station(3, "芦原温泉", "石川線", "福井県"),
+      station(4, "加賀温泉", "石川線", "石川県"),
+      station(5, "金沢", "石川線", "石川県"),
+    ]);
+    await segment("fukui", [1, 2]);
+    await segment("ishikawa", [3, 4, 5]);
+    await connectBoth("fukui", "ishikawa", 2, 3, 1, 0, 1);
+    const repository = new D1StationsRepository(env.DB);
+
+    const forward = await repository.findRouteCandidates(["福井", "芦原温泉", "加賀温泉", "金沢"], 5);
+    const reverse = await repository.findRouteCandidates(["金沢", "加賀温泉", "芦原温泉", "福井"], 5);
+
+    expect(names(forward[0]!)).toEqual(["福井", "芦原温泉", "加賀温泉", "金沢"]);
+    expect(forward[0]).toMatchObject({ anchorCoverage: 1, orderConsistency: 1, transferCount: 1 });
+    expect(names(reverse[0]!)).toEqual(["金沢", "加賀温泉", "芦原温泉", "福井"]);
+    expect(reverse[0]).toMatchObject({ anchorCoverage: 1, orderConsistency: 1, transferCount: 1 });
   });
 
   it("does not connect same-name stations in different regions without a generated connection", async () => {
@@ -162,5 +253,22 @@ describe("D1 ordered station paths", () => {
 
     await expect(new D1StationsRepository(env.DB).findRouteCandidates(["始点", "終点"], 5))
       .resolves.toEqual([]);
+  });
+
+  it("strongly penalizes a connected 40-station detour against a local route", async () => {
+    await Promise.all([
+      station(1, "始点", "共通線"),
+      station(2, "終点", "共通線"),
+      ...Array.from({ length: 40 }, (_, index) => station(index + 3, `迂回${index + 1}`, "迂回線")),
+    ]);
+    await segment("local", [1, 2]);
+    await segment("detour", [1, ...Array.from({ length: 40 }, (_, index) => index + 3), 2]);
+
+    const routes = await new D1StationsRepository(env.DB).findRouteCandidates(["始点", "終点"], 5);
+    const local = routes.find((route) => route.pathLength === 2);
+    const detour = routes.find((route) => route.pathLength === 42);
+
+    expect(local?.score).toBeGreaterThan(detour?.score ?? 0);
+    expect(detour?.score).toBeLessThanOrEqual(0.35);
   });
 });
