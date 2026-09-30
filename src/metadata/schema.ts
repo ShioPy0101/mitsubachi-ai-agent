@@ -38,37 +38,80 @@ export const GeminiAnalysisSchema = TransitAnnouncementSchema.omit({ normalizedT
 export const GeminiNormalizationSchema = z.object({
   normalizedTranscription: z.string().trim().min(1),
 });
+export const GeminiResponseSchema = z
+  .object({
+    promptFeedback: z
+      .object({
+        blockReason: z.string().optional(),
+        safetyRatings: z
+          .array(
+            z.object({
+              category: z.string(),
+              probability: z.string().optional(),
+              blocked: z.boolean().optional().default(false),
+            }),
+          )
+          .optional(),
+      })
+      .optional(),
 
-export const GeminiResponseSchema = z.object({
-  promptFeedback: z.object({
-    blockReason: z.string().optional(),
-    safetyRatings: z.array(z.object({
-      category: z.string(),
-      probability: z.string().optional(),
-      blocked: z.boolean().optional().default(false),
-    })).optional(),
-  }).optional(),
-  candidates: z.array(
-    z.object({
-      content: z.object({
-        parts: z.array(z.object({ text: z.string() })).min(1),
-      }).optional(),
-      finishReason: z.string().optional(),
-      safetyRatings: z.array(z.object({
-        category: z.string(),
-        probability: z.string().optional(),
-        blocked: z.boolean().optional().default(false),
-      })).optional(),
-    }),
-  ).min(1).default([]),
-});
+    candidates: z
+      .array(
+        z
+          .object({
+            content: z
+              .object({
+                parts: z
+                  .array(
+                    z
+                      .object({
+                        text: z.string().optional(),
+                      })
+                      .passthrough(),
+                  )
+                  .optional(),
+
+                role: z.string().optional(),
+              })
+              .optional(),
+
+            finishReason: z.string().optional(),
+            finishMessage: z.string().optional(),
+
+            safetyRatings: z
+              .array(
+                z.object({
+                  category: z.string(),
+                  probability: z.string().optional(),
+                  blocked: z.boolean().optional().default(false),
+                }),
+              )
+              .optional(),
+          })
+          .passthrough(),
+      )
+      .default([]),
+  })
+  .passthrough();
 
 export const transitAnnouncementJsonSchema = {
   type: "object",
   additionalProperties: false,
   required: [
-    "isTransitAnnouncement", "normalizedTranscription", "station", "line", "trainType", "trainName", "trainNumber", "destination",
-    "departureTime", "arrivalTime", "platform", "nextStation", "category", "summary",
+    "isTransitAnnouncement",
+    "normalizedTranscription",
+    "station",
+    "line",
+    "trainType",
+    "trainName",
+    "trainNumber",
+    "destination",
+    "departureTime",
+    "arrivalTime",
+    "platform",
+    "nextStation",
+    "category",
+    "summary",
   ],
   properties: {
     isTransitAnnouncement: { type: "boolean" },
@@ -108,8 +151,20 @@ export const geminiAnalysisJsonSchema = {
   type: "object",
   additionalProperties: false,
   required: [
-    "isTransitAnnouncement", "mentions", "station", "line", "trainType", "trainName", "trainNumber",
-    "destination", "departureTime", "arrivalTime", "platform", "nextStation", "category", "summary",
+    "isTransitAnnouncement",
+    "mentions",
+    "station",
+    "line",
+    "trainType",
+    "trainName",
+    "trainNumber",
+    "destination",
+    "departureTime",
+    "arrivalTime",
+    "platform",
+    "nextStation",
+    "category",
+    "summary",
   ],
   properties: {
     ...metadataProperties,

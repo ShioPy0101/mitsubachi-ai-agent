@@ -13,7 +13,7 @@ export class DiscordRequestTimeoutError extends Error {
 
 export class AttachmentUnavailableError extends Error {
   constructor(
-    readonly reason: "attachment_too_large" | "attachment_unavailable",
+    readonly reason: "attachment_too_large" | "attachment_unavailable" | "attachment_invalid_content" | "attachment_empty",
     readonly status?: number,
   ) {
     super(status === undefined ? reason : `${reason} (HTTP ${status})`);
@@ -21,9 +21,7 @@ export class AttachmentUnavailableError extends Error {
   }
 }
 
-export type DiscordApiResult =
-  | { ok: true }
-  | { ok: false; status: number; responseBody: string };
+export type DiscordApiResult = { ok: true } | { ok: false; status: number; responseBody: string };
 
 export type DiscordFile = {
   data: ArrayBuffer;
@@ -46,15 +44,14 @@ function messagePayload(content: string, file?: DiscordFile): { body: BodyInit; 
     return { body: JSON.stringify(payload), contentTypeHeader: "application/json" };
   }
   const form = new FormData();
-  form.set("payload_json", JSON.stringify({
-    ...payload,
-    attachments: [{ id: 0, filename: file.filename }],
-  }));
-  form.set("files[0]", new File(
-    [file.data],
-    file.filename,
-    { type: file.contentType ?? "application/octet-stream" },
-  ));
+  form.set(
+    "payload_json",
+    JSON.stringify({
+      ...payload,
+      attachments: [{ id: 0, filename: file.filename }],
+    }),
+  );
+  form.set("files[0]", new File([file.data], file.filename, { type: file.contentType ?? "application/octet-stream" }));
   return { body: form };
 }
 
@@ -79,15 +76,52 @@ export class DiscordRestClient {
   }
 
   async downloadTemporaryAttachment(attachment: DiscordAttachment, maximumBytes: number): Promise<ArrayBuffer> {
-    if (attachment.size > maximumBytes) throw new AttachmentUnavailableError("attachment_too_large");
-    const response = await this.request(attachment.url);
-    if (!response.ok) throw new AttachmentUnavailableError("attachment_unavailable", response.status);
-    const declaredLength = Number(response.headers.get("content-length"));
-    if (Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
+    if (attachment.size > maximumBytes) {
       throw new AttachmentUnavailableError("attachment_too_large");
     }
+
+    const response = await this.request(attachment.url);
+
+    if (!response.ok) {
+      throw new AttachmentUnavailableError("attachment_unavailable", response.status);
+    }
+
+    const responseContentType = response.headers.get("content-type");
+    const contentLengthHeader = response.headers.get("content-length");
+    const declaredLength = contentLengthHeader === null ? null : Number(contentLengthHeader);
+
+    if (declaredLength !== null && Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
+      throw new AttachmentUnavailableError("attachment_too_large");
+    }
+
     const body = await response.arrayBuffer();
-    if (body.byteLength > maximumBytes) throw new AttachmentUnavailableError("attachment_too_large");
+
+    if (body.byteLength > maximumBytes) {
+      throw new AttachmentUnavailableError("attachment_too_large");
+    }
+
+    if (body.byteLength === 0) {
+      throw new AttachmentUnavailableError("attachment_empty");
+    }
+
+    const bytes = new Uint8Array(body);
+
+    console.info("discord_attachment_downloaded", {
+      filename: attachment.filename,
+      expectedSize: attachment.size,
+      actualSize: body.byteLength,
+      attachmentContentType: attachment.contentType,
+      responseContentType,
+      contentLength: declaredLength,
+      firstBytes: Array.from(bytes.slice(0, 32))
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join(" "),
+    });
+
+    if (responseContentType?.startsWith("text/") || responseContentType?.includes("application/json")) {
+      throw new AttachmentUnavailableError("attachment_invalid_content");
+    }
+
     return body;
   }
 
@@ -110,7 +144,7 @@ export class DiscordRestClient {
         body: payload.body,
       });
       if (response.status !== 429 || attempt === maximumRateLimitRetries) return apiResult(response);
-      const rateLimit = await response.json().catch(() => null) as { retry_after?: unknown } | null;
+      const rateLimit = (await response.json().catch(() => null)) as { retry_after?: unknown } | null;
       const retryAfterSeconds = typeof rateLimit?.retry_after === "number" ? rateLimit.retry_after : 1;
       await new Promise((resolve) => setTimeout(resolve, Math.min(10_000, Math.max(100, retryAfterSeconds * 1_000))));
     }
@@ -121,9 +155,10 @@ export class DiscordRestClient {
     const payload = messagePayload(content, file);
     const response = await this.request(`https://discord.com/api/v10/channels/${channelId}/messages`, {
       method: "POST",
-      headers: payload.contentTypeHeader === undefined
-        ? { Authorization: `Bot ${this.botToken}` }
-        : { Authorization: `Bot ${this.botToken}`, "Content-Type": payload.contentTypeHeader },
+      headers:
+        payload.contentTypeHeader === undefined
+          ? { Authorization: `Bot ${this.botToken}` }
+          : { Authorization: `Bot ${this.botToken}`, "Content-Type": payload.contentTypeHeader },
       body: payload.body,
     });
     return apiResult(response);
