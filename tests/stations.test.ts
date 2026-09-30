@@ -1,19 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { StationCandidateService, scoreStation, type StationRepository } from "../src/stations/candidate-service";
-import { generateStationsSql, parseStationsCsv } from "../src/stations/import";
+import { buildStationLinePositions, generateStationsSql, parseStationsCsv } from "../src/stations/import";
 import { normalizeKana, normalizeStationName } from "../src/stations/normalization";
 import { resolveStation } from "../src/stations/resolver";
 import { levenshteinDistance, stationKanaSimilarity } from "../src/stations/similarity";
-import type { Station, StationContext } from "../src/stations/types";
+import type { RoutePathCandidate, Station, StationContext } from "../src/stations/types";
 import { iseStations } from "./fixtures/stations";
 
 class FixtureRepository implements StationRepository {
-  constructor(private readonly stations: Station[]) {}
+  constructor(private readonly stations: Station[], private readonly routes: RoutePathCandidate[] = []) {}
   async findCandidatePool(_searchText: string, _context: StationContext, _limit: number): Promise<Station[]> {
     return this.stations;
   }
-  async findRouteCandidatePool(_anchorNames: readonly string[], _maxHops: number, _limit: number): Promise<Station[]> {
-    return this.stations;
+  async findRouteCandidates(_anchorNames: readonly string[], maxCandidates: number): Promise<RoutePathCandidate[]> {
+    return this.routes.slice(0, maxCandidates);
   }
 }
 
@@ -90,10 +90,25 @@ describe("station normalization and ranking", () => {
     const scored = scoreStation(awaraOnsen, transcription, {});
     expect(scored.routeContextBonus).toBe(0);
 
-    const candidates = await new StationCandidateService(new FixtureRepository([fukui, awaraOnsen, kagaOnsen]))
+    const route: RoutePathCandidate = {
+      stations: [fukui, awaraOnsen, kagaOnsen].map((station, routeIndex) => ({ station, routeIndex })),
+      anchorCoverage: 1,
+      orderConsistency: 1,
+      transferCount: 0,
+      pathLength: 3,
+      score: 0.9,
+    };
+    const candidates = await new StationCandidateService(new FixtureRepository(
+      [fukui, awaraOnsen, kagaOnsen],
+      [route],
+    ))
       .candidates(transcription);
     expect(candidates.find(({ station }) => station.name === "芦原温泉")).toMatchObject({
-      routeContextBonus: 1,
+      routeContextBonus: 0.25,
+      routeSupported: true,
+      onExactPath: true,
+      routeCandidateIds: [0],
+      anchor: false,
     });
   });
 
@@ -158,6 +173,32 @@ describe("station CSV import", () => {
     expect(generateStationsSql(rows)).toBe(first);
     expect(first).toContain("ON CONFLICT DO UPDATE");
     expect(first).toContain("'いすずかおか'");
+    expect(first).toContain("station_line_positions");
+    expect(first).toContain("route_segment_connections");
     expect(first).not.toContain("BEGIN TRANSACTION");
+  });
+
+  it("splits a branching line into ordered route segments", () => {
+    const base = {
+      kana: null, kanaSource: null, operatorName: "鉄道", lineName: "分岐線", prefecture: null,
+      longitude: null, latitude: null, postal: null,
+    };
+    const rows = [
+      { ...base, name: "A", prevStation: null, nextStation: "C" },
+      { ...base, name: "B", prevStation: null, nextStation: "C" },
+      { ...base, name: "C", prevStation: "A", nextStation: "D" },
+      { ...base, name: "D", prevStation: "C", nextStation: null },
+    ];
+    const positions = buildStationLinePositions(rows);
+    const segments = new Map<string, typeof positions>();
+    for (const position of positions) {
+      const segment = segments.get(position.lineId) ?? [];
+      segment.push(position);
+      segments.set(position.lineId, segment);
+    }
+
+    expect(segments.size).toBe(3);
+    expect([...segments.values()].map((segment) => segment.map(({ station }) => station.name)))
+      .toEqual(expect.arrayContaining([["A", "C"], ["B", "C"], ["C", "D"]]));
   });
 });

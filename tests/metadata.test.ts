@@ -39,7 +39,7 @@ describe("Gemini metadata boundary", () => {
     const prompt = buildGeminiPrompt("次はいすずがおかです", [scoreStation(station, "いすずがおか", {})]);
     expect(prompt).toContain("知識による補完は禁止");
     expect(prompt).toContain("文字起こし補正専用の候補");
-    expect(prompt).toContain('"name":"五十鈴ヶ丘"');
+    expect(prompt).toContain('"stationName":"五十鈴ヶ丘"');
     expect(prompt).toContain("departureTime / arrivalTime は HH:MM");
     expect(prompt).toContain("「鶴ヶ方面」→「敦賀方面」");
     expect(prompt).toContain("梅田・なんば・天王寺方面、なかもず行");
@@ -53,6 +53,8 @@ describe("Gemini metadata boundary", () => {
     expect(prompt).toContain("路線バス");
     expect(prompt).toContain("isTransitAnnouncement");
     expect(prompt).toContain("routeSupported");
+    expect(prompt).toContain("routeCandidateIds");
+    expect(prompt).toContain("経路上にあるという理由だけでnormalizedTranscriptionへ駅名を追加してはいけません");
     expect(prompt).toContain("福井、芦原温泉、加賀温泉");
     expect(prompt).toContain("収録駅は音声から推定しません");
     expect(prompt).toContain("stationは常にnull");

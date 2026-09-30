@@ -1,10 +1,16 @@
-import { extractStationSearchText } from "./normalization";
+import { extractStationSearchText, normalizeKana, normalizeStationName } from "./normalization";
 import { stationKanaSimilarity, stationNameSimilarity } from "./similarity";
-import { STATION_MATCH_WEIGHTS, type Station, type StationCandidate, type StationContext } from "./types";
+import {
+  STATION_MATCH_WEIGHTS,
+  type RoutePathCandidate,
+  type Station,
+  type StationCandidate,
+  type StationContext,
+} from "./types";
 
 export interface StationRepository {
   findCandidatePool(searchText: string, context: StationContext, limit: number): Promise<Station[]>;
-  findRouteCandidatePool(anchorNames: readonly string[], maxHops: number, limit: number): Promise<Station[]>;
+  findRouteCandidates(anchorNames: readonly string[], maxCandidates: number): Promise<RoutePathCandidate[]>;
 }
 
 function adjacencyScore(station: Station, context: StationContext): number {
@@ -40,7 +46,34 @@ export function scoreStation(station: Station, transcription: string, context: S
       prefectureBonus * STATION_MATCH_WEIGHTS.prefecture +
       adjacencyBonus * STATION_MATCH_WEIGHTS.adjacency,
   );
-  return { station, nameSimilarity, kanaSimilarity, lineBonus, prefectureBonus, adjacencyBonus, routeContextBonus: 0, score };
+  return {
+    station,
+    nameSimilarity,
+    kanaSimilarity,
+    lineBonus,
+    prefectureBonus,
+    adjacencyBonus,
+    routeContextBonus: 0,
+    routeSupported: false,
+    onExactPath: false,
+    nearPath: false,
+    routeOrderConsistent: false,
+    routeIndex: null,
+    previousAnchor: null,
+    nextAnchor: null,
+    routeCandidateIds: [],
+    bestRouteRank: null,
+    anchor: false,
+    score,
+  };
+}
+
+function mentionIndex(station: Station, transcription: string): number {
+  const nameIndex = normalizeStationName(transcription).indexOf(normalizeStationName(station.name));
+  const kanaIndex = station.kana === null ? -1 : normalizeKana(transcription).indexOf(normalizeKana(station.kana));
+  if (nameIndex < 0) return kanaIndex;
+  if (kanaIndex < 0) return nameIndex;
+  return Math.min(nameIndex, kanaIndex);
 }
 
 export class StationCandidateService {
@@ -52,33 +85,74 @@ export class StationCandidateService {
     const initial = pool
       .filter((station) => isEligibleStationMention(station, transcription))
       .map((station) => scoreStation(station, transcription, context));
-    const anchorNames = [...new Set(
-      initial.filter((candidate) => candidate.nameSimilarity === 1).map((candidate) => candidate.station.name),
-    )].slice(0, 12);
-    const routePool = anchorNames.length >= 2
-      ? await this.repository.findRouteCandidatePool(anchorNames, 16, 100)
+    const anchorNames = [...new Map(
+      initial
+        .filter((candidate) => candidate.nameSimilarity === 1 || candidate.kanaSimilarity === 1)
+        .map((candidate) => [candidate.station.name, mentionIndex(candidate.station, transcription)]),
+    )]
+      .filter(([, index]) => index >= 0)
+      .sort((left, right) => left[1] - right[1])
+      .map(([name]) => name)
+      .slice(0, 12);
+    const routeCandidates = anchorNames.length >= 2
+      ? await this.repository.findRouteCandidates(anchorNames, 5)
       : [];
-    const routeIds = new Set(routePool.map((station) => station.id));
+    const routeById = new Map<number, {
+      station: Station;
+      routeCandidateIds: number[];
+      bestRouteRank: number;
+      routeIndex: number;
+      routeOrderConsistent: boolean;
+    }>();
+    routeCandidates.forEach((route, rank) => {
+      for (const item of route.stations) {
+        const existing = routeById.get(item.station.id);
+        if (existing === undefined) {
+          routeById.set(item.station.id, {
+            station: item.station,
+            routeCandidateIds: [rank],
+            bestRouteRank: rank,
+            routeIndex: item.routeIndex,
+            routeOrderConsistent: route.orderConsistency === 1,
+          });
+        } else {
+          existing.routeCandidateIds.push(rank);
+        }
+      }
+    });
     const combined = new Map(
       pool.filter((station) => isEligibleStationMention(station, transcription)).map((station) => [station.id, station]),
     );
-    for (const station of routePool) {
-      if (isEligibleStationMention(station, transcription)) combined.set(station.id, station);
+    for (const match of routeById.values()) {
+      if (isEligibleStationMention(match.station, transcription)) combined.set(match.station.id, match.station);
     }
     return [...combined.values()]
       .map((station) => scoreStation(station, transcription, context))
       .map((candidate): StationCandidate => {
-        if (!routeIds.has(candidate.station.id)) return candidate;
+        const route = routeById.get(candidate.station.id);
+        if (route === undefined) return candidate;
+        const routeRankFactor = Math.max(0.4, 1 - route.bestRouteRank * 0.15);
+        const routeContextBonus = STATION_MATCH_WEIGHTS.exactPath * routeRankFactor;
         return {
           ...candidate,
-          routeContextBonus: 1,
-          score: Math.min(1, candidate.score + STATION_MATCH_WEIGHTS.route),
+          onExactPath: true,
+          nearPath: false,
+          routeOrderConsistent: route.routeOrderConsistent,
+          routeIndex: route.routeIndex,
+          previousAnchor: anchorNames[0] ?? null,
+          nextAnchor: anchorNames.at(-1) ?? null,
+          routeCandidateIds: route.routeCandidateIds,
+          bestRouteRank: route.bestRouteRank,
+          anchor: anchorNames.includes(candidate.station.name),
+          routeContextBonus,
+          routeSupported: true,
+          score: Math.min(1, candidate.score + routeContextBonus),
         };
       })
-      .filter((candidate) => candidate.score >= 0.35)
+      .filter((candidate) => candidate.score >= 0.35 || candidate.onExactPath)
       .sort((left, right) => right.score - left.score || left.station.name.localeCompare(right.station.name, "ja"))
       .filter((candidate, index, ranked) =>
         ranked.findIndex((item) => item.station.name === candidate.station.name) === index)
-      .slice(0, 12);
+      .slice(0, 24);
   }
 }

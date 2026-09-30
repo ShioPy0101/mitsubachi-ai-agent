@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { StationRepository } from "../stations/candidate-service";
-import type { Station, StationContext } from "../stations/types";
+import type { RoutePathCandidate, RoutePathStation, Station, StationContext } from "../stations/types";
 
 const StationRowSchema = z.object({
   id: z.number().int(), name: z.string(), kana: z.string().nullable(), kana_source: z.string().nullable(),
@@ -8,6 +8,25 @@ const StationRowSchema = z.object({
   prev_station: z.string().nullable(), next_station: z.string().nullable(), longitude: z.number().nullable(),
   latitude: z.number().nullable(), postal: z.string().nullable(),
 });
+const PositionedStationRowSchema = StationRowSchema.extend({ line_id: z.string(), seq: z.number().int() });
+const ConnectionRowSchema = z.object({
+  from_segment_id: z.string(), to_segment_id: z.string(),
+  from_station_id: z.number().int(), to_station_id: z.number().int(),
+  from_seq: z.number().int(), to_seq: z.number().int(), transfer_cost: z.number().int().min(0).max(1),
+});
+
+type PositionedStation = { station: Station; lineId: string; seq: number };
+type SegmentConnection = z.output<typeof ConnectionRowSchema>;
+type PathSegment = { lineId: string; fromSeq: number; toSeq: number };
+type SegmentPath = { segments: PathSegment[]; transferCount: number; distance: number };
+type SearchState = SegmentPath & { lineId: string; seq: number; visited: Set<string> };
+
+const MAX_TRANSFERS = 3;
+const MAX_SEGMENTS = 8;
+const MAX_EXPANDED_STATES = 5_000;
+const stationColumns = `station.id, station.name, station.kana, station.kana_source,
+  station.operator_name, station.line_name, station.prefecture, station.prev_station,
+  station.next_station, station.longitude, station.latitude, station.postal`;
 
 const toStation = (input: unknown): Station => {
   const row = StationRowSchema.parse(input);
@@ -17,6 +36,160 @@ const toStation = (input: unknown): Station => {
     nextStation: row.next_station, longitude: row.longitude, latitude: row.latitude, postal: row.postal,
   };
 };
+
+const toPositionedStation = (input: unknown): PositionedStation => {
+  const row = PositionedStationRowSchema.parse(input);
+  return { station: toStation(row), lineId: row.line_id, seq: row.seq };
+};
+
+function comparePathCost(left: SegmentPath, right: SegmentPath): number {
+  return left.transferCount - right.transferCount
+    || left.distance - right.distance
+    || left.segments.length - right.segments.length;
+}
+
+function heapPush(heap: SearchState[], value: SearchState): void {
+  heap.push(value);
+  let index = heap.length - 1;
+  while (index > 0) {
+    const parent = Math.floor((index - 1) / 2);
+    const parentValue = heap[parent];
+    if (parentValue === undefined || comparePathCost(parentValue, value) <= 0) break;
+    heap[index] = parentValue;
+    index = parent;
+  }
+  heap[index] = value;
+}
+
+function heapPop(heap: SearchState[]): SearchState | undefined {
+  const first = heap[0];
+  const last = heap.pop();
+  if (first === undefined || last === undefined || heap.length === 0) return first;
+  let index = 0;
+  while (true) {
+    const leftIndex = index * 2 + 1;
+    const rightIndex = leftIndex + 1;
+    const left = heap[leftIndex];
+    const right = heap[rightIndex];
+    if (left === undefined) break;
+    const childIndex = right !== undefined && comparePathCost(right, left) < 0 ? rightIndex : leftIndex;
+    const child = heap[childIndex];
+    if (child === undefined || comparePathCost(last, child) <= 0) break;
+    heap[index] = child;
+    index = childIndex;
+  }
+  heap[index] = last;
+  return first;
+}
+
+function stateKey(lineId: string, seq: number): string {
+  return `${lineId}\u0000${seq}`;
+}
+
+function enumerateSegmentPaths(
+  starts: readonly PositionedStation[],
+  goals: readonly PositionedStation[],
+  connections: readonly SegmentConnection[],
+  limit: number,
+): SegmentPath[] {
+  const connectionsBySegment = new Map<string, SegmentConnection[]>();
+  for (const connection of connections) {
+    const values = connectionsBySegment.get(connection.from_segment_id) ?? [];
+    values.push(connection);
+    connectionsBySegment.set(connection.from_segment_id, values);
+  }
+  const frontier: SearchState[] = [];
+  for (const start of starts) {
+    heapPush(frontier, {
+      lineId: start.lineId,
+      seq: start.seq,
+      segments: [],
+      transferCount: 0,
+      distance: 0,
+      visited: new Set([stateKey(start.lineId, start.seq)]),
+    });
+  }
+  const paths: SegmentPath[] = [];
+  const signatures = new Set<string>();
+  let expanded = 0;
+
+  while (frontier.length > 0 && paths.length < limit && expanded < MAX_EXPANDED_STATES) {
+    const current = heapPop(frontier);
+    if (current === undefined) break;
+    expanded += 1;
+
+    for (const goal of goals) {
+      if (goal.lineId !== current.lineId) continue;
+      const path: SegmentPath = {
+        segments: [...current.segments, { lineId: current.lineId, fromSeq: current.seq, toSeq: goal.seq }],
+        transferCount: current.transferCount,
+        distance: current.distance + Math.abs(goal.seq - current.seq),
+      };
+      const signature = path.segments.map((segment) => `${segment.lineId}:${segment.fromSeq}-${segment.toSeq}`).join("|");
+      if (!signatures.has(signature)) {
+        signatures.add(signature);
+        paths.push(path);
+      }
+    }
+
+    if (current.segments.length + 1 >= MAX_SEGMENTS) continue;
+    for (const connection of connectionsBySegment.get(current.lineId) ?? []) {
+      const transferCount = current.transferCount + connection.transfer_cost;
+      if (transferCount > MAX_TRANSFERS) continue;
+      const nextKey = stateKey(connection.to_segment_id, connection.to_seq);
+      if (current.visited.has(nextKey)) continue;
+      heapPush(frontier, {
+        lineId: connection.to_segment_id,
+        seq: connection.to_seq,
+        segments: [...current.segments, {
+          lineId: current.lineId,
+          fromSeq: current.seq,
+          toSeq: connection.from_seq,
+        }],
+        transferCount,
+        distance: current.distance + Math.abs(connection.from_seq - current.seq),
+        visited: new Set([...current.visited, nextKey]),
+      });
+    }
+  }
+  return paths.sort(comparePathCost);
+}
+
+function longestCommonSubsequence(left: readonly string[], right: readonly string[]): number {
+  let previous = Array.from({ length: right.length + 1 }, () => 0);
+  for (const leftValue of left) {
+    const current = [0];
+    for (let index = 1; index <= right.length; index += 1) {
+      current[index] = leftValue === right[index - 1]
+        ? (previous[index - 1] ?? 0) + 1
+        : Math.max(previous[index] ?? 0, current[index - 1] ?? 0);
+    }
+    previous = current;
+  }
+  return previous[right.length] ?? 0;
+}
+
+function scoreRoute(
+  stations: RoutePathStation[],
+  anchorNames: readonly string[],
+  transferCount: number,
+  shortestLength: number,
+): Omit<RoutePathCandidate, "stations"> {
+  const stationNames = stations.map(({ station }) => station.name);
+  const coveredAnchors = anchorNames.filter((anchor) => stationNames.includes(anchor)).length;
+  const anchorCoverage = anchorNames.length === 0 ? 0 : coveredAnchors / anchorNames.length;
+  const orderedAnchors = longestCommonSubsequence(anchorNames, stationNames);
+  const orderConsistency = coveredAnchors === 0 ? 0 : orderedAnchors / coveredAnchors;
+  const pathLength = stations.length;
+  const detourRatio = pathLength === 0 ? 1 : Math.max(0, pathLength - shortestLength) / pathLength;
+  const score = Math.max(0, Math.min(1,
+    anchorCoverage * 0.55
+      + orderConsistency * 0.35
+      - transferCount * 0.05
+      - detourRatio * 0.1,
+  ));
+  return { anchorCoverage, orderConsistency, transferCount, pathLength, score };
+}
 
 export class D1StationsRepository implements StationRepository {
   constructor(private readonly db: D1Database) {}
@@ -52,49 +225,79 @@ export class D1StationsRepository implements StationRepository {
     return result.results.map(toStation);
   }
 
-  async findRouteCandidatePool(anchorNames: readonly string[], maxHops: number, limit: number): Promise<Station[]> {
-    if (anchorNames.length < 2) return [];
+  private async findAnchorOccurrences(anchorNames: readonly string[]): Promise<PositionedStation[]> {
     const placeholders = anchorNames.map(() => "?").join(", ");
     const result = await this.db.prepare(`
-      WITH RECURSIVE route_walk(
-        root_name, station_id, name, line_name, prev_station, next_station,
-        latitude, longitude, postal, depth
-      ) AS (
-        SELECT name, id, name, line_name, prev_station, next_station,
-               latitude, longitude, postal, 0
-        FROM stations
-        WHERE name IN (${placeholders})
-        UNION
-        SELECT route_walk.root_name, neighbor.id, neighbor.name, neighbor.line_name,
-               neighbor.prev_station, neighbor.next_station,
-               neighbor.latitude, neighbor.longitude, neighbor.postal, route_walk.depth + 1
-        FROM route_walk
-        INNER JOIN stations neighbor ON (
-          (neighbor.line_name = route_walk.line_name
-            AND (neighbor.name = route_walk.prev_station OR neighbor.name = route_walk.next_station))
-          OR (neighbor.name = route_walk.name AND (
-            (neighbor.latitude IS NOT NULL AND route_walk.latitude IS NOT NULL
-              AND neighbor.longitude IS NOT NULL AND route_walk.longitude IS NOT NULL
-              AND abs(neighbor.latitude - route_walk.latitude) <= 0.01
-              AND abs(neighbor.longitude - route_walk.longitude) <= 0.01)
-            OR (neighbor.postal IS NOT NULL AND neighbor.postal = route_walk.postal)
-          ))
-        )
-        WHERE route_walk.depth < ?
-      ), route_candidates AS (
-        SELECT station_id, COUNT(DISTINCT root_name) AS anchor_count, MIN(depth) AS min_depth
-        FROM route_walk
-        GROUP BY station_id
-        HAVING COUNT(DISTINCT root_name) >= 2
-      )
-      SELECT station.id, station.name, station.kana, station.kana_source, station.operator_name,
-             station.line_name, station.prefecture, station.prev_station, station.next_station,
-             station.longitude, station.latitude, station.postal
-      FROM route_candidates
-      INNER JOIN stations station ON station.id = route_candidates.station_id
-      ORDER BY route_candidates.anchor_count DESC, route_candidates.min_depth ASC, station.name ASC
-      LIMIT ?
-    `).bind(...anchorNames, maxHops, limit).all();
-    return result.results.map(toStation);
+      SELECT ${stationColumns}, position.line_id, position.seq
+      FROM station_line_positions position
+      INNER JOIN stations station ON station.id = position.station_id
+      WHERE station.name IN (${placeholders})
+      ORDER BY position.line_id, position.seq
+    `).bind(...anchorNames).all();
+    return result.results.map(toPositionedStation);
+  }
+
+  private async findConnections(): Promise<SegmentConnection[]> {
+    const result = await this.db.prepare(`
+      SELECT from_segment_id, to_segment_id, from_station_id, to_station_id,
+             from_seq, to_seq, transfer_cost
+      FROM route_segment_connections
+      ORDER BY from_segment_id, from_seq, to_segment_id, to_seq
+    `).all();
+    return result.results.map((row) => ConnectionRowSchema.parse(row));
+  }
+
+  private async expandSegment(segment: PathSegment): Promise<PositionedStation[]> {
+    const lower = Math.min(segment.fromSeq, segment.toSeq);
+    const upper = Math.max(segment.fromSeq, segment.toSeq);
+    const direction = segment.fromSeq <= segment.toSeq ? "ASC" : "DESC";
+    const result = await this.db.prepare(`
+      SELECT ${stationColumns}, position.line_id, position.seq
+      FROM station_line_positions position
+      INNER JOIN stations station ON station.id = position.station_id
+      WHERE position.line_id = ? AND position.seq BETWEEN ? AND ?
+      ORDER BY position.seq ${direction}
+    `).bind(segment.lineId, lower, upper).all();
+    return result.results.map(toPositionedStation);
+  }
+
+  private async expandPath(path: SegmentPath): Promise<RoutePathStation[]> {
+    const stations: Station[] = [];
+    for (const segment of path.segments) {
+      for (const positioned of await this.expandSegment(segment)) {
+        if (stations.at(-1)?.name !== positioned.station.name) stations.push(positioned.station);
+      }
+    }
+    return stations.map((station, routeIndex) => ({ station, routeIndex }));
+  }
+
+  async findRouteCandidates(anchorNames: readonly string[], maxCandidates: number): Promise<RoutePathCandidate[]> {
+    if (anchorNames.length < 2 || maxCandidates < 1) return [];
+    const occurrences = await this.findAnchorOccurrences(anchorNames);
+    const starts = occurrences.filter(({ station }) => station.name === anchorNames[0]);
+    const goals = occurrences.filter(({ station }) => station.name === anchorNames.at(-1));
+    if (starts.length === 0 || goals.length === 0) return [];
+    const segmentPaths = enumerateSegmentPaths(starts, goals, await this.findConnections(), maxCandidates * 8);
+    const expanded: Array<{ stations: RoutePathStation[]; transferCount: number }> = [];
+    const stationSignatures = new Set<string>();
+    for (const path of segmentPaths) {
+      const stations = await this.expandPath(path);
+      const signature = stations.map(({ station }) => station.id).join(",");
+      if (stations.length === 0 || stationSignatures.has(signature)) continue;
+      stationSignatures.add(signature);
+      expanded.push({ stations, transferCount: path.transferCount });
+    }
+    const shortestLength = Math.min(...expanded.map(({ stations }) => stations.length));
+    return expanded
+      .map(({ stations, transferCount }): RoutePathCandidate => ({
+        stations,
+        ...scoreRoute(stations, anchorNames, transferCount, shortestLength),
+      }))
+      .sort((left, right) => right.score - left.score
+        || right.anchorCoverage - left.anchorCoverage
+        || right.orderConsistency - left.orderConsistency
+        || left.transferCount - right.transferCount
+        || left.pathLength - right.pathLength)
+      .slice(0, maxCandidates);
   }
 }

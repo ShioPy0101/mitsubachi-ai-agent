@@ -19,8 +19,23 @@ export const STATION_MATCH_WEIGHTS = {
   line: 0.1,
   prefecture: 0.05,
   adjacency: 0.15,
-  route: 0.2,
+  exactPath: 0.25,
+  nearPath: 0.1,
 } as const;
+
+export type RoutePathStation = {
+  station: Station;
+  routeIndex: number;
+};
+
+export type RoutePathCandidate = {
+  stations: RoutePathStation[];
+  anchorCoverage: number;
+  orderConsistency: number;
+  transferCount: number;
+  pathLength: number;
+  score: number;
+};
 
 export type StationCandidate = {
   station: Station;
@@ -30,6 +45,16 @@ export type StationCandidate = {
   prefectureBonus: number;
   adjacencyBonus: number;
   routeContextBonus: number;
+  routeSupported: boolean;
+  onExactPath: boolean;
+  nearPath: boolean;
+  routeOrderConsistent: boolean;
+  routeIndex: number | null;
+  previousAnchor: string | null;
+  nextAnchor: string | null;
+  routeCandidateIds: number[];
+  bestRouteRank: number | null;
+  anchor: boolean;
   score: number;
 };
 

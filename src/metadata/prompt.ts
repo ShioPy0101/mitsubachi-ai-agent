@@ -1,17 +1,23 @@
 import type { StationCandidate } from "../stations/types";
 
 export function buildGeminiPrompt(transcription: string, candidates: readonly StationCandidate[]): string {
-  const stationCandidates = candidates.map(({ station, score, routeContextBonus }) => ({
-    name: station.name,
-    kana: station.kana,
-    lineName: station.lineName,
-    prefecture: station.prefecture,
-    prevStation: station.prevStation,
-    nextStation: station.nextStation,
-    longitude: station.longitude,
-    latitude: station.latitude,
-    routeSupported: routeContextBonus > 0,
-    score: Number(score.toFixed(3)),
+  const stationCandidates = candidates.map((candidate) => ({
+    stationName: candidate.station.name,
+    kana: candidate.station.kana,
+    lineName: candidate.station.lineName,
+    prefecture: candidate.station.prefecture,
+    prevStation: candidate.station.prevStation,
+    nextStation: candidate.station.nextStation,
+    longitude: candidate.station.longitude,
+    latitude: candidate.station.latitude,
+    routeSupported: candidate.routeSupported,
+    onExactPath: candidate.onExactPath,
+    routeCandidateIds: candidate.routeCandidateIds,
+    bestRouteRank: candidate.bestRouteRank,
+    routeIndex: candidate.routeIndex,
+    routeOrderConsistent: candidate.routeOrderConsistent,
+    anchor: candidate.anchor,
+    score: Number(candidate.score.toFixed(3)),
   }));
   return `これは公共交通機関の案内放送として投稿された文字起こしです。
 
@@ -41,7 +47,10 @@ stationCandidates は駅マスタ data/stations.csv から検索した、文字�
 候補の lineName / prevStation / nextStation は判断材料として利用できますが、それだけを根拠に駅名を推測してはいけません。
 停車駅の列挙では各出現を局所的な文脈で判断してください。行先として正しい駅名を、似た発音の停車駅へ一括置換してはいけません。
 prevStation / nextStation は路線上の隣駅であり、列車やバスの次の停車地を意味しません。特急などは途中駅を通過するため、隣駅情報だけを根拠に停車駅を追加・置換してはいけません。
-routeSupportedがtrueの候補は、文字起こしに同一路線の実在駅が複数現れ、その路線上の駅として抽出されたことを示します。これは経路候補にすぎず、停車を保証しません。対象箇所の発音、列挙順序、緯度経度による地理的な並びがすべて整合する場合に限り誤認識を補正してください。
+routeSupportedがtrueの候補は、文字起こしのアンカー列から生成した上位経路候補のいずれかに含まれる駅です。routeCandidateIdsは含まれる経路候補、bestRouteRankは最上位の経路順位、routeIndexはその経路内の順番です。
+anchorがfalseの駅は経路上に存在するだけで、音声中で言及されたとは限りません。経路上にあるという理由だけでnormalizedTranscriptionへ駅名を追加してはいけません。
+複数の経路候補がある場合は、順位が高く、発音・文字列類似度・列挙順・経路順が最も整合するものだけを補正の参考にしてください。
+経路情報だけで停車駅を断定せず、対象箇所の発音と文字列類似度が十分高い場合に限り誤認識を補正してください。
 例: 行先の「和倉温泉」は維持しつつ、停車駅列の「福井、和倉温泉、加賀温泉」は発音と並びが整合する場合のみ「福井、芦原温泉、加賀温泉」と補正します。
 ASRに軽微な読み間違い・表記揺れがある場合は、候補との音韻的類似性が十分高ければ正式名称へ正規化して構いません。
 normalizedTranscriptionには、確実な軽微補正だけを反映した全文を返してください。rawを書き換える用途には使いません。
