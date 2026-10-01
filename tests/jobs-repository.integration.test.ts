@@ -14,8 +14,7 @@ const schema = [
     interaction_id TEXT NOT NULL UNIQUE, attachment_id TEXT NOT NULL,
     original_filename TEXT NOT NULL, content_type TEXT, size_bytes INTEGER NOT NULL,
     duration_secs REAL, status TEXT NOT NULL, error_message TEXT,
-    transcription_text TEXT, transcription_segments TEXT,
-    created_at TEXT NOT NULL, started_at TEXT, completed_at TEXT
+    transcription_text TEXT, created_at TEXT NOT NULL, started_at TEXT, completed_at TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS ephemeral_attachment_references (
     job_id TEXT PRIMARY KEY, attachment_id TEXT NOT NULL, url TEXT NOT NULL,
@@ -82,22 +81,6 @@ describe("D1 audio job timeout handling", () => {
       status: "metadata_extracting",
       errorMessage: null,
       completedAt: null,
-    });
-  });
-
-  it("persists Whisper segments with the transcription checkpoint", async () => {
-    const repository = new JobsRepository(env.DB);
-    await insertJob("segments", "transcribing", "2026-09-30T07:49:00.000Z", "2026-09-30T07:50:00.000Z");
-    const segments = [
-      { startSec: 0, endSec: 2, text: "日本語案内" },
-      { startSec: 2, endSec: 5, text: "English guidance" },
-    ];
-
-    await repository.saveTranscription("segments", "日本語案内 English guidance", segments);
-
-    await expect(repository.findById("segments")).resolves.toMatchObject({
-      transcriptionText: "日本語案内 English guidance",
-      transcriptionSegments: segments,
     });
   });
 });

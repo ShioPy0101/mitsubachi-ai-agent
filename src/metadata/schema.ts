@@ -36,28 +36,12 @@ export const GeminiAnalysisSchema = TransitAnnouncementSchema.omit({ normalizedT
   mentions: z.array(StationMentionSchema),
 });
 
-export const normalizedSegmentQualities = ["normal", "corrected", "uncertain", "unintelligible"] as const;
-
 export const GeminiNormalizationSchema = z.object({
-  segments: z.array(z.object({
-    segmentId: z.number().int().nonnegative(),
-    sourceText: z.string().min(1),
-    normalizedText: z.string().trim().min(1).nullable(),
-    language: z.string().trim().min(1).nullable(),
-    quality: z.enum(normalizedSegmentQualities),
-  }).superRefine((segment, context) => {
-    if ((segment.quality === "unintelligible") !== (segment.normalizedText === null)) {
-      context.addIssue({
-        code: "custom",
-        message: "normalizedText must be null exactly when quality is unintelligible",
-      });
-    }
-  })),
+  normalizedTranscription: z.string().trim().min(1),
   entities: z.array(z.object({
     text: z.string().trim().min(1),
     kind: z.enum(["station", "line", "train_name", "train_type", "destination", "other_proper_noun"]),
     sourceText: z.string().trim().min(1).nullable(),
-    segmentId: z.number().int().nonnegative(),
   })),
 });
 export const GeminiResponseSchema = z
@@ -212,29 +196,15 @@ export const geminiAnalysisJsonSchema = {
 export const geminiNormalizationJsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["segments", "entities"],
+  required: ["normalizedTranscription", "entities"],
   properties: {
-    segments: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["segmentId", "sourceText", "normalizedText", "language", "quality"],
-        properties: {
-          segmentId: { type: "integer", minimum: 0 },
-          sourceText: { type: "string", minLength: 1 },
-          normalizedText: { type: ["string", "null"], minLength: 1 },
-          language: { type: ["string", "null"], minLength: 1 },
-          quality: { type: "string", enum: [...normalizedSegmentQualities] },
-        },
-      },
-    },
+    normalizedTranscription: { type: "string", minLength: 1 },
     entities: {
       type: "array",
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["text", "kind", "sourceText", "segmentId"],
+        required: ["text", "kind", "sourceText"],
         properties: {
           text: { type: "string", minLength: 1 },
           kind: {
@@ -242,7 +212,6 @@ export const geminiNormalizationJsonSchema = {
             enum: ["station", "line", "train_name", "train_type", "destination", "other_proper_noun"],
           },
           sourceText: { type: ["string", "null"], minLength: 1 },
-          segmentId: { type: "integer", minimum: 0 },
         },
       },
     },
