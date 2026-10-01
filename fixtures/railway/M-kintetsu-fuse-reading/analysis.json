@@ -1,0 +1,89 @@
+{
+  "isTransitAnnouncement": true,
+  "mentions": [
+    {
+      "id": "mention:59:61",
+      "text": "桜井",
+      "start": 59,
+      "end": 61,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": "さくらい",
+      "language": "ja"
+    },
+    {
+      "id": "mention:67:71",
+      "text": "大和八木",
+      "start": 67,
+      "end": 71,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": "やまとやぎ",
+      "language": "ja"
+    },
+    {
+      "id": "mention:72:76",
+      "text": "大和高田",
+      "start": 72,
+      "end": 76,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": "やまとたかだ",
+      "language": "ja"
+    },
+    {
+      "id": "mention:77:80",
+      "text": "五井堂",
+      "start": 77,
+      "end": 80,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": "ごいどう",
+      "language": "ja"
+    },
+    {
+      "id": "mention:81:85",
+      "text": "河内国部",
+      "start": 81,
+      "end": 85,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": "かわちこくぶ",
+      "language": "ja"
+    },
+    {
+      "id": "mention:86:88",
+      "text": "伏瀬",
+      "start": 86,
+      "end": 88,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": "ふせ",
+      "language": "ja"
+    },
+    {
+      "id": "mention:89:91",
+      "text": "鶴橋",
+      "start": 89,
+      "end": 91,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": "つるはし",
+      "language": "ja"
+    }
+  ],
+  "metadata": {
+    "station": null,
+    "line": null,
+    "trainType": null,
+    "trainName": null,
+    "trainNumber": null,
+    "destination": null,
+    "departureTime": null,
+    "arrivalTime": null,
+    "platform": null,
+    "nextStation": null,
+    "summary": null,
+    "category": "general_information"
+  }
+}
