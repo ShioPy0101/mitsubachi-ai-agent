@@ -1,4 +1,4 @@
-import { stationEnglishName } from "../stations/language";
+import { stationNameInLanguage } from "../stations/language";
 import type {
   MentionStationCandidate,
   RoutePathCandidate,
@@ -52,10 +52,11 @@ export function buildGeminiNormalizationPrompt(
             rawMention: searchMentions[mentionIndex]?.text ?? "",
             candidates: candidates.slice(0, 3).map((candidate) => ({
               stationName:
-                searchMentions[mentionIndex]?.language === "en"
-                  ? (stationEnglishName(candidate.station) ??
-                    candidate.station.name)
-                  : candidate.station.name,
+                stationNameInLanguage(
+                  candidate.station,
+                  searchMentions[mentionIndex]?.language ?? "unknown",
+                ) ?? candidate.station.name,
+              crossLanguageEvidence: candidate.crossLanguageEvidence,
               officialJapaneseName: candidate.station.name,
               kana: candidate.station.kana,
               lineName: candidate.station.lineName,
@@ -101,6 +102,16 @@ export function buildGeminiNormalizationPrompt(
             anchorCoverage: route.anchorCoverage,
             orderConsistency: route.orderConsistency,
             transferCount: route.transferCount,
+            lineTransitions: route.lineTransitions,
+            direction: route.direction,
+            physicalRoute: route.physicalRoute?.segments.map(
+              ({ lineId, pathId, direction }) => ({
+                lineId,
+                pathId,
+                direction,
+              }),
+            ),
+            directionReversals: route.directionReversals,
             pathLength: route.pathLength,
             score: route.score,
             exactAnchorCoverage: route.exactAnchorCoverage ?? null,
@@ -138,7 +149,8 @@ StationCorrectionEngineは参考材料でありhard constraintではありませ
 
 event処理:
 - semanticEventsの各sourceEventIdごとにnormalizedEventsを返してください。sourceEventId、language、textを含め、音声順を保持してください。
-- 日本語・英語は同じ内容でも両方保持してください。英語を日本語へ翻訳したり、異なる言語を融合しないでください。
+- 日本語(ja)・英語(en)・中国語(zh)・韓国語(ko)・unknownは同内容でもすべて保持してください。各言語のままnormalizeし、翻訳・融合・言語間の重複削除は禁止です。equivalentEventGroupIdは対応の注釈だけであり削除には使いません。
+- 全言語の案内を音声順でnormalizedTranscription自体にも含めてください。normalizedEventsだけに残して本文から落とさないでください。normalizedEventsはdebug/semantic注釈であり、最終本文はnormalizedTranscriptionです。
 - 長時間音声はeventごとに再構成し、時間順に連結してください。繰り返しのsource occurrenceは中間構造に保持されています。
 - entitiesは可能な範囲でsourceMentionId、sourceText、text、kindを返し、文章と同じ表記にしてください。sourceMentionIdは追跡情報で、許可リストではありません。
 - normalizedTranscriptionは空にしないでください。

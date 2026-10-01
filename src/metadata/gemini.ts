@@ -90,6 +90,7 @@ export type NormalizedEntity = z.output<
 function sanitizeMentions(
   transcription: string,
   mentions: readonly StationMention[],
+  events: readonly import("../railway/semantic").SemanticEventProposal[] = [],
 ): StationMention[] {
   let cursor = 0;
   const sanitized: StationMention[] = [];
@@ -101,7 +102,16 @@ function sanitizeMentions(
     sanitized.push({
       ...mention,
       id: `mention:${start}:${end}`,
-      language: announcementLanguage(mention.text),
+      language:
+        mention.language ??
+        events.find((e) => e.sourceStart <= start && e.sourceEnd >= end)
+          ?.language ??
+        announcementLanguage(mention.text),
+      equivalentEventGroupId:
+        mention.equivalentEventGroupId ??
+        events.find((e) => e.sourceStart <= start && e.sourceEnd >= end)
+          ?.equivalentEventGroupId ??
+        null,
       start,
       end,
     });
@@ -253,10 +263,10 @@ export class GeminiMetadataService {
     );
     return {
       isTransitAnnouncement: parsed.isTransitAnnouncement,
-      mentions: sanitizeMentions(transcription, parsed.mentions),
+      mentions: sanitizeMentions(transcription, parsed.mentions, parsed.events),
       semantic: buildSemanticRepresentation(
         transcription,
-        sanitizeMentions(transcription, parsed.mentions),
+        sanitizeMentions(transcription, parsed.mentions, parsed.events),
         parsed.events,
       ),
       metadata: {
