@@ -6,7 +6,7 @@ import { JobsRepository } from "../db/jobs-repository";
 import { canControlGuild } from "../discord/access-control";
 import { isSupportedAudioAttachment } from "../discord/attachments";
 import {
-  deferredResponse,
+  queuedResponse,
   ephemeralErrorResponse,
   ephemeralMessageResponse,
   parsePlatformCommand,
@@ -28,6 +28,25 @@ type DemoCommandEnv = {
   MAX_AUDIO_BYTES: string;
   DB: D1Database;
 };
+
+async function queueReceipt(
+  jobs: JobsRepository,
+  jobId: string,
+): Promise<Response> {
+  try {
+    const position = await jobs.queuePosition(jobId);
+    return position === null
+      ? ephemeralMessageResponse("音声の処理を開始しています…")
+      : queuedResponse(position);
+  } catch (error) {
+    // Enqueue already succeeded; an optional position lookup cannot reject it.
+    console.warn("audio_job_queue_position_unavailable", {
+      jobId,
+      errorName: error instanceof Error ? error.name : "UnknownError",
+    });
+    return queuedResponse();
+  }
+}
 
 export async function handleDemoCommand(
   command: ParsedDemoCommand,
@@ -51,8 +70,9 @@ export async function handleDemoCommand(
   }
   try {
     const now = new Date();
-    await new JobProducer(
-      new JobsRepository(env.DB),
+    const jobs = new JobsRepository(env.DB);
+    const { job } = await new JobProducer(
+      jobs,
       env.AUDIO_JOBS,
     ).createAndEnqueue(
       {
@@ -80,7 +100,7 @@ export async function handleDemoCommand(
       },
       now.toISOString(),
     );
-    return deferredResponse();
+    return queueReceipt(jobs, job.id);
   } catch (error) {
     console.error("demo_audio_job_enqueue_failed", {
       errorName: error instanceof Error ? error.name : "UnknownError",
@@ -297,12 +317,10 @@ interactionRoutes.post("/interactions", async (context) => {
   }
 
   const now = new Date();
-  const producer = new JobProducer(
-    new JobsRepository(context.env.DB),
-    context.env.AUDIO_JOBS,
-  );
+  const jobs = new JobsRepository(context.env.DB);
+  const producer = new JobProducer(jobs, context.env.AUDIO_JOBS);
   try {
-    await producer.createAndEnqueue(
+    const { job } = await producer.createAndEnqueue(
       {
         source: {
           type: "interaction",
@@ -327,7 +345,7 @@ interactionRoutes.post("/interactions", async (context) => {
       },
       now.toISOString(),
     );
-    return deferredResponse();
+    return queueReceipt(jobs, job.id);
   } catch (error) {
     const errorName = error instanceof Error ? error.name : "UnknownError";
     const errorMessage = error instanceof Error ? error.message : String(error);
