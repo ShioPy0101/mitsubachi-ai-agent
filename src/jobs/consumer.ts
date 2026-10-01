@@ -4,18 +4,9 @@ import { ClipsRepository } from "../db/clips-repository";
 import { JobsRepository } from "../db/jobs-repository";
 import { createD1StationsJobCache, D1StationsRepository } from "../db/stations-repository";
 import { AttachmentUnavailableError, DiscordRestClient, type DiscordFile } from "../discord/rest-client";
-import {
-  formatDemoDiagnosticPreviews,
-  formatDemoDiagnostics,
-  type DemoDiagnostics,
-} from "../discord/demo-diagnostics";
+import { formatDemoDiagnosticPreviews, formatDemoDiagnostics, type DemoDiagnostics } from "../discord/demo-diagnostics";
 import { formatAnalysisResult, formatFailure } from "../discord/messages";
-import {
-  applyNormalizedEntitiesToMetadata,
-  GeminiMetadataService,
-  GeminiSafetyBlockedError,
-  isRetryableGeminiError,
-} from "../metadata/gemini";
+import { applyNormalizedEntitiesToMetadata, GeminiMetadataService, GeminiSafetyBlockedError, isRetryableGeminiError } from "../metadata/gemini";
 import { generateRailwayFilename } from "../railway/filename";
 import { reconcileStationMentionCandidates, StationCandidateService } from "../stations/candidate-service";
 import { resolveStation } from "../stations/resolver";
@@ -29,23 +20,11 @@ import {
   whisperSettings,
 } from "../transcription/workers-ai";
 import { formatAudioJobAlert } from "./alerts";
-import {
-  AudioJobProcessingTimeoutError,
-  whisperProcessingTimeoutMs,
-} from "./processing-timeout";
-import {
-  audioJobElapsedMs,
-  isStaleAudioJob,
-  staleAudioJobCutoff,
-  staleAudioJobTimeoutMs,
-} from "./staleness";
+import { AudioJobProcessingTimeoutError, whisperProcessingTimeoutMs } from "./processing-timeout";
+import { audioJobElapsedMs, isStaleAudioJob, staleAudioJobCutoff, staleAudioJobTimeoutMs } from "./staleness";
 import type { AudioJob, AudioJobMessage, DemoAudioJobMessage } from "./types";
 import { createJobMonitor, JobCancellationRequestedError, type JobMonitor } from "./job-monitor";
-import {
-  formatStationCandidateJobProgress,
-  StationCandidatePerformanceWarning,
-  stationCandidatePerformanceWarning,
-} from "./station-observability";
+import { formatStationCandidateJobProgress, StationCandidatePerformanceWarning, stationCandidatePerformanceWarning } from "./station-observability";
 
 const PersistedAudioJobMessageSchema = z.object({
   kind: z.literal("persisted").optional(),
@@ -71,15 +50,9 @@ const errorStages = new WeakMap<object, string>();
 const jobMonitorRefreshIntervalMs = 10_000;
 const maximumQueueAttempts = 5;
 const maximumGeminiAttempts = 3;
-const noPipelineRetryStages = new Set([
-  "transcription_checkpoint",
-  "result_notification",
-  "completion_status",
-]);
+const noPipelineRetryStages = new Set(["transcription_checkpoint", "result_notification", "completion_status"]);
 
-type ProcessingJobs = Pick<JobsRepository,
-  "updateStatus" | "isActive" | "discardTranscription" | "saveTranscription" | "clearEphemeral"
->;
+type ProcessingJobs = Pick<JobsRepository, "updateStatus" | "isActive" | "discardTranscription" | "saveTranscription" | "clearEphemeral">;
 type ProcessingCallbacks = Pick<CallbackSecretsRepository, "get">;
 type ProcessingClips = Pick<ClipsRepository, "save">;
 
@@ -118,15 +91,17 @@ export async function runStage<T>(
   let refreshPending: Promise<void> | null = null;
   const refreshTimer = monitor?.enabled
     ? setInterval(() => {
-      if (refreshPending !== null) return;
-      refreshPending = Promise.all([
-        monitor.refresh(jobId),
-        monitor.assertNotCancelled(jobId, stage),
-      ]).then(() => undefined).catch((error: unknown) => {
-        if (error instanceof JobCancellationRequestedError) controller.abort(error);
-        else console.error("audio_job_monitor_refresh_failed", { jobId, stage, ...errorDetails(error) });
-      }).finally(() => { refreshPending = null; });
-    }, jobMonitorRefreshIntervalMs)
+        if (refreshPending !== null) return;
+        refreshPending = Promise.all([monitor.refresh(jobId), monitor.assertNotCancelled(jobId, stage)])
+          .then(() => undefined)
+          .catch((error: unknown) => {
+            if (error instanceof JobCancellationRequestedError) controller.abort(error);
+            else console.error("audio_job_monitor_refresh_failed", { jobId, stage, ...errorDetails(error) });
+          })
+          .finally(() => {
+            refreshPending = null;
+          });
+      }, jobMonitorRefreshIntervalMs)
     : undefined;
   try {
     const result = await operation(controller.signal);
@@ -150,15 +125,18 @@ export async function runStage<T>(
 }
 
 function errorStage(error: unknown, fallback: string): string {
-  return typeof error === "object" && error !== null ? errorStages.get(error) ?? fallback : fallback;
+  return typeof error === "object" && error !== null ? (errorStages.get(error) ?? fallback) : fallback;
 }
 
 export function shouldRetryAudioJob(error: unknown, attempt: number): boolean {
   if (attempt >= maximumQueueAttempts) return false;
-  if (error instanceof AttachmentUnavailableError
-    || error instanceof AudioJobProcessingTimeoutError
-    || error instanceof JobCancellationRequestedError
-    || error instanceof WhisperAudioDecodeError) return false;
+  if (
+    error instanceof AttachmentUnavailableError ||
+    error instanceof AudioJobProcessingTimeoutError ||
+    error instanceof JobCancellationRequestedError ||
+    error instanceof WhisperAudioDecodeError
+  )
+    return false;
   return !noPipelineRetryStages.has(errorStage(error, "processing"));
 }
 
@@ -175,12 +153,22 @@ async function sendAlert(
   if (!channelId) return;
   const details = errorDetails(error);
   try {
-    const result = await discord.sendChannelMessage(channelId, formatAudioJobAlert({
-      jobId, stage, ...(attempt === undefined ? {} : { attempt }), severity, ...details,
-    }));
+    const result = await discord.sendChannelMessage(
+      channelId,
+      formatAudioJobAlert({
+        jobId,
+        stage,
+        ...(attempt === undefined ? {} : { attempt }),
+        severity,
+        ...details,
+      }),
+    );
     if (!result.ok) {
       console.error("audio_job_alert_failed", {
-        jobId, stage, status: result.status, responseBody: result.responseBody,
+        jobId,
+        stage,
+        status: result.status,
+        responseBody: result.responseBody,
       });
     }
   } catch (alertError) {
@@ -226,7 +214,10 @@ async function editOriginalResponse(
         return true;
       } else {
         console.error("audio_job_discord_original_edit_failed", {
-          jobId: job.id, kind, status: result.status, responseBody: result.responseBody,
+          jobId: job.id,
+          kind,
+          status: result.status,
+          responseBody: result.responseBody,
         });
       }
     } catch (error) {
@@ -242,13 +233,7 @@ async function editOriginalResponse(
   return false;
 }
 
-async function updateProgress(
-  job: AudioJob,
-  content: string,
-  callbacks: ProcessingCallbacks,
-  discord: DiscordRestClient,
-  _asFollowup = false,
-): Promise<void> {
+async function updateProgress(job: AudioJob, content: string, callbacks: ProcessingCallbacks, discord: DiscordRestClient, _asFollowup = false): Promise<void> {
   try {
     await editOriginalResponse(job, `🔧 ${content}`, callbacks, discord, "progress");
   } catch (error) {
@@ -256,13 +241,7 @@ async function updateProgress(
   }
 }
 
-async function notify(
-  job: AudioJob,
-  content: string,
-  callbacks: ProcessingCallbacks,
-  discord: DiscordRestClient,
-  file?: DiscordFile,
-): Promise<boolean> {
+async function notify(job: AudioJob, content: string, callbacks: ProcessingCallbacks, discord: DiscordRestClient, file?: DiscordFile): Promise<boolean> {
   const originalEdited = await editOriginalResponse(job, content, callbacks, discord, "result", file);
   if (originalEdited) return true;
   if (!originalEdited && job.source.channelId !== null) {
@@ -273,7 +252,9 @@ async function notify(
         return true;
       } else {
         console.error("audio_job_discord_channel_send_failed", {
-          jobId: job.id, status: result.status, responseBody: result.responseBody,
+          jobId: job.id,
+          status: result.status,
+          responseBody: result.responseBody,
         });
       }
     } catch (error) {
@@ -301,24 +282,19 @@ async function notifyDemo(
   );
   if (!result.ok) {
     console.error("demo_diagnostics_original_edit_failed", {
-      jobId: job.id, status: result.status, responseBody: result.responseBody,
+      jobId: job.id,
+      status: result.status,
+      responseBody: result.responseBody,
     });
     return false;
   }
-  const debugMarkdown = [
-    "# platform-ai-agent-demo debug output",
-    "",
-    ...messages,
-  ].join("\n\n");
+  const debugMarkdown = ["# platform-ai-agent-demo debug output", "", ...messages].join("\n\n");
   const encodedDebug = new TextEncoder().encode(debugMarkdown);
   const debugFileResult = await discord.sendInteractionFollowup(
     callback.token,
     "📎 完全なデバッグ出力です。画面上の表示は各項目の先頭部分だけに制限しています。",
     {
-      data: encodedDebug.buffer.slice(
-        encodedDebug.byteOffset,
-        encodedDebug.byteOffset + encodedDebug.byteLength,
-      ) as ArrayBuffer,
+      data: encodedDebug.buffer.slice(encodedDebug.byteOffset, encodedDebug.byteOffset + encodedDebug.byteLength) as ArrayBuffer,
       filename: "platform-ai-agent-demo-debug.md",
       contentType: "text/markdown; charset=utf-8",
     },
@@ -335,7 +311,10 @@ async function notifyDemo(
     const followup = await discord.sendInteractionFollowup(callback.token, previewMessages[index]!);
     if (!followup.ok) {
       console.error("demo_diagnostics_followup_failed", {
-        jobId: job.id, index, status: followup.status, responseBody: followup.responseBody,
+        jobId: job.id,
+        index,
+        status: followup.status,
+        responseBody: followup.responseBody,
       });
       // The analysis result and audio are already delivered. Debug output is best-effort.
       break;
@@ -355,7 +334,7 @@ function formatDemoFailure(error: unknown, stage: string, attempt: number): stri
     ? "同じ文字起こしを使ったGemini再試行（最大3回）も完了できませんでした。"
     : details.errorName === "WhisperAudioDecodeError"
       ? "MP3原本の3030エラー後、MP3フレームのみ再構成した再送もdecodeできませんでした。WAV変換は行っていません。"
-    : "この失敗では処理全体を再実行しません。";
+      : "この失敗では処理全体を再実行しません。";
   return [
     "❌ **デモ処理に失敗しました**",
     "",
@@ -393,19 +372,14 @@ export async function stopStaleAudioJobs(env: Env, now = new Date()): Promise<nu
       });
       continue;
     }
-    const didStop = await jobs.failIfStaleActive(
-      job.id,
-      cutoff,
-      "processing_timeout",
-      now.toISOString(),
-    );
+    const didStop = await jobs.failIfStaleActive(job.id, cutoff, "processing_timeout", now.toISOString());
     if (!didStop) continue;
     stopped += 1;
     const error = new Error(
-      `audio job exceeded ${staleAudioJobTimeoutMs / 60_000} minute limit `
-      + `(status=${job.status}, createdAt=${job.createdAt}, startedAt=${job.startedAt ?? "none"}, `
-      + `observedAt=${now.toISOString()}, elapsedSeconds=${elapsedMs === null ? "invalid" : (elapsedMs / 1000).toFixed(1)}, `
-      + `cutoff=${cutoff})`,
+      `audio job exceeded ${staleAudioJobTimeoutMs / 60_000} minute limit ` +
+        `(status=${job.status}, createdAt=${job.createdAt}, startedAt=${job.startedAt ?? "none"}, ` +
+        `observedAt=${now.toISOString()}, elapsedSeconds=${elapsedMs === null ? "invalid" : (elapsedMs / 1000).toFixed(1)}, ` +
+        `cutoff=${cutoff})`,
     );
     console.error("audio_job_stale_stopped", { jobId: job.id, ...errorDetails(error) });
     await monitor.transition(job.id, "timed_out", "processing_timeout", error);
@@ -436,11 +410,7 @@ async function processJob(
   const alertsEnabled = resources?.sendAlerts ?? true;
   const showDemoProgress = resources?.showDemoDiagnostics ?? false;
   const discord = new DiscordRestClient(env.DISCORD_BOT_TOKEN, env.DISCORD_APPLICATION_ID);
-  const runJobStage = <T>(
-    stage: string,
-    operation: (signal: AbortSignal) => Promise<T>,
-    timeoutMs?: number,
-  ): Promise<T> =>
+  const runJobStage = <T>(stage: string, operation: (signal: AbortSignal) => Promise<T>, timeoutMs?: number): Promise<T> =>
     runStage(job.id, stage, operation, monitor, timeoutMs);
   const attachment = attachmentFor(job);
   let audio: ArrayBuffer | null = null;
@@ -450,60 +420,59 @@ async function processJob(
   if (transcriptionText === null) {
     await jobs.updateStatus(job.id, "transcribing");
     await updateProgress(job, "音声ファイルを取得しています…", callbacks, discord, showDemoProgress);
-    audio = await runJobStage("attachment_download", () =>
-      discord.downloadTemporaryAttachment(attachment, maxAudioBytes(env)));
+    audio = await runJobStage("attachment_download", () => discord.downloadTemporaryAttachment(attachment, maxAudioBytes(env)));
     const transcriptionInput = {
-      audio: audio as ArrayBuffer, contentType: job.contentType, filename: job.originalFilename,
+      audio: audio as ArrayBuffer,
+      contentType: job.contentType,
+      filename: job.originalFilename,
       durationSecs: job.durationSecs,
     };
     await updateProgress(
       job,
-      isMp3TranscriptionInput(transcriptionInput)
-        ? "MP3をWhisperへ送信し、文字起こししています…"
-        : "音声をWhisperへ送信し、文字起こししています…",
+      isMp3TranscriptionInput(transcriptionInput) ? "MP3を文字起こししています…" : "音声を文字起こししています…",
       callbacks,
       discord,
       showDemoProgress,
     );
     const whisperTimeoutMs = whisperProcessingTimeoutMs(job.durationSecs);
-    const transcription = await runJobStage("whisper_transcription", async (signal) => {
-      const startedAt = Date.now();
-      let progressPending: Promise<void> | null = null;
-      const progressTimer = showDemoProgress
-        ? setInterval(() => {
-          if (progressPending !== null) return;
-          const elapsedSeconds = (Date.now() - startedAt) / 1000;
-          const timeoutSeconds = whisperTimeoutMs / 1000;
-          progressPending = updateProgress(
-            job,
-            `Whisper文字起こし処理中（経過 ${elapsedSeconds.toFixed(0)}秒 / タイムアウト ${timeoutSeconds.toFixed(0)}秒）…`,
-            callbacks,
-            discord,
-            true,
-          ).finally(() => { progressPending = null; });
-        }, 30_000)
-        : undefined;
-      if (isMp3TranscriptionInput(transcriptionInput)) {
-        await monitor?.stageProgress(job.id, "MP3原本をWhisperへ直接送信中");
-      }
-      try {
-        return await new CloudflareWhisperTranscriptionService(
-          env.AI,
-          async ({ phase }) => {
+    const transcription = await runJobStage(
+      "whisper_transcription",
+      async (signal) => {
+        const startedAt = Date.now();
+        let progressPending: Promise<void> | null = null;
+        const progressTimer = showDemoProgress
+          ? setInterval(() => {
+              if (progressPending !== null) return;
+              const elapsedSeconds = (Date.now() - startedAt) / 1000;
+              const timeoutSeconds = whisperTimeoutMs / 1000;
+              progressPending = updateProgress(
+                job,
+                `文字起こし処理中（経過 ${elapsedSeconds.toFixed(0)}秒 / タイムアウト ${timeoutSeconds.toFixed(0)}秒）…`,
+                callbacks,
+                discord,
+                true,
+              ).finally(() => {
+                progressPending = null;
+              });
+            }, 30_000)
+          : undefined;
+        if (isMp3TranscriptionInput(transcriptionInput)) {
+          await monitor?.stageProgress(job.id, "MP3原本を文字起こし中");
+        }
+        try {
+          return await new CloudflareWhisperTranscriptionService(env.AI, async ({ phase }) => {
             if (phase === "rebuild_started") {
               const detail = "MP3直接decode失敗・フレームのみ再構成して再送中";
-              await Promise.all([
-                updateProgress(job, `${detail}…`, callbacks, discord, showDemoProgress),
-                monitor?.stageProgress(job.id, detail),
-              ]);
+              await Promise.all([updateProgress(job, `${detail}…`, callbacks, discord, showDemoProgress), monitor?.stageProgress(job.id, detail)]);
             }
-          },
-        ).transcribe({ ...transcriptionInput, signal });
-      } finally {
-        if (progressTimer !== undefined) clearInterval(progressTimer);
-        if (progressPending !== null) await progressPending;
-      }
-    }, whisperTimeoutMs);
+          }).transcribe({ ...transcriptionInput, signal });
+        } finally {
+          if (progressTimer !== undefined) clearInterval(progressTimer);
+          if (progressPending !== null) await progressPending;
+        }
+      },
+      whisperTimeoutMs,
+    );
     transcriptionResult = transcription;
     if (!(await jobs.isActive(job.id))) {
       console.warn("audio_job_processing_stopped", { jobId: job.id, stage: "whisper_transcription" });
@@ -513,13 +482,7 @@ async function processJob(
     needsTranscriptionCheckpoint = true;
   } else {
     console.info("audio_job_transcription_checkpoint_reused", { jobId: job.id, attempt });
-    await updateProgress(
-      job,
-      "保存済みの文字起こしを再利用して、メタデータ解析を再開しています…",
-      callbacks,
-      discord,
-      showDemoProgress,
-    );
+    await updateProgress(job, "保存済みの文字起こしを再利用して、メタデータ解析を再開しています…", callbacks, discord, showDemoProgress);
   }
   if (transcriptionText.trim() === "") {
     await jobs.discardTranscription(job.id);
@@ -532,12 +495,13 @@ async function processJob(
     await runJobStage("transcription_checkpoint", () => jobs.saveTranscription(job.id, transcriptionText));
     console.info("audio_job_transcription_checkpoint_saved", { jobId: job.id, attempt });
     if (showDemoProgress && transcriptionResult !== null) {
-      const preparation = transcriptionResult.audioPreparation?.strategy === "mp3_rebuilt"
-        ? `、MP3フレーム再構成で復旧（${transcriptionResult.audioPreparation.submittedBytes} bytes）`
-        : "";
+      const preparation =
+        transcriptionResult.audioPreparation?.strategy === "mp3_rebuilt"
+          ? `、MP3フレーム再構成で復旧（${transcriptionResult.audioPreparation.submittedBytes} bytes）`
+          : "";
       await updateProgress(
         job,
-        `Whisperの文字起こしが完了しました（言語: ${transcriptionResult.language ?? "不明"}、セグメント: ${transcriptionResult.segments.length}件${preparation}）。以降は同じ文字起こしを利用し、Whisperを再実行しません。`,
+        `文字起こしが完了しました（言語: ${transcriptionResult.language ?? "不明"}、セグメント: ${transcriptionResult.segments.length}件${preparation}）。`,
         callbacks,
         discord,
         true,
@@ -557,7 +521,7 @@ async function processJob(
         if (showDemoProgress) {
           await updateProgress(
             job,
-            `${stage}で一時エラーが発生しました（${details.errorName}: ${details.errorMessage.slice(0, 300)}）。同じ文字起こしのままこの段階だけ再試行します（${geminiAttempt + 1}/${maximumGeminiAttempts}）…`,
+            `${stage}で一時エラーが発生しました（${details.errorName}: ${details.errorMessage.slice(0, 300)}）。再試行します（${geminiAttempt + 1}/${maximumGeminiAttempts}）…`,
             callbacks,
             discord,
             true,
@@ -568,10 +532,7 @@ async function processJob(
       }
     }
   };
-  const handleGeminiFailure = async (
-    error: unknown,
-    fallbackStage: string,
-  ): Promise<"failed" | "stopped"> => {
+  const handleGeminiFailure = async (error: unknown, fallbackStage: string): Promise<"failed" | "stopped"> => {
     if (!(await jobs.isActive(job.id))) {
       console.warn("audio_job_processing_stopped", { jobId: job.id, stage: fallbackStage });
       return "stopped";
@@ -600,7 +561,7 @@ async function processJob(
     return "failed";
   };
 
-  await updateProgress(job, "Gemini #1で放送構造と明示metadataを解析しています…", callbacks, discord, showDemoProgress);
+  await updateProgress(job, "放送構造を解析しています…", callbacks, discord, showDemoProgress);
   let analysis: Awaited<ReturnType<GeminiMetadataService["analyze"]>>;
   try {
     analysis = await runGeminiStage("gemini_analysis", () => gemini.analyze(transcriptionText));
@@ -614,7 +575,7 @@ async function processJob(
   if (showDemoProgress) {
     await updateProgress(
       job,
-      `Gemini #1が完了しました（交通案内判定: ${analysis.isTransitAnnouncement}、駅mention: ${analysis.mentions.length}件）。`,
+      `放送構造解析が完了しました（交通案内判定: ${analysis.isTransitAnnouncement}、駅mention: ${analysis.mentions.length}件）。`,
       callbacks,
       discord,
       true,
@@ -634,32 +595,29 @@ async function processJob(
     await jobs.clearEphemeral(job.id);
     return "failed";
   }
-  await updateProgress(job, "役割別sequenceごとに駅候補と局所経路を検索しています…", callbacks, discord, showDemoProgress);
+  await updateProgress(job, "地理空間情報を参照しています…", callbacks, discord, showDemoProgress);
   const sequences = groupStationSequences(analysis.mentions).filter(({ role }) => role !== "unknown");
   const stationSearchCache = createD1StationsJobCache();
   const stationSearchStartedAt = Date.now();
-  const sequenceSearches: DemoDiagnostics["sequenceSearches"] = await runJobStage(
-    "station_candidates_sequences",
-    () => Promise.all(sequences.map(async ({ id, role, mentions, contextMentions }) => {
-      const searchMentions = [...mentions, ...contextMentions];
-      const stationSearch = await new StationCandidateService(
-        new D1StationsRepository(env.DB, stationSearchCache),
-      ).analyzeMentions(
-        searchMentions.map(({ text }) => text),
-        {},
-        {
-          sequenceRole: role,
-          destinationContext: contextMentions.length > 0,
-          phoneticHints: searchMentions.map(({ phoneticHint }) => phoneticHint ?? null),
-        },
-      );
-      return { id, role, mentions, contextMentions, stationSearch };
-    })),
+  const sequenceSearches: DemoDiagnostics["sequenceSearches"] = await runJobStage("station_candidates_sequences", () =>
+    Promise.all(
+      sequences.map(async ({ id, role, mentions, contextMentions }) => {
+        const searchMentions = [...mentions, ...contextMentions];
+        const stationSearch = await new StationCandidateService(new D1StationsRepository(env.DB, stationSearchCache)).analyzeMentions(
+          searchMentions.map(({ text }) => text),
+          {},
+          {
+            sequenceRole: role,
+            destinationContext: contextMentions.length > 0,
+            phoneticHints: searchMentions.map(({ phoneticHint }) => phoneticHint ?? null),
+          },
+        );
+        return { id, role, mentions, contextMentions, stationSearch };
+      }),
+    ),
   );
   const reconciliationStartedAt = Date.now();
-  const stationMentionBindings = reconcileStationMentionCandidates(
-    sequenceSearches.map(({ stationSearch }) => stationSearch),
-  );
+  const stationMentionBindings = reconcileStationMentionCandidates(sequenceSearches.map(({ stationSearch }) => stationSearch));
   const stationSearchPhaseMs = Date.now() - stationSearchStartedAt;
   for (const { id, stationSearch } of sequenceSearches) {
     const metrics = stationSearch.metrics;
@@ -698,29 +656,19 @@ async function processJob(
     id,
     metrics: stationSearch.metrics,
   }));
-  await monitor?.observation(
-    job.id,
-    formatStationCandidateJobProgress(stationObservations, stationSearchPhaseMs),
-  );
+  await monitor?.observation(job.id, formatStationCandidateJobProgress(stationObservations, stationSearchPhaseMs));
   const performanceWarning = stationCandidatePerformanceWarning(stationObservations, stationSearchPhaseMs);
   if (alertsEnabled && performanceWarning !== null) {
-    await sendAlert(
-      env,
-      discord,
-      job.id,
-      "station_candidates_sequences",
-      new StationCandidatePerformanceWarning(performanceWarning),
-      attempt,
-      "warning",
-    );
+    await sendAlert(env, discord, job.id, "station_candidates_sequences", new StationCandidatePerformanceWarning(performanceWarning), attempt, "warning");
   }
-  const candidates = [...new Map(sequenceSearches.flatMap(({ stationSearch }) => stationSearch.candidates)
-    .map((candidate) => [candidate.station.id, candidate])).values()];
+  const candidates = [
+    ...new Map(sequenceSearches.flatMap(({ stationSearch }) => stationSearch.candidates).map((candidate) => [candidate.station.id, candidate])).values(),
+  ];
   if (showDemoProgress) {
     const routeCount = sequenceSearches.reduce((sum, sequence) => sum + sequence.stationSearch.routeCandidates.length, 0);
     await updateProgress(
       job,
-      `sequence別探索が完了しました（sequence: ${sequenceSearches.length}件、経路候補: ${routeCount}件、駅候補: ${candidates.length}件）。`,
+      `s地理空間探索が完了しました（sequence: ${sequenceSearches.length}件、経路候補: ${routeCount}件、駅候補: ${candidates.length}件）。`,
       callbacks,
       discord,
       true,
@@ -741,11 +689,10 @@ async function processJob(
     mentionCandidates: stationSearch.mentionCandidates,
     routeHypotheses: stationSearch.routeCandidates,
   }));
-  await updateProgress(job, "Gemini #2で構造とsequence候補に制約された文字起こしを生成しています…", callbacks, discord, showDemoProgress);
+  await updateProgress(job, "地理空間情報をもとに文字起こし文面を解析します", callbacks, discord, showDemoProgress);
   let normalization: Awaited<ReturnType<GeminiMetadataService["normalize"]>>;
   try {
-    normalization = await runGeminiStage("gemini_normalization", () =>
-      gemini.normalize(transcriptionText, analysisForNormalization, normalizationSequences));
+    normalization = await runGeminiStage("gemini_normalization", () => gemini.normalize(transcriptionText, analysisForNormalization, normalizationSequences));
   } catch (error) {
     return handleGeminiFailure(error, "gemini_normalization");
   }
@@ -755,10 +702,7 @@ async function processJob(
   }
 
   const resolution = resolveStation(candidates, analysis.metadata.station);
-  const metadata = applyNormalizedEntitiesToMetadata(
-    { ...analysis.metadata, station: resolution.stationName },
-    normalization.entities,
-  );
+  const metadata = applyNormalizedEntitiesToMetadata({ ...analysis.metadata, station: resolution.stationName }, normalization.entities);
   const filename = generateRailwayFilename(metadata, job.originalFilename);
   if (showDemoProgress) {
     await updateProgress(job, `解析結果を組み立てました（生成ファイル名: ${filename}）。`, callbacks, discord, true);
@@ -767,61 +711,63 @@ async function processJob(
     console.warn("audio_job_processing_stopped", { jobId: job.id, stage: "before_clip_save" });
     return "stopped";
   }
-  await runJobStage("clip_save", () => clips.save({
-    jobId: job.id, clipIndex: 1, rawTranscription: transcriptionText,
-    normalizedTranscription: normalization.normalizedTranscription, metadata, resolution,
-    generatedFilename: filename, createdAt: new Date().toISOString(),
-  }));
+  await runJobStage("clip_save", () =>
+    clips.save({
+      jobId: job.id,
+      clipIndex: 1,
+      rawTranscription: transcriptionText,
+      normalizedTranscription: normalization.normalizedTranscription,
+      metadata,
+      resolution,
+      generatedFilename: filename,
+      createdAt: new Date().toISOString(),
+    }),
+  );
   if (audio === null) {
-    await updateProgress(
-      job,
-      "解析済みの音声ファイルを添付しています…",
-      callbacks,
-      discord,
-      showDemoProgress,
-    );
-    audio = await runJobStage("attachment_download_for_result", () =>
-      discord.downloadTemporaryAttachment(attachment, maxAudioBytes(env)));
+    await updateProgress(job, "解析済みの音声ファイルを添付しています…", callbacks, discord, showDemoProgress);
+    audio = await runJobStage("attachment_download_for_result", () => discord.downloadTemporaryAttachment(attachment, maxAudioBytes(env)));
   }
   if (!(await jobs.isActive(job.id))) {
     console.warn("audio_job_processing_stopped", { jobId: job.id, stage: "before_result_notification" });
     return "stopped";
   }
   const resultFile = { data: audio, filename, contentType: job.contentType };
-  const delivered = await runJobStage("result_notification", () => resources?.showDemoDiagnostics
-    ? notifyDemo(job, {
-      audioInput: {
-        filename: job.originalFilename,
-        contentType: job.contentType,
-        sizeBytes: job.sizeBytes,
-        durationSecs: job.durationSecs,
-      },
-      whisper: {
-        model: whisperModel,
-        settings: whisperSettings,
-        result: transcriptionResult ?? { language: null, text: transcriptionText, segments: [] },
-      },
-      transcription: transcriptionText,
-      analysis,
-      sequenceSearches,
-      gemini: {
-        analysis: analysis.diagnostics,
-        normalization: normalization.diagnostics,
-        normalizationGuard: normalization.normalizationGuard,
-      },
-      isTransitAnnouncement: analysis.isTransitAnnouncement,
-      normalizedTranscription: normalization.normalizedTranscription,
-      metadata,
-      resolution,
-      filename,
-    }, callbacks, discord, resultFile)
-    : notify(
-      job,
-      formatAnalysisResult(metadata, normalization.normalizedTranscription, filename),
-      callbacks,
-      discord,
-      resultFile,
-    ));
+  const delivered = await runJobStage("result_notification", () =>
+    resources?.showDemoDiagnostics
+      ? notifyDemo(
+          job,
+          {
+            audioInput: {
+              filename: job.originalFilename,
+              contentType: job.contentType,
+              sizeBytes: job.sizeBytes,
+              durationSecs: job.durationSecs,
+            },
+            whisper: {
+              model: whisperModel,
+              settings: whisperSettings,
+              result: transcriptionResult ?? { language: null, text: transcriptionText, segments: [] },
+            },
+            transcription: transcriptionText,
+            analysis,
+            sequenceSearches,
+            gemini: {
+              analysis: analysis.diagnostics,
+              normalization: normalization.diagnostics,
+              normalizationGuard: normalization.normalizationGuard,
+            },
+            isTransitAnnouncement: analysis.isTransitAnnouncement,
+            normalizedTranscription: normalization.normalizedTranscription,
+            metadata,
+            resolution,
+            filename,
+          },
+          callbacks,
+          discord,
+          resultFile,
+        )
+      : notify(job, formatAnalysisResult(metadata, normalization.normalizedTranscription, filename), callbacks, discord, resultFile),
+  );
   if (!delivered) throw new Error("Discord result notification failed");
   try {
     await runJobStage("ephemeral_cleanup", () => jobs.clearEphemeral(job.id));
@@ -876,12 +822,7 @@ function demoResources(message: DemoAudioJobMessage): ProcessingResources {
   };
 }
 
-async function processDemoMessage(
-  message: DemoAudioJobMessage,
-  env: Env,
-  attempt: number,
-  monitor?: JobMonitor,
-): Promise<"completed" | "failed" | "stopped"> {
+async function processDemoMessage(message: DemoAudioJobMessage, env: Env, attempt: number, monitor?: JobMonitor): Promise<"completed" | "failed" | "stopped"> {
   return processJob(demoJob(message), env, attempt, demoResources(message), monitor);
 }
 
@@ -913,13 +854,13 @@ export async function consumeAudioJobs(batch: MessageBatch<AudioJobMessage>, env
         message.ack();
       } catch (error) {
         const details = errorDetails(error);
-        const stage = errorStage(error, error instanceof AudioJobProcessingTimeoutError
-          ? "processing_timeout"
-          : "demo_processing");
+        const stage = errorStage(error, error instanceof AudioJobProcessingTimeoutError ? "processing_timeout" : "demo_processing");
         if (error instanceof JobCancellationRequestedError) {
           await monitor.transition(job.id, "stopped", error.stage);
           console.info("demo_audio_job_cancelled", {
-            interactionId: demoMessage.interactionId, queueMessageId: message.id, stage: error.stage,
+            interactionId: demoMessage.interactionId,
+            queueMessageId: message.id,
+            stage: error.stage,
           });
           message.ack();
           continue;
@@ -933,18 +874,11 @@ export async function consumeAudioJobs(batch: MessageBatch<AudioJobMessage>, env
         });
         await notify(
           job,
-          error instanceof AttachmentUnavailableError
-            ? formatFailure("attachment_unavailable")
-            : formatDemoFailure(error, stage, message.attempts),
+          error instanceof AttachmentUnavailableError ? formatFailure("attachment_unavailable") : formatDemoFailure(error, stage, message.attempts),
           resources.callbacks,
           discord,
         );
-        await monitor.transition(
-          job.id,
-          error instanceof AudioJobProcessingTimeoutError ? "timed_out" : "failed",
-          stage,
-          error,
-        );
+        await monitor.transition(job.id, error instanceof AudioJobProcessingTimeoutError ? "timed_out" : "failed", stage, error);
         message.ack();
       }
       continue;
@@ -977,7 +911,10 @@ export async function consumeAudioJobs(batch: MessageBatch<AudioJobMessage>, env
       const details = errorDetails(error);
       if (error instanceof JobCancellationRequestedError) {
         console.info("audio_job_cancelled", {
-          jobId: job.id, queueMessageId: message.id, attempt: message.attempts, stage: error.stage,
+          jobId: job.id,
+          queueMessageId: message.id,
+          attempt: message.attempts,
+          stage: error.stage,
         });
         await jobs.updateStatus(job.id, "failed", "cancelled");
         await jobs.clearEphemeral(job.id);
@@ -985,32 +922,30 @@ export async function consumeAudioJobs(batch: MessageBatch<AudioJobMessage>, env
         message.ack();
         continue;
       }
-      if (error instanceof AttachmentUnavailableError
-        || error instanceof AudioJobProcessingTimeoutError
-        || message.attempts === 1
-        || message.attempts >= 5) {
+      if (error instanceof AttachmentUnavailableError || error instanceof AudioJobProcessingTimeoutError || message.attempts === 1 || message.attempts >= 5) {
         await sendAlert(env, discord, job.id, errorStage(error, "processing"), error, message.attempts);
       }
       if (error instanceof AttachmentUnavailableError) {
         const stage = errorStage(error, "attachment_download");
         const resultAttachmentFailed = stage === "attachment_download_for_result";
         console.error("audio_job_attachment_terminal", {
-          jobId: job.id, queueMessageId: message.id, attempt: message.attempts, ...details,
+          jobId: job.id,
+          queueMessageId: message.id,
+          attempt: message.attempts,
+          ...details,
         });
         await jobs.updateStatus(job.id, resultAttachmentFailed ? "partial" : "failed", "attachment_unavailable");
         await monitor.transition(job.id, "failed", stage, error);
-        await notify(
-          job,
-          formatFailure(resultAttachmentFailed ? "processing_failed" : "attachment_unavailable"),
-          callbacks,
-          discord,
-        );
+        await notify(job, formatFailure(resultAttachmentFailed ? "processing_failed" : "attachment_unavailable"), callbacks, discord);
         await jobs.clearEphemeral(job.id);
         console.info("audio_job_message_acked", { jobId: job.id, queueMessageId: message.id, attempt: message.attempts });
         message.ack();
       } else if (error instanceof AudioJobProcessingTimeoutError) {
         console.error("audio_job_processing_timed_out", {
-          jobId: job.id, queueMessageId: message.id, attempt: message.attempts, ...details,
+          jobId: job.id,
+          queueMessageId: message.id,
+          attempt: message.attempts,
+          ...details,
         });
         await jobs.updateStatus(job.id, "failed", "processing_timeout");
         await monitor.transition(job.id, "timed_out", errorStage(error, "processing_timeout"), error);
@@ -1021,7 +956,11 @@ export async function consumeAudioJobs(batch: MessageBatch<AudioJobMessage>, env
       } else if (shouldRetryAudioJob(error, message.attempts)) {
         const delaySeconds = Math.min(300, 2 ** message.attempts * 5);
         console.error("audio_job_message_retried", {
-          jobId: job.id, queueMessageId: message.id, attempt: message.attempts, delaySeconds, ...details,
+          jobId: job.id,
+          queueMessageId: message.id,
+          attempt: message.attempts,
+          delaySeconds,
+          ...details,
         });
         await jobs.updateStatus(job.id, "queued", "transient_processing_error");
         await monitor.transition(job.id, "retrying", errorStage(error, "processing"), error);
@@ -1034,7 +973,10 @@ export async function consumeAudioJobs(batch: MessageBatch<AudioJobMessage>, env
         message.retry({ delaySeconds });
       } else {
         console.error("audio_job_processing_terminal", {
-          jobId: job.id, queueMessageId: message.id, attempt: message.attempts, ...details,
+          jobId: job.id,
+          queueMessageId: message.id,
+          attempt: message.attempts,
+          ...details,
         });
         const latestJob = await jobs.findById(job.id);
         const terminalStatus = latestJob !== null && latestJob.transcriptionText !== null ? "partial" : "failed";
