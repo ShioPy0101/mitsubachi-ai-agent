@@ -1,0 +1,14 @@
+{
+  "method": "wrangler deploy --dry-run, same installed Wrangler 4.141.0, no deployment",
+  "beforeCommit": "37ef39f",
+  "before": {
+    "uploadKiB": 1141.5,
+    "gzipKiB": 200.75
+  },
+  "after": {
+    "uploadKiB": 6778.08,
+    "gzipKiB": 849.95
+  },
+  "productionCpuMeasured": false,
+  "productionPeakMemoryMeasured": false
+}

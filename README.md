@@ -1,6 +1,8 @@
 # mitsubachi-ai-agent
 
-Cloudflare Workers上で動作する、公共交通機関の案内放送向けDiscord Botです。許可されたサーバーで `/platform-ai-agent audio:<attachment>` を実行すると、WAV/MP3は無音区間で分割してからWorkers AI Whisperで文字起こしします。Gemini #1が原文を変更せずSafety・交通案内判定・metadata・駅mentionの役割と停車駅sequenceを抽出し、アプリがsequenceごとにD1経路を検索した後、Gemini #2が候補に制約された文字起こし補正だけを行います。通過した音声だけをD1へ保存します。鉄道、地下鉄、路面電車、路線・高速バス、船舶、航空機の運行・乗降案内を対象とします。検索は `/platform-search query:<text>` です。
+Cloudflare Workers上で動作する公共交通放送向けDiscord Botです。Whisperのraw transcriptionを保持し、Gemini #1が意味・event・mentionを抽出、StaticRailwayRepositoryとStationCorrectionEngineが駅候補・順序付き経路の材料を生成、Gemini #2が自然な文章へ再構成します。駅・路線・経路マスタはWorkerの静的データ、D1はjob・clip・access・callback・monitorの運用状態です。
+
+本番デプロイなしで補正を検証できます。[ローカル検証ガイド](docs/local-validation.md)と[改修・計測報告](docs/implementation-report.md)を参照してください。
 
 ## Setup
 
@@ -12,15 +14,15 @@ Cloudflare Workers上で動作する、公共交通機関の案内放送向けDi
    - 任意: `ADMIN_JOBS_CHANNEL_ID` を管理用チャンネルIDに設定すると、AudioJobごとの進行状況と停止ボタンを同じメッセージ上に表示します。停止操作はそのチャンネル内かつAdministratorまたはManage Guild権限を持つメンバーに限定されます。`ADMIN_GUILD_ID` は不要です。
    - `DISCORD_CONTROL_USER_IDS` を、Botオーナー（およびサーバー利用可否を変更できるユーザー）のDiscord user IDのJSON配列（例: `["123456789012345678"]`）に設定します。空配列・不正なJSONの場合は誰も管理操作とdemoを実行できません。
 5. `pnpm wrangler types`
-6. `pnpm wrangler d1 migrations apply mitsubachi-ai-agent --remote`
-7. `pnpm stations:sql` の後、`pnpm wrangler d1 execute mitsubachi-ai-agent --remote --file stations-import.sql`
+6. `pnpm generate:railway-data`（source of truthは `data/stations.csv`）
+7. ローカル確認: `pnpm verify:local`、`pnpm test`。本番migrationは検証後の別操作として `pnpm wrangler d1 migrations apply mitsubachi-ai-agent --remote`
 8. `.dev.vars` にDiscord用環境変数を設定して `pnpm discord:register`（コマンドが `.dev.vars` を自動で読み込みます）
    - 本番のグローバルコマンド登録は `pnpm discord:register -- --global` を使用します。`DISCORD_DEV_GUILD_ID` が設定されていても `--global` が優先されます。
 9. `pnpm deploy:dry-run`、`pnpm deploy`
 
 デプロイ後、許可ユーザーが対象サーバー内で `/platform-ai-agent-allow` を実行すると音声解析と検索が有効になります。停止は `/platform-ai-agent-deny` です。どちらもサーバー内でのみ実行でき、応答は実行者にだけ表示されます。
 
-`/platform-ai-agent-demo audio:<attachment>` は `DISCORD_CONTROL_USER_IDS` に明示したオーナー専用です。通常の文字起こし・Gemini補正・入力サイズ制限を使いますが、guildの許可リストと通常利用制限は参照せず、通常のjob、callback token、文字起こし、clip、利用記録をD1へ書き込みません。`ADMIN_JOBS_CHANNEL_ID` が設定されている場合だけ、監視・停止用の一時状態を `job_monitor_messages` に保存します。駅候補データはD1から読み取ります。オーナーIDが未設定、不正、または実行者と不一致なら、添付取得、Queue送信、外部AI呼び出しより前に拒否します。
+`/platform-ai-agent-demo audio:<attachment>` は `DISCORD_CONTROL_USER_IDS` に明示したオーナー専用です。publicと同じpipeline・StaticRailwayRepositoryを使い、job/clip/checkpointも通常保存します。表示だけが詳細diagnostics付きになります。guild許可リストを迂回できるのはこの明示オーナーだけです。モードはpublic/demoの2種類です。
 
 ### Discord上の管理コマンド権限
 

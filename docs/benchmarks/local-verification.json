@@ -1,0 +1,56 @@
+{
+  "storage": "/tmp/mitsubachi-d1-RfA5Ld",
+  "migrations": "0001 through 0010",
+  "tables": [
+    {
+      "results": [
+        {
+          "name": "_cf_METADATA"
+        },
+        {
+          "name": "audio_jobs"
+        },
+        {
+          "name": "d1_migrations"
+        },
+        {
+          "name": "ephemeral_attachment_references"
+        },
+        {
+          "name": "guild_access"
+        },
+        {
+          "name": "interaction_callback_secrets"
+        },
+        {
+          "name": "job_monitor_messages"
+        },
+        {
+          "name": "railway_audio_clips"
+        },
+        {
+          "name": "sqlite_sequence"
+        }
+      ],
+      "success": true,
+      "meta": {
+        "duration": 0
+      }
+    }
+  ],
+  "foreignKeys": [
+    {
+      "results": [],
+      "success": true,
+      "meta": {
+        "duration": 1
+      }
+    }
+  ],
+  "health": {
+    "status": "ok"
+  },
+  "localStartupMs": 1767,
+  "externalAiCalled": false,
+  "productionDeployed": false
+}
