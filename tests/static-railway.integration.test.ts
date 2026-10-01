@@ -13,6 +13,8 @@ import { generateRailwayData } from "../src/stations/static-generator";
 import { assertRailwayDataIntegrity } from "../src/stations/static-schema";
 import { buildRailwayIndexes } from "../src/stations/static-indexes";
 import { StaticRailwayRepository } from "../src/stations/static-repository";
+import { StationCorrectionEngine } from "../src/stations/correction-engine";
+import type { StationMention } from "../src/metadata/service";
 import { railwayStaticData, railwayIndexes } from "../src/stations/static-data";
 import type { StationImportRow } from "../src/stations/import";
 const row = (
@@ -275,6 +277,82 @@ describe("安雪 / やすゆき phonetic candidate generation", () => {
 });
 
 describe("anchored exact reading tie resolution", () => {
+  it("prefers the exact reading at both ends of a two-mention sequence", async () => {
+    for (const reverse of [false, true]) {
+      const names = reverse ? ["鶴橋", "伏瀬"] : ["伏瀬", "鶴橋"];
+      const hints = reverse ? ["つるはし", "ふせ"] : ["ふせ", "つるはし"];
+      const result = await new StationCandidateService(
+        new StaticRailwayRepository(railwayIndexes),
+      ).analyzeMentions(
+        names,
+        {},
+        { phoneticHints: hints, sequenceRole: "stops" },
+      );
+      expect(
+        result.routeCandidates[0]!.stations.map((s) => s.station.name),
+      ).toEqual(reverse ? ["鶴橋", "布施"] : ["布施", "鶴橋"]);
+      expect(result.mentionCandidates[reverse ? 1 : 0]![0]!.station.name).toBe(
+        "布施",
+      );
+      expect(result.mentionCandidates[reverse ? 1 : 0]![0]!.bound).toBe(false);
+    }
+  });
+  it("preserves separate stop sequences while choosing 布施 in the second sequence", async () => {
+    const names = [
+      "大阪上本町",
+      "桜井",
+      "大和八木",
+      "大和高田",
+      "五井堂",
+      "河内国部",
+      "伏瀬",
+      "鶴橋",
+    ];
+    const hints = [
+      "おおさかうえほんまち",
+      "さくらい",
+      "やまとやぎ",
+      "やまとたかだ",
+      "ごいどう",
+      "かわちこくぶ",
+      "ふせ",
+      "つるはし",
+    ];
+    const mentions: StationMention[] = names.map((text, i) => ({
+      id: `mention:${i * 10}:${i * 10 + text.length}`,
+      text,
+      start: i * 10,
+      end: i * 10 + text.length,
+      role: i === 0 ? "destination" : "stop",
+      sequenceId: i === 0 ? 1 : i < 6 ? 2 : 3,
+      phoneticHint: hints[i]!,
+      language: "ja",
+    }));
+    const result = await new StationCorrectionEngine(
+      () => new StaticRailwayRepository(railwayIndexes),
+    ).run({ transcription: names.join("、"), mentions, context: {} });
+    expect(result.sequenceSearches.map((s) => s.id)).toEqual([1, 2, 3]);
+    expect(result.sequenceSearches[0]!.stationSearch.routeSearchStatus).toBe(
+      "insufficient_anchors",
+    );
+    expect(
+      result.sequenceSearches[1]!.stationSearch.routeCandidates[0]!.stations.map(
+        (s) => s.station.name,
+      ),
+    ).toEqual(["桜井", "大和八木", "大和高田", "五位堂", "河内国分"]);
+    expect(
+      result.sequenceSearches[2]!.stationSearch.routeCandidates[0]!.stations.map(
+        (s) => s.station.name,
+      ),
+    ).toEqual(["布施", "鶴橋"]);
+    expect(
+      result.mentionEvidence.find((e) => e.mention.text === "伏瀬")!
+        .candidates[0]!.station.name,
+    ).toBe("布施");
+    expect(result.metrics.sequences.every((s) => s.d1QueryCount === 0)).toBe(
+      true,
+    );
+  });
   const smallRepository = (ambiguous = false) =>
     new StaticRailwayRepository(
       buildRailwayIndexes(
