@@ -273,3 +273,117 @@ describe("安雪 / やすゆき phonetic candidate generation", () => {
     ).toBe(false);
   });
 });
+
+describe("compare deterministic matching strategies", () => {
+  const names = [
+    "神話口",
+    "福岐",
+    "千田竹豊",
+    "上",
+    "青山",
+    "奈良",
+    "千田半田",
+  ];
+  // Literal reading hints from the reported demo; 青山 is the regular reading.
+  const hints = [
+    "しんわぐち",
+    "ふくき",
+    "ちだたけとよ",
+    "かみ",
+    "あおやま",
+    "なら",
+    "ちだはんだ",
+  ];
+  const expected = [
+    "河和口",
+    "富貴",
+    "知多武豊",
+    "上ゲ",
+    "青山",
+    "成岩",
+    "知多半田",
+  ];
+  it("retains the strict failure and selects the independently resolved stop sequence", async () => {
+    const repository = new StaticRailwayRepository(railwayIndexes);
+    const pools = vi.spyOn(repository, "findCandidatePools");
+    const result = await new StationCandidateService(
+      repository,
+    ).analyzeMentions(
+      names,
+      {},
+      { phoneticHints: hints, sequenceRole: "stops" },
+    );
+    expect(result.strategyComparison).toMatchObject({
+      selected: "contained",
+      reason: "only_matched_strategy",
+      attempts: [
+        { strategy: "strict", status: "no_route_match" },
+        { strategy: "contained", status: "matched" },
+      ],
+    });
+    expect(
+      result.routeCandidates[0]!.stations.map((s) => s.station.name),
+    ).toEqual(expected);
+    expect(result.mentionCandidates.map((cs) => cs[0]!.station.name)).toEqual(
+      expected,
+    );
+    expect(pools).toHaveBeenCalledTimes(1);
+    expect(result.mentionCandidates.every((cs) => cs.length <= 5)).toBe(true);
+    expect(result.metrics.alignmentComparisonCount).toBeLessThanOrEqual(
+      STATION_SEQUENCE_LIMITS.alignmentComparisons,
+    );
+    expect(result.metrics.sequencePreRankComparisons).toBeLessThanOrEqual(
+      20_000,
+    );
+    expect(result.metrics.d1QueryCount).toBe(0);
+    expect(
+      result.mentionCandidates[5]!.find((c) => c.station.name === "成岩")!
+        .nameSimilarity,
+    ).toBe(0);
+    expect(
+      result.mentionCandidates[5]!.find((c) => c.station.name === "成岩")!
+        .bound,
+    ).toBe(false);
+  });
+  it("keeps the strict Yasuyuki rescue when it already provides a valid route", async () => {
+    const result = await new StationCandidateService(
+      new StaticRailwayRepository(railwayIndexes),
+    ).analyzeMentions(
+      ["京都", "安雪"],
+      {},
+      { phoneticHints: [null, "やすゆき"] },
+    );
+    expect(result.strategyComparison!.selected).toBe("strict");
+    expect(
+      result.routeCandidates[0]!.stations.map((s) => s.station.name),
+    ).toEqual(["京都", "野洲"]);
+  });
+  it("prefers strict on equal evidence and keeps the same-line fast path", async () => {
+    const result = await new StationCandidateService(
+      new StaticRailwayRepository(railwayIndexes),
+    ).analyzeMentions(["河和口", "富貴", "知多武豊"]);
+    expect(result.strategyComparison).toMatchObject({
+      selected: "strict",
+      reason: "strict_tie_break",
+    });
+    expect(result.metrics.graphSearchCount).toBe(0);
+  });
+  it("does not invent a route for contradictory anchors or bind a single phonetic-only mention", async () => {
+    const service = new StationCandidateService(
+      new StaticRailwayRepository(railwayIndexes),
+    );
+    const contradictory = await service.analyzeMentions([
+      "京都",
+      "野洲",
+      "山科",
+    ]);
+    expect(contradictory.routeCandidates).toEqual([]);
+    const single = await service.analyzeMentions(
+      ["安雪"],
+      {},
+      { phoneticHints: ["やすゆき"] },
+    );
+    expect(single.strategyComparison!.reason).toBe("neither_matched");
+    expect(single.mentionCandidates[0]!.every((c) => !c.bound)).toBe(true);
+  });
+});
