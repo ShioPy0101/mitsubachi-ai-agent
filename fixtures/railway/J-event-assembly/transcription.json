@@ -1,0 +1,26 @@
+{
+  "text": "まもなく発車いたします。 3番線でお待ちのお客様はご注意ください。 Please stand behind the yellow line. This train will pass through. 電車が発車いたします。ドアが閉まります。",
+  "segments": [
+    {
+      "startSec": 0,
+      "endSec": 12,
+      "text": "まもなく発車いたします。 3番線でお待ちのお客様はご注意ください。"
+    },
+    {
+      "startSec": 12,
+      "endSec": 20,
+      "text": "Please stand behind the yellow line. This train will pass through."
+    },
+    {
+      "startSec": 20,
+      "endSec": 25,
+      "text": "電車が発車いたします。ドアが閉まります。"
+    }
+  ],
+  "language": "ja",
+  "provenance": {
+    "type": "synthetic-reproduction",
+    "audioVerified": false,
+    "description": "Reproduction of reported mid-word Gemini span / debug-event assembly defect; no captured audio."
+  }
+}

@@ -28,6 +28,7 @@ beforeEach(async () => {
 });
 afterEach(() => vi.unstubAllGlobals());
 const raw = "次は篠原、安雪、守山です。The next stop is Yasu.";
+const normalized = "次は篠原、野洲、守山です。The next stop is Yasu.";
 const metadata = {
   station: null,
   line: "琵琶湖線",
@@ -107,8 +108,14 @@ describe("fresh local D1 and queue pipeline with fake providers", () => {
             geminiCalls === 1
               ? { isTransitAnnouncement: true, mentions, ...metadata }
               : {
-                  normalizedTranscription:
-                    "次は篠原、野洲、守山です。The next stop is Yasu.",
+                  normalizedTranscription: normalized,
+                  normalizedEvents: [
+                    {
+                      sourceEventId: "missing-debug-id",
+                      language: "ja",
+                      text: "し\n。\n3. Pl\ne\nthrough.",
+                    },
+                  ],
                   entities: [],
                 };
           return Response.json({
@@ -131,7 +138,10 @@ describe("fresh local D1 and queue pipeline with fake providers", () => {
       const ai = {
         run: vi.fn().mockResolvedValue({
           text: raw,
-          segments: [],
+          segments: [
+            { start: 0, end: 3, text: "次は篠原、安雪、守山です。" },
+            { start: 3, end: 6, text: "The next stop is Yasu." },
+          ],
           transcription_info: { language: "ja" },
         }),
       };
@@ -178,6 +188,18 @@ describe("fresh local D1 and queue pipeline with fake providers", () => {
       const persisted = await new JobsRepository(env.DB).findById(job.id);
       expect(persisted?.status).toBe("completed");
       expect(persisted?.transcriptionText).toBe(raw);
+      const checkpoint = await env.DB.prepare(
+        "SELECT pipeline_checkpoint FROM audio_jobs WHERE id=?",
+      )
+        .bind(job.id)
+        .first<{ pipeline_checkpoint: string }>();
+      const stored = JSON.parse(checkpoint!.pipeline_checkpoint);
+      expect(stored.speech.value.segments).toHaveLength(2);
+      expect(
+        stored.analysis.value.semantic.sourceSegments.map(
+          (s: { id: string }) => s.id,
+        ),
+      ).toEqual(["speech-segment:0", "speech-segment:1"]);
       const clip = await env.DB.prepare(
         "SELECT raw_transcription,normalized_transcription FROM railway_audio_clips WHERE job_id=?",
       )
@@ -185,8 +207,18 @@ describe("fresh local D1 and queue pipeline with fake providers", () => {
         .first();
       expect(clip).toMatchObject({
         raw_transcription: raw,
-        normalized_transcription: expect.stringContaining("野洲"),
+        normalized_transcription: normalized,
       });
+      expect(delivered.some((content) => content.includes(normalized))).toBe(
+        true,
+      );
+      // Public prose and demo prose both use the provider document. Demo may
+      // separately attach the flawed event array as diagnostics.
+      expect(
+        delivered.some((content) =>
+          content.includes("し\n。\n3. Pl\ne\nthrough."),
+        ),
+      ).toBe(false);
       await new JobsRepository(env.DB).saveTranscription(
         job.id,
         "attempted raw overwrite",

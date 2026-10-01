@@ -1,0 +1,11 @@
+{
+  "normalizedTranscription": "まもなく電車が発車します。3番線のお客様はご注意ください。\nPlease stand behind the yellow line. This train will pass through.\n電車が発車します。ドアが閉まります。",
+  "normalizedEvents": [
+    {
+      "sourceEventId": "debug-only-incomplete",
+      "language": "en",
+      "text": "し\n。\n3. Pl\ne\nthrough."
+    }
+  ],
+  "entities": []
+}

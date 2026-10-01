@@ -51,7 +51,7 @@ describe("raw semantic normalized layers", () => {
       ),
     ).toBe(true);
   });
-  it("accepts free reconstruction and preserves event order regardless of model array order", async () => {
+  it("adopts provider prose unchanged regardless of debug event array order", async () => {
     const normalizedEvents = [
       {
         sourceEventId: semantic.events[2]!.id,
@@ -76,13 +76,12 @@ describe("raw semantic normalized layers", () => {
         entities: [],
       }),
     ).normalize(raw, analysis, []);
-    expect(result.normalizedTranscription).toBe(
-      "まもなく和倉温泉に到着します。\nThe next stop is Wakura Onsen.\n次は和倉温泉です。",
-    );
+    expect(result.normalizedTranscription).toBe("provider prose");
+    expect(result.normalizedEvents).toEqual(normalizedEvents);
     expect(semantic.rawTranscription).toBe(raw);
     expect(result.normalizationObservation.outcome).toBe("generated");
   });
-  it("retains a missing English event locally without rejecting reconstructed Japanese prose", async () => {
+  it("observes missing debug events without inserting raw text into provider prose", async () => {
     const normalizedEvents = [
       {
         sourceEventId: semantic.events[0]!.id,
@@ -92,15 +91,16 @@ describe("raw semantic normalized layers", () => {
     ];
     const result = await new GeminiMetadataService("key", "test", async () =>
       envelope({
-        normalizedTranscription: "次は和倉温泉です。",
+        normalizedTranscription:
+          "次は和倉温泉です。The next stop is Wakura Onsen.",
         normalizedEvents,
         entities: [],
       }),
     ).normalize(raw, analysis, []);
-    expect(result.normalizedTranscription).toContain(
-      "The next stop is Wakuda Onsen.",
+    expect(result.normalizedTranscription).toBe(
+      "次は和倉温泉です。The next stop is Wakura Onsen.",
     );
-    expect(result.normalizedTranscription).toContain("次は和倉温泉です。");
+    expect(result.normalizedEvents).toEqual(normalizedEvents);
     expect(result.normalizationObservation.missingSourceEventIds).toContain(
       semantic.events[1]!.id,
     );
@@ -226,4 +226,105 @@ it("attaches speech time ranges without deleting either language", () => {
   ]);
   expect(result.events.map((e) => e.language)).toEqual(["ja", "en"]);
   expect(result.rawTranscription).toBe(source.rawTranscription);
+});
+
+import speechFixture from "../fixtures/railway/J-event-assembly/transcription.json";
+import annotationFixture from "../fixtures/railway/J-event-assembly/analysis.json";
+import normalizedFixture from "../fixtures/railway/J-event-assembly/normalized.json";
+import type { SemanticEventProposal } from "../src/railway/semantic";
+
+describe("mid-word semantic annotation regression", () => {
+  const proposals = annotationFixture.events as SemanticEventProposal[];
+  it("uses complete Whisper segments and lets several annotations share a segment", () => {
+    const representation = attachSpeechSegmentProvenance(
+      buildSemanticRepresentation(speechFixture.text, [], proposals),
+      speechFixture.segments,
+    );
+    expect(representation.rawTranscription).toBe(speechFixture.text);
+    expect(representation.sourceSegments?.map((s) => s.text)).toEqual(
+      speechFixture.segments.map((s) => s.text),
+    );
+    expect(representation.sourceSegments?.map((s) => s.id)).toEqual([
+      "speech-segment:0",
+      "speech-segment:1",
+      "speech-segment:2",
+    ]);
+    const firstEvents = representation.events.filter(
+      (e) => e.sourceSegmentIds[0] === "speech-segment:0",
+    );
+    expect(firstEvents).toHaveLength(2);
+    expect(
+      firstEvents.map((e) =>
+        speechFixture.text.slice(e.sourceSpan.start, e.sourceSpan.end),
+      ),
+    ).toEqual([
+      speechFixture.segments[0]!.text,
+      speechFixture.segments[0]!.text,
+    ]);
+    expect(representation.events.map((e) => e.language)).toEqual([
+      "ja",
+      "ja",
+      "en",
+      "ja",
+    ]);
+    expect(
+      representation.events.map((e) => e.sourceTimeRange?.startSec),
+    ).toEqual([0, 0, 12, 20]);
+  });
+  it("never splits text-only sources at Gemini offsets", () => {
+    const representation = buildSemanticRepresentation(
+      speechFixture.text,
+      [],
+      proposals,
+    );
+    const sourceSpans = buildSemanticRepresentation(
+      speechFixture.text,
+      [],
+    ).sourceSegments!.map((s) => s.sourceSpan);
+    expect(representation.sourceSegments!.map((s) => s.sourceSpan)).toEqual(
+      sourceSpans,
+    );
+    expect(
+      representation.events.every((e) =>
+        sourceSpans.some(
+          (s) => s?.start === e.sourceSpan.start && s.end === e.sourceSpan.end,
+        ),
+      ),
+    ).toBe(true);
+  });
+  it("keeps Gemini #2's document verbatim even when debug events are incomplete fragments", async () => {
+    const semantic = buildSemanticRepresentation(
+      speechFixture.text,
+      [],
+      proposals,
+      speechFixture.segments,
+    );
+    const first = { ...analysis, semantic };
+    const result = await new GeminiMetadataService("key", "test", async () =>
+      envelope(normalizedFixture),
+    ).normalize(speechFixture.text, first, []);
+    expect(result.normalizedTranscription).toBe(
+      normalizedFixture.normalizedTranscription,
+    );
+    expect(result.normalizedEvents).toEqual(normalizedFixture.normalizedEvents);
+    expect(result.normalizationObservation.missingSourceEventIds).toEqual(
+      semantic.events.map((e) => e.id),
+    );
+    expect(result.normalizedTranscription).not.toContain(
+      "し\n。\n3. Pl\ne\nthrough.",
+    );
+    expect(first.semantic.rawTranscription).toBe(speechFixture.text);
+  });
+});
+
+it("keeps whitespace in nonempty provider prose instead of transforming the document", async () => {
+  const prose = "\n 日本語の案内です。\nEnglish announcement. \n";
+  const result = await new GeminiMetadataService("key", "test", async () =>
+    envelope({
+      normalizedTranscription: prose,
+      normalizedEvents: [],
+      entities: [],
+    }),
+  ).normalize(raw, analysis, []);
+  expect(result.normalizedTranscription).toBe(prose);
 });
