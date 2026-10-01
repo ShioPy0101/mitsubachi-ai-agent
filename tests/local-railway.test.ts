@@ -23,13 +23,17 @@ describe("offline fixture railway evaluation", () => {
           entry,
         ).toEqual(expected.topCandidates);
       expect(result.semantic!.rawTranscription).toBe(result.raw);
-      expect(
-        result
-          .semantic!.events.map((e) =>
-            result.raw.slice(e.sourceSpan.start, e.sourceSpan.end),
-          )
-          .join(""),
-      ).toBe(result.raw);
+      const transcription = JSON.parse(
+        await readFile(join(folder, "transcription.json"), "utf8"),
+      );
+      if (transcription.segments?.length)
+        expect(result.semantic!.sourceSegments!.map((s) => s.text)).toEqual(
+          transcription.segments.map((s: { text: string }) => s.text),
+        );
+      else
+        expect(
+          result.semantic!.sourceSegments!.map((s) => s.text).join(""),
+        ).toBe(result.raw);
       expect(
         result.correction.metrics.sequences.every(
           (s) => s.d1QueryCount === 0 && s.d1RowsRead === 0,

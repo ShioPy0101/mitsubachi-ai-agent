@@ -7,7 +7,11 @@ import {
   createStaticRailwayJobCache,
 } from "../src/stations/static-repository";
 import { railwayIndexes } from "../src/stations/static-data";
-import { buildSemanticRepresentation } from "../src/railway/semantic";
+import {
+  attachSpeechSegmentProvenance,
+  buildSemanticRepresentation,
+  type SemanticEventProposal,
+} from "../src/railway/semantic";
 import { buildGeminiNormalizationPrompt } from "../src/metadata/prompt";
 import type { AnnouncementAnalysis } from "../src/metadata/service";
 export async function loadFixture(folder: string) {
@@ -17,11 +21,21 @@ export async function loadFixture(folder: string) {
   const analysis: AnnouncementAnalysis = JSON.parse(
     await readFile(join(folder, "analysis.json"), "utf8"),
   );
-  if (analysis.semantic?.rawTranscription !== transcription.text)
+  if (
+    !analysis.semantic ||
+    analysis.semantic.rawTranscription !== transcription.text ||
+    !analysis.semantic.sourceSegments
+  )
     analysis.semantic = buildSemanticRepresentation(
       transcription.text,
       analysis.mentions,
+      (analysis as AnnouncementAnalysis & { events?: SemanticEventProposal[] })
+        .events ?? [],
     );
+  analysis.semantic = attachSpeechSegmentProvenance(
+    analysis.semantic,
+    transcription.segments ?? [],
+  );
   return { transcription, analysis };
 }
 export async function evaluateFixture(folder: string) {
