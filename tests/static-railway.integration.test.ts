@@ -274,6 +274,145 @@ describe("安雪 / やすゆき phonetic candidate generation", () => {
   });
 });
 
+describe("anchored exact reading tie resolution", () => {
+  const smallRepository = (ambiguous = false) =>
+    new StaticRailwayRepository(
+      buildRailwayIndexes(
+        generateRailwayData([
+          row("大和八木", "試験線", null, "長瀬", "やまとやぎ"),
+          row("長瀬", "試験線", "大和八木", "布施", "ながせ"),
+          row("布施", "試験線", "長瀬", ambiguous ? "布世" : "鶴橋", "ふせ"),
+          ...(ambiguous ? [row("布世", "試験線", "布施", "鶴橋", "ふせ")] : []),
+          row("鶴橋", "試験線", ambiguous ? "布世" : "布施", null, "つるはし"),
+        ]),
+      ),
+    );
+  it("does not resolve multiple exact-reading positions as a unique station", async () => {
+    const result = await new StationCandidateService(
+      smallRepository(true),
+    ).analyzeMentions(
+      ["大和八木", "伏瀬", "鶴橋"],
+      {},
+      {
+        phoneticHints: ["やまとやぎ", "ふせ", "つるはし"],
+        sequenceRole: "stops",
+      },
+    );
+    expect(result.routeCandidates[0]!.mentionMatches![1]!.station.name).toBe(
+      "長瀬",
+    );
+  });
+  it("requires direct evidence for both neighbouring anchors", async () => {
+    const result = await new StationCandidateService(
+      smallRepository(),
+    ).analyzeMentions(
+      ["八岐", "伏瀬", "鶴橋"],
+      {},
+      {
+        phoneticHints: ["やまとやぎ", "ふせ", "つるはし"],
+        sequenceRole: "stops",
+      },
+    );
+    expect(result.routeCandidates[0]!.mentionMatches![1]!.station.name).toBe(
+      "長瀬",
+    );
+  });
+  const names = [
+    "桜井",
+    "大和八木",
+    "大和高田",
+    "五井堂",
+    "河内国部",
+    "伏瀬",
+    "鶴橋",
+  ];
+  const hints = [
+    "さくらい",
+    "やまとやぎ",
+    "やまとたかだ",
+    "ごいどう",
+    "かわちこくぶ",
+    "ふせ",
+    "つるはし",
+  ];
+  it("retains 布施 in candidate generation and distinguishes its exact reading from 長瀬", async () => {
+    const pools = await new StaticRailwayRepository(
+      railwayIndexes,
+    ).findCandidatePools(["伏瀬"], ["ふせ"], {}, 8, 8);
+    const fuse = pools.phonetic[0]!.find((s) => s.name === "布施")!;
+    const nagase = [...railwayIndexes.byId.values()].find(
+      (s) => s.name === "長瀬",
+    )!;
+    expect(fuse).toBeDefined();
+    expect(lexicalSimilarities("伏瀬", fuse, "ふせ").phoneticSimilarity).toBe(
+      1,
+    );
+    expect(
+      lexicalSimilarities("伏瀬", nagase, "ふせ").phoneticSimilarity,
+    ).toBeLessThan(1);
+  });
+  for (const strategy of ["strict", "contained", undefined] as const)
+    it(`selects 布施 between 河内国分 and 鶴橋 (${strategy ?? "combined"})`, async () => {
+      const result = await new StationCandidateService(
+        new StaticRailwayRepository(railwayIndexes),
+      ).analyzeMentions(
+        names,
+        {},
+        {
+          phoneticHints: hints,
+          sequenceRole: "stops",
+          ...(strategy ? { matchingStrategy: strategy } : {}),
+        },
+      );
+      expect(
+        result.routeCandidates[0]!.stations.map((s) => s.station.name),
+      ).toEqual([
+        "桜井",
+        "大和八木",
+        "大和高田",
+        "五位堂",
+        "河内国分",
+        "布施",
+        "鶴橋",
+      ]);
+      expect(result.mentionCandidates[5]![0]!.station.name).toBe("布施");
+      expect(result.mentionCandidates[5]![0]!.bound).toBe(false);
+      expect(result.metrics.d1QueryCount).toBe(0);
+    });
+  it("does not override a strong direct surface with a conflicting inferred reading", async () => {
+    const exactNames = [...names];
+    exactNames[5] = "長瀬";
+    const result = await new StationCandidateService(
+      new StaticRailwayRepository(railwayIndexes),
+    ).analyzeMentions(
+      exactNames,
+      {},
+      { phoneticHints: hints, sequenceRole: "stops" },
+    );
+    expect(result.routeCandidates[0]!.mentionMatches![5]!.station.name).toBe(
+      "長瀬",
+    );
+  });
+  for (const hint of [null, "やまとやぎ"])
+    it(`does not invent a reading match outside the neighbouring anchors (${hint})`, async () => {
+      const readings: (string | null)[] = [...hints];
+      readings[5] = hint;
+      const result = await new StationCandidateService(
+        new StaticRailwayRepository(railwayIndexes),
+      ).analyzeMentions(
+        names,
+        {},
+        { phoneticHints: readings, sequenceRole: "stops" },
+      );
+      expect(result.routeCandidates[0]!.mentionMatches![5]!.station.name).toBe(
+        "長瀬",
+      );
+      expect(result.metrics.alignmentComparisonCount).toBeLessThanOrEqual(
+        STATION_SEQUENCE_LIMITS.alignmentComparisons,
+      );
+    });
+});
+
 describe("compare deterministic matching strategies", () => {
   const names = [
     "神話口",
