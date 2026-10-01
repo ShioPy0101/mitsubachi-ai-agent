@@ -1,15 +1,13 @@
 import type { GeminiNormalizationExtraction } from "../metadata/gemini";
 import type { AnnouncementAnalysis } from "../metadata/service";
 import { generateRailwayFilename } from "../railway/filename";
-import type { RailwayAnnouncementMetadata } from "../railway/types";
+import {
+  assembleNormalizedMetadata,
+  sourceMentionForEntity,
+} from "../railway/result-metadata";
 import type { StationCorrectionResult } from "../stations/correction-engine";
 import { resolveStation } from "../stations/resolver";
 
-const stationValue = (text: string) =>
-  text
-    .normalize("NFKC")
-    .replace(/(?:駅|行き|ゆき|方面)$/u, "")
-    .trim();
 export function assembleResult(
   analysis: AnnouncementAnalysis,
   correction: StationCorrectionResult,
@@ -18,34 +16,25 @@ export function assembleResult(
 ) {
   const resolution = resolveStation(
     correction.candidates,
-    analysis.metadata.station,
+    normalization.metadata &&
+      Object.prototype.hasOwnProperty.call(normalization.metadata, "station")
+      ? (normalization.metadata.station ?? null)
+      : analysis.metadata.station,
   );
-  const metadata: RailwayAnnouncementMetadata = {
-    ...analysis.metadata,
-    station: resolution.stationName,
-  };
+  const metadata = assembleNormalizedMetadata(
+    analysis,
+    normalization.metadata,
+    normalization.entities,
+    resolution.stationName,
+  );
   const changed = new Set<string>();
   for (const entity of normalization.entities) {
-    const mention = analysis.mentions.find(
-      (m) => m.id === entity.sourceMentionId,
-    );
+    const mention = sourceMentionForEntity(analysis.mentions, entity);
     if (
       !mention ||
       (entity.kind !== "station" && entity.kind !== "destination")
     )
       continue;
-    const field =
-      mention.role === "destination"
-        ? "destination"
-        : mention.role === "next_stop"
-          ? "nextStation"
-          : null;
-    if (
-      field &&
-      (analysis.mentions.filter((m) => m.role === mention.role).length === 1 ||
-        stationValue(metadata[field] ?? "") === stationValue(mention.text))
-    )
-      metadata[field] = entity.text;
     if (entity.text !== entity.sourceText && mention.id)
       changed.add(mention.id);
   }
