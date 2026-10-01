@@ -3,3 +3,9 @@ DISCORD_PUBLIC_KEY="replace-me"
 DISCORD_APPLICATION_ID="replace-me"
 ADMIN_JOBS_CHANNEL_ID=""
 GEMINI_API_KEY="replace-me"
+
+# Optional local eval:whisper / eval:full REST credentials
+CLOUDFLARE_ACCOUNT_ID=""
+CLOUDFLARE_API_TOKEN=""
+# AUDIO_DURATION_SECS="300"
+# GEMINI_MODEL="gemini-3.1-flash-lite"

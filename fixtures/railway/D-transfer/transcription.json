@@ -1,0 +1,10 @@
+{
+  "text": "次の停車駅は、河和口、太田川、中部国際空港です。",
+  "language": null,
+  "segments": [],
+  "provenance": {
+    "kind": "synthetic-reproduction",
+    "audioVerified": false,
+    "source": "user-supplied misrecognition examples; not claimed as captured audio"
+  }
+}

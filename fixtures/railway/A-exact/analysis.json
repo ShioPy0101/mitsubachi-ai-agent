@@ -1,0 +1,49 @@
+{
+  "isTransitAnnouncement": true,
+  "mentions": [
+    {
+      "id": "mention:7:10",
+      "text": "河和口",
+      "start": 7,
+      "end": 10,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:11:13",
+      "text": "富貴",
+      "start": 11,
+      "end": 13,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:14:18",
+      "text": "知多武豊",
+      "start": 14,
+      "end": 18,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    }
+  ],
+  "metadata": {
+    "station": null,
+    "line": null,
+    "trainType": null,
+    "trainName": null,
+    "trainNumber": null,
+    "destination": null,
+    "departureTime": null,
+    "arrivalTime": null,
+    "platform": null,
+    "nextStation": null,
+    "summary": null,
+    "category": "general_information"
+  }
+}

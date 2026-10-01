@@ -1,0 +1,49 @@
+{
+  "isTransitAnnouncement": true,
+  "mentions": [
+    {
+      "id": "mention:7:9",
+      "text": "篠原",
+      "start": 7,
+      "end": 9,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:10:12",
+      "text": "安雪",
+      "start": 10,
+      "end": 12,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": "やす",
+      "language": "ja"
+    },
+    {
+      "id": "mention:13:15",
+      "text": "守山",
+      "start": 13,
+      "end": 15,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    }
+  ],
+  "metadata": {
+    "station": null,
+    "line": null,
+    "trainType": null,
+    "trainName": null,
+    "trainNumber": null,
+    "destination": null,
+    "departureTime": null,
+    "arrivalTime": null,
+    "platform": null,
+    "nextStation": null,
+    "summary": null,
+    "category": "general_information"
+  }
+}
