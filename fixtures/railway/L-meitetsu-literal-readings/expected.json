@@ -1,0 +1,13 @@
+{
+  "topCandidates": [
+    "河和口",
+    "富貴",
+    "知多武豊",
+    "上ゲ",
+    "青山",
+    "成岩",
+    "知多半田"
+  ],
+  "annotationStatus": "Demo-derived mention/phonetic regression; synthetic raw and assumed 青山 reading",
+  "selectedStrategy": "contained"
+}
