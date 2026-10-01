@@ -1,26 +1,24 @@
 import { Hono } from "hono";
-import { ClipsRepository } from "../db/clips-repository";
 import { CallbackSecretsRepository } from "../db/callback-secrets-repository";
-import { JobsRepository } from "../db/jobs-repository";
+import { ClipsRepository } from "../db/clips-repository";
 import { GuildAccessRepository } from "../db/guild-access-repository";
-import { isSupportedAudioAttachment } from "../discord/attachments";
+import { JobsRepository } from "../db/jobs-repository";
 import { canControlGuild } from "../discord/access-control";
+import { isSupportedAudioAttachment } from "../discord/attachments";
 import {
-  DiscordInteractionSchema,
-} from "../discord/schemas";
-import {
-  SEARCH_COMMAND_NAME,
-  type ParsedDemoCommand,
   deferredResponse,
   ephemeralErrorResponse,
   ephemeralMessageResponse,
   parsePlatformCommand,
+  SEARCH_COMMAND_NAME,
+  type ParsedDemoCommand,
 } from "../discord/interactions";
 import { formatSearchResults } from "../discord/messages";
+import { DiscordInteractionSchema } from "../discord/schemas";
 import { verifyDiscordSignature } from "../discord/signatures";
-import { DemoJobProducer, JobProducer, type JobQueue } from "../jobs/producer";
 import { sendAudioJobAlert } from "../jobs/alerts";
 import { adminJobsChannelId, createJobMonitor } from "../jobs/job-monitor";
+import { JobProducer, type JobQueue } from "../jobs/producer";
 
 export const interactionRoutes = new Hono<{ Bindings: Env }>();
 
@@ -28,30 +26,60 @@ type DemoCommandEnv = {
   AUDIO_JOBS: JobQueue;
   DISCORD_CONTROL_USER_IDS: string;
   MAX_AUDIO_BYTES: string;
+  DB: D1Database;
 };
 
-export async function handleDemoCommand(command: ParsedDemoCommand, env: DemoCommandEnv): Promise<Response> {
+export async function handleDemoCommand(
+  command: ParsedDemoCommand,
+  env: DemoCommandEnv,
+): Promise<Response> {
   if (!canControlGuild(env.DISCORD_CONTROL_USER_IDS, command.userId)) {
     return ephemeralErrorResponse("この操作を実行する権限がありません。");
   }
   if (!isSupportedAudioAttachment(command.attachment)) {
-    return ephemeralErrorResponse("対応していない音声形式です。mp3 / wav / m4a / aac / flac / ogg を指定してください。");
+    return ephemeralErrorResponse(
+      "対応していない音声形式です。mp3 / wav / m4a / aac / flac / ogg を指定してください。",
+    );
   }
   const configuredMaximum = Number(env.MAX_AUDIO_BYTES);
-  const maximumBytes = Number.isSafeInteger(configuredMaximum) && configuredMaximum > 0
-    ? configuredMaximum
-    : 25 * 1024 * 1024;
+  const maximumBytes =
+    Number.isSafeInteger(configuredMaximum) && configuredMaximum > 0
+      ? configuredMaximum
+      : 25 * 1024 * 1024;
   if (command.attachment.size > maximumBytes) {
     return ephemeralErrorResponse("音声ファイルのサイズが上限を超えています。");
   }
   try {
-    await new DemoJobProducer(env.AUDIO_JOBS).enqueue({
-      kind: "demo",
-      interactionId: command.interactionId,
-      interactionToken: command.interactionToken,
-      userId: command.userId as string,
-      attachment: command.attachment,
-    });
+    const now = new Date();
+    await new JobProducer(
+      new JobsRepository(env.DB),
+      env.AUDIO_JOBS,
+    ).createAndEnqueue(
+      {
+        presentationMode: "demo",
+        source: {
+          type: "interaction",
+          guildId: command.guildId,
+          channelId: command.channelId,
+          userId: command.userId,
+          interactionId: command.interactionId,
+          attachmentId: command.attachment.id,
+          temporaryReference: {
+            url: command.attachment.url,
+            expiresAt: parseTemporaryExpiry(command.attachment.url),
+          },
+        },
+        interactionCallback: {
+          token: command.interactionToken,
+          expiresAt: callbackExpiry(now),
+        },
+        originalFilename: command.attachment.filename,
+        contentType: command.attachment.contentType,
+        sizeBytes: command.attachment.size,
+        durationSecs: command.attachment.durationSecs,
+      },
+      now.toISOString(),
+    );
     return deferredResponse();
   } catch (error) {
     console.error("demo_audio_job_enqueue_failed", {
@@ -60,7 +88,9 @@ export async function handleDemoCommand(command: ParsedDemoCommand, env: DemoCom
       interaction_id: command.interactionId,
       timestamp: new Date().toISOString(),
     });
-    return ephemeralErrorResponse("処理を受け付けられませんでした。時間をおいて再実行してください。");
+    return ephemeralErrorResponse(
+      "処理を受け付けられませんでした。時間をおいて再実行してください。",
+    );
   }
 }
 
@@ -69,7 +99,9 @@ function parseTemporaryExpiry(url: string): string | null {
     const raw = new URL(url).searchParams.get("ex");
     if (raw === null) return null;
     const seconds = Number.parseInt(raw, 16);
-    return Number.isFinite(seconds) ? new Date(seconds * 1000).toISOString() : null;
+    return Number.isFinite(seconds)
+      ? new Date(seconds * 1000).toISOString()
+      : null;
   } catch {
     return null;
   }
@@ -81,8 +113,15 @@ function callbackExpiry(now: Date): string {
 
 function parseSearchQuery(input: unknown): string | null {
   const parsed = DiscordInteractionSchema.safeParse(input);
-  if (!parsed.success || parsed.data.type !== 2 || parsed.data.data?.name !== SEARCH_COMMAND_NAME) return null;
-  const option = parsed.data.data.options?.find((candidate) => candidate.name === "query" && candidate.type === 3);
+  if (
+    !parsed.success ||
+    parsed.data.type !== 2 ||
+    parsed.data.data?.name !== SEARCH_COMMAND_NAME
+  )
+    return null;
+  const option = parsed.data.data.options?.find(
+    (candidate) => candidate.name === "query" && candidate.type === 3,
+  );
   return option?.value?.trim() || null;
 }
 
@@ -106,10 +145,16 @@ export async function handleAdminJobStopInteraction(
   const parsed = DiscordInteractionSchema.safeParse(input);
   if (!parsed.success || parsed.data.type !== 3) return null;
   const customId = parsed.data.data?.custom_id;
-  if (customId === undefined || !customId.startsWith("admin_job_stop:")) return null;
+  if (customId === undefined || !customId.startsWith("admin_job_stop:"))
+    return null;
   const configuredChannelId = adminJobsChannelId(env);
-  if (configuredChannelId === null || parsed.data.channel_id !== configuredChannelId) {
-    return ephemeralErrorResponse("この場所からジョブを停止することはできません。");
+  if (
+    configuredChannelId === null ||
+    parsed.data.channel_id !== configuredChannelId
+  ) {
+    return ephemeralErrorResponse(
+      "この場所からジョブを停止することはできません。",
+    );
   }
   if (!hasJobControlPermission(parsed.data.member?.permissions)) {
     return ephemeralErrorResponse("ジョブを停止する管理権限がありません。");
@@ -118,19 +163,32 @@ export async function handleAdminJobStopInteraction(
   if (jobId.length === 0) return ephemeralErrorResponse("ジョブIDが不正です。");
   const monitor = createJobMonitor(env);
   const record = await monitor.requestCancellation(jobId);
-  if (record === null) return ephemeralErrorResponse("対象のジョブが見つかりません。");
+  if (record === null)
+    return ephemeralErrorResponse("対象のジョブが見つかりません。");
   if (["stopped", "completed", "failed", "timed_out"].includes(record.state)) {
-    return ephemeralMessageResponse(`このジョブはすでに ${record.state} です。`);
+    return ephemeralMessageResponse(
+      `このジョブはすでに ${record.state} です。`,
+    );
   }
-  return ephemeralMessageResponse("停止を要求しました。現在のフェーズ終了後までに停止します。");
+  return ephemeralMessageResponse(
+    "停止を要求しました。現在のフェーズ終了後までに停止します。",
+  );
 }
 
 interactionRoutes.post("/interactions", async (context) => {
   const signature = context.req.header("x-signature-ed25519");
   const timestamp = context.req.header("x-signature-timestamp");
-  if (signature === undefined || timestamp === undefined) return context.text("invalid request signature", 401);
+  if (signature === undefined || timestamp === undefined)
+    return context.text("invalid request signature", 401);
   const body = await context.req.text();
-  if (!(await verifyDiscordSignature(context.env.DISCORD_PUBLIC_KEY, signature, timestamp, body))) {
+  if (
+    !(await verifyDiscordSignature(
+      context.env.DISCORD_PUBLIC_KEY,
+      signature,
+      timestamp,
+      body,
+    ))
+  ) {
     return context.text("invalid request signature", 401);
   }
   let input: unknown;
@@ -140,22 +198,39 @@ interactionRoutes.post("/interactions", async (context) => {
     return ephemeralErrorResponse("Interactionの形式が不正です。");
   }
   const interaction = DiscordInteractionSchema.safeParse(input);
-  if (interaction.success && interaction.data.type === 1) return Response.json({ type: 1 });
+  if (interaction.success && interaction.data.type === 1)
+    return Response.json({ type: 1 });
 
-  const adminJobStopResponse = await handleAdminJobStopInteraction(input, context.env);
+  const adminJobStopResponse = await handleAdminJobStopInteraction(
+    input,
+    context.env,
+  );
   if (adminJobStopResponse !== null) return adminJobStopResponse;
 
   const searchQuery = parseSearchQuery(input);
   if (searchQuery !== null) {
     context.executionCtx.waitUntil(
-      new CallbackSecretsRepository(context.env.DB).deleteExpired(new Date().toISOString()),
+      new CallbackSecretsRepository(context.env.DB).deleteExpired(
+        new Date().toISOString(),
+      ),
     );
     const guildId = interaction.success ? interaction.data.guild_id : undefined;
-    if (guildId === undefined || !(await new GuildAccessRepository(context.env.DB).isEnabled(guildId))) {
-      return ephemeralErrorResponse("このサーバーでは利用が許可されていません。");
+    if (
+      guildId === undefined ||
+      !(await new GuildAccessRepository(context.env.DB).isEnabled(guildId))
+    ) {
+      return ephemeralErrorResponse(
+        "このサーバーでは利用が許可されていません。",
+      );
     }
-    const results = await new ClipsRepository(context.env.DB).search(searchQuery, guildId);
-    return Response.json({ type: 4, data: { content: formatSearchResults(results), flags: 64 } });
+    const results = await new ClipsRepository(context.env.DB).search(
+      searchQuery,
+      guildId,
+    );
+    return Response.json({
+      type: 4,
+      data: { content: formatSearchResults(results), flags: 64 },
+    });
   }
 
   const command = parsePlatformCommand(input);
@@ -164,11 +239,19 @@ interactionRoutes.post("/interactions", async (context) => {
     return handleDemoCommand(command.value, context.env);
   }
   context.executionCtx.waitUntil(
-    new CallbackSecretsRepository(context.env.DB).deleteExpired(new Date().toISOString()),
+    new CallbackSecretsRepository(context.env.DB).deleteExpired(
+      new Date().toISOString(),
+    ),
   );
   if (command.value.kind === "access") {
-    if (command.value.guildId === null) return ephemeralErrorResponse("サーバー内でのみ実行できます。");
-    if (!canControlGuild(context.env.DISCORD_CONTROL_USER_IDS, command.value.userId)) {
+    if (command.value.guildId === null)
+      return ephemeralErrorResponse("サーバー内でのみ実行できます。");
+    if (
+      !canControlGuild(
+        context.env.DISCORD_CONTROL_USER_IDS,
+        command.value.userId,
+      )
+    ) {
       return ephemeralErrorResponse("この操作を実行する権限がありません。");
     }
     const enabled = command.value.action === "allow";
@@ -185,27 +268,39 @@ interactionRoutes.post("/interactions", async (context) => {
       enabled,
       timestamp: updatedAt,
     });
-    return ephemeralMessageResponse(enabled
-      ? "このサーバーでの利用を許可しました。"
-      : "このサーバーでの利用を停止しました。");
+    return ephemeralMessageResponse(
+      enabled
+        ? "このサーバーでの利用を許可しました。"
+        : "このサーバーでの利用を停止しました。",
+    );
   }
-  if (command.value.guildId === null
-    || !(await new GuildAccessRepository(context.env.DB).isEnabled(command.value.guildId))) {
+  if (
+    command.value.guildId === null ||
+    !(await new GuildAccessRepository(context.env.DB).isEnabled(
+      command.value.guildId,
+    ))
+  ) {
     return ephemeralErrorResponse("このサーバーでは利用が許可されていません。");
   }
   if (!isSupportedAudioAttachment(command.value.attachment)) {
-    return ephemeralErrorResponse("対応していない音声形式です。mp3 / wav / m4a / aac / flac / ogg を指定してください。");
+    return ephemeralErrorResponse(
+      "対応していない音声形式です。mp3 / wav / m4a / aac / flac / ogg を指定してください。",
+    );
   }
   const configuredMaximum = Number(context.env.MAX_AUDIO_BYTES);
-  const maximumBytes = Number.isSafeInteger(configuredMaximum) && configuredMaximum > 0
-    ? configuredMaximum
-    : 25 * 1024 * 1024;
+  const maximumBytes =
+    Number.isSafeInteger(configuredMaximum) && configuredMaximum > 0
+      ? configuredMaximum
+      : 25 * 1024 * 1024;
   if (command.value.attachment.size > maximumBytes) {
     return ephemeralErrorResponse("音声ファイルのサイズが上限を超えています。");
   }
 
   const now = new Date();
-  const producer = new JobProducer(new JobsRepository(context.env.DB), context.env.AUDIO_JOBS);
+  const producer = new JobProducer(
+    new JobsRepository(context.env.DB),
+    context.env.AUDIO_JOBS,
+  );
   try {
     await producer.createAndEnqueue(
       {
@@ -243,15 +338,19 @@ interactionRoutes.post("/interactions", async (context) => {
       attachment_id: command.value.attachment.id,
       timestamp: new Date().toISOString(),
     });
-    context.executionCtx.waitUntil(sendAudioJobAlert(context.env, {
-      interactionId: command.value.interactionId,
-      guildId: command.value.guildId,
-      attachmentId: command.value.attachment.id,
-      filename: command.value.attachment.filename,
-      stage: "enqueue",
-      errorName,
-      errorMessage,
-    }));
-    return ephemeralErrorResponse("処理を受け付けられませんでした。時間をおいて再実行してください。");
+    context.executionCtx.waitUntil(
+      sendAudioJobAlert(context.env, {
+        interactionId: command.value.interactionId,
+        guildId: command.value.guildId,
+        attachmentId: command.value.attachment.id,
+        filename: command.value.attachment.filename,
+        stage: "enqueue",
+        errorName,
+        errorMessage,
+      }),
+    );
+    return ephemeralErrorResponse(
+      "処理を受け付けられませんでした。時間をおいて再実行してください。",
+    );
   }
 });
