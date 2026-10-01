@@ -117,21 +117,21 @@ C/D perform more complete bounded path work; this is not an across-the-board
 speed improvement. A/B avoid graph search. No production CPU, whole audio-job
 latency or accuracy claim follows from this microbenchmark.
 
-| Risk | Status | Evidence / remaining limitation |
-|---|---|---|
-| Raw fragments restored into final body | resolved | J, normalization and Discord delivery tests; debug events never assemble prose |
-| Gemini span used as a strict source split | resolved | Whisper segment provenance and malformed-span tests |
-| Stop lists confined to one line | resolved | Physical segments/transitions and two-line/20-stop tests |
-| Adjacent-only or fixed-gap matching | resolved | Prefix ordered subsequence and 30+30 pass-through tests |
-| Line transitions treated as suspicious alone | mitigated | Small transition penalty, distance-first graph ranking |
-| Huge detours / reversals | mitigated | Relative detour scoring, station-revisit penalty, existing detour regression; bounded search may miss an alternative |
-| Runtime connections based solely on names | resolved | Existing indexed explicit edges and different-ID endpoint test; static generator's location-derived links still need data-quality review |
-| Multilingual loss in application assembly | resolved | No dedup/reassembly; JA/EN/ZH/KO source and mock provider-body tests |
-| Real Gemini output omits a language | observability only | Prompt requires preservation; missingLanguages observes omissions without rejecting or inserting raw slices; actual AI/audio validation remains necessary |
-| Wrong equivalent announcement grouping | mitigated | Equal cardinality, ordered lexical correspondences, strong peer route and exact-anchor contradiction checks; semantic group IDs are model annotations |
-| Chinese/Korean master alias completeness | still remaining | Limited glyph/alias maps; no claim of nationwide localized spelling coverage |
-| Hard 256-station or graph budgets | still remaining | Explicit safety bounds; very long paths can remain unresolved |
-| Real-audio precision / recall | still remaining | No new labeled real-audio evaluation or live Gemini/Whisper run |
+| Risk                                         | Status             | Evidence / remaining limitation                                                                                                                           |
+| -------------------------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Raw fragments restored into final body       | resolved           | J, normalization and Discord delivery tests; debug events never assemble prose                                                                            |
+| Gemini span used as a strict source split    | resolved           | Whisper segment provenance and malformed-span tests                                                                                                       |
+| Stop lists confined to one line              | resolved           | Physical segments/transitions and two-line/20-stop tests                                                                                                  |
+| Adjacent-only or fixed-gap matching          | resolved           | Prefix ordered subsequence and 30+30 pass-through tests                                                                                                   |
+| Line transitions treated as suspicious alone | mitigated          | Small transition penalty, distance-first graph ranking                                                                                                    |
+| Huge detours / reversals                     | mitigated          | Relative detour scoring, station-revisit penalty, existing detour regression; bounded search may miss an alternative                                      |
+| Runtime connections based solely on names    | resolved           | Existing indexed explicit edges and different-ID endpoint test; static generator's location-derived links still need data-quality review                  |
+| Multilingual loss in application assembly    | resolved           | No dedup/reassembly; JA/EN/ZH/KO source and mock provider-body tests                                                                                      |
+| Real Gemini output omits a language          | observability only | Prompt requires preservation; missingLanguages observes omissions without rejecting or inserting raw slices; actual AI/audio validation remains necessary |
+| Wrong equivalent announcement grouping       | mitigated          | Equal cardinality, ordered lexical correspondences, strong peer route and exact-anchor contradiction checks; semantic group IDs are model annotations     |
+| Chinese/Korean master alias completeness     | still remaining    | Limited glyph/alias maps; no claim of nationwide localized spelling coverage                                                                              |
+| Hard 256-station or graph budgets            | still remaining    | Explicit safety bounds; very long paths can remain unresolved                                                                                             |
+| Real-audio precision / recall                | still remaining    | No new labeled real-audio evaluation or live Gemini/Whisper run                                                                                           |
 
 Prompt-injection untrusted-data instructions and structured context are retained.
 Relaxed model-output validation means erroneous or instruction-influenced model

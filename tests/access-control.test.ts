@@ -12,13 +12,16 @@ describe("guild access control", () => {
 
   it("treats missing and disabled guild rows as unavailable", async () => {
     const bind = vi.fn();
-    const first = vi.fn()
+    const first = vi
+      .fn()
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ enabled: 0 })
       .mockResolvedValueOnce({ enabled: 1 });
     bind.mockReturnValue({ first });
     const prepare = vi.fn().mockReturnValue({ bind });
-    const repository = new GuildAccessRepository({ prepare } as unknown as D1Database);
+    const repository = new GuildAccessRepository({
+      prepare,
+    } as unknown as D1Database);
 
     await expect(repository.isEnabled("guild")).resolves.toBe(false);
     await expect(repository.isEnabled("guild")).resolves.toBe(false);

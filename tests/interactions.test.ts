@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { isSupportedAudioAttachment } from "../src/discord/attachments";
-import { deferredResponse, parsePlatformCommand } from "../src/discord/interactions";
+import {
+  deferredResponse,
+  parsePlatformCommand,
+} from "../src/discord/interactions";
 import { verifyDiscordSignature } from "../src/discord/signatures";
 
 const interaction = {
@@ -17,7 +20,9 @@ const interaction = {
     resolved: {
       attachments: {
         "500": {
-          id: "500", filename: "station.mp3", size: 1024,
+          id: "500",
+          filename: "station.mp3",
+          size: 1024,
           url: "https://cdn.discordapp.com/attachments/test/station.mp3",
           content_type: "audio/mpeg",
         },
@@ -40,12 +45,18 @@ describe("/platform-ai-agent interaction", () => {
   });
 
   it("rejects a missing attachment", () => {
-    const result = parsePlatformCommand({ ...interaction, data: { name: "platform-ai-agent", options: [] } });
+    const result = parsePlatformCommand({
+      ...interaction,
+      data: { name: "platform-ai-agent", options: [] },
+    });
     expect(result).toEqual({ ok: false, error: "audio添付は必須です。" });
   });
 
   it("rejects commands other than platform-ai-agent", () => {
-    const result = parsePlatformCommand({ ...interaction, data: { ...interaction.data, name: "platform" } });
+    const result = parsePlatformCommand({
+      ...interaction,
+      data: { ...interaction.data, name: "platform" },
+    });
     expect(result).toEqual({ ok: false, error: "未対応のコマンドです。" });
   });
 
@@ -57,7 +68,10 @@ describe("/platform-ai-agent interaction", () => {
         options: [{ name: "audio", type: 11, value: "501" }],
       },
     });
-    expect(result).toEqual({ ok: false, error: "audio添付を読み取れませんでした。" });
+    expect(result).toEqual({
+      ok: false,
+      error: "audio添付を読み取れませんでした。",
+    });
   });
 
   it("parses allow and deny access subcommands with their actor", () => {
@@ -66,7 +80,10 @@ describe("/platform-ai-agent interaction", () => {
         ...interaction,
         data: {
           ...interaction.data,
-          name: action === "allow" ? "platform-ai-agent-allow" : "platform-ai-agent-deny",
+          name:
+            action === "allow"
+              ? "platform-ai-agent-allow"
+              : "platform-ai-agent-deny",
           options: [],
         },
       });
@@ -94,18 +111,46 @@ describe("/platform-ai-agent interaction", () => {
   });
 
   it("rejects unsupported MIME or extension combinations", () => {
-    expect(isSupportedAudioAttachment({
-      id: "1", filename: "station.exe", size: 1, url: "https://example.com/a", contentType: "audio/mpeg", durationSecs: null,
-    })).toBe(false);
-    expect(isSupportedAudioAttachment({
-      id: "1", filename: "station.mp3", size: 1, url: "https://example.com/a", contentType: "application/octet-stream", durationSecs: null,
-    })).toBe(true);
-    expect(isSupportedAudioAttachment({
-      id: "1", filename: "station.mp3", size: 1, url: "https://example.com/a", contentType: "audio/mp3; charset=binary", durationSecs: null,
-    })).toBe(true);
-    expect(isSupportedAudioAttachment({
-      id: "1", filename: "station.mp3", size: 1, url: "https://example.com/a", contentType: "image/png", durationSecs: null,
-    })).toBe(false);
+    expect(
+      isSupportedAudioAttachment({
+        id: "1",
+        filename: "station.exe",
+        size: 1,
+        url: "https://example.com/a",
+        contentType: "audio/mpeg",
+        durationSecs: null,
+      }),
+    ).toBe(false);
+    expect(
+      isSupportedAudioAttachment({
+        id: "1",
+        filename: "station.mp3",
+        size: 1,
+        url: "https://example.com/a",
+        contentType: "application/octet-stream",
+        durationSecs: null,
+      }),
+    ).toBe(true);
+    expect(
+      isSupportedAudioAttachment({
+        id: "1",
+        filename: "station.mp3",
+        size: 1,
+        url: "https://example.com/a",
+        contentType: "audio/mp3; charset=binary",
+        durationSecs: null,
+      }),
+    ).toBe(true);
+    expect(
+      isSupportedAudioAttachment({
+        id: "1",
+        filename: "station.mp3",
+        size: 1,
+        url: "https://example.com/a",
+        contentType: "image/png",
+        durationSecs: null,
+      }),
+    ).toBe(false);
   });
 
   it("creates a public Discord deferred ACK", async () => {
@@ -114,6 +159,8 @@ describe("/platform-ai-agent interaction", () => {
   });
 
   it("rejects malformed signatures", async () => {
-    await expect(verifyDiscordSignature("00", "00", "123", "{}")).resolves.toBe(false);
+    await expect(verifyDiscordSignature("00", "00", "123", "{}")).resolves.toBe(
+      false,
+    );
   });
 });

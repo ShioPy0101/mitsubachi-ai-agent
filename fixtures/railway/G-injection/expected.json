@@ -1,8 +1,4 @@
 {
-  "topCandidates": [
-    "篠原",
-    "野洲",
-    "守山"
-  ],
+  "topCandidates": ["篠原", "野洲", "守山"],
   "annotationStatus": "synthetic candidate labels only; no real audio accuracy claim"
 }

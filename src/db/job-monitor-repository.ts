@@ -1,9 +1,15 @@
 import { z } from "zod";
 
 export const jobMonitorStates = [
-  "running", "retrying", "cancel_requested", "stopped", "completed", "failed", "timed_out",
+  "running",
+  "retrying",
+  "cancel_requested",
+  "stopped",
+  "completed",
+  "failed",
+  "timed_out",
 ] as const;
-export type JobMonitorState = typeof jobMonitorStates[number];
+export type JobMonitorState = (typeof jobMonitorStates)[number];
 
 const JobMonitorRowSchema = z.object({
   job_id: z.string(),
@@ -75,15 +81,25 @@ export class JobMonitorRepository {
   constructor(private readonly db: D1Database) {}
 
   async find(jobId: string): Promise<JobMonitorRecord | null> {
-    const row = await this.db.prepare("SELECT * FROM job_monitor_messages WHERE job_id = ?").bind(jobId).first();
+    const row = await this.db
+      .prepare("SELECT * FROM job_monitor_messages WHERE job_id = ?")
+      .bind(jobId)
+      .first();
     return row === null ? null : toRecord(row);
   }
 
   async ensure(input: {
-    jobId: string; channelId: string; queueAttempt: number; userId: string | null;
-    filename: string; sizeBytes: number; now: string;
+    jobId: string;
+    channelId: string;
+    queueAttempt: number;
+    userId: string | null;
+    filename: string;
+    sizeBytes: number;
+    now: string;
   }): Promise<JobMonitorRecord> {
-    await this.db.prepare(`
+    await this.db
+      .prepare(
+        `
       INSERT INTO job_monitor_messages (
         job_id, channel_id, current_stage, state, queue_attempt, user_id,
         filename, size_bytes, started_at, stage_started_at, updated_at
@@ -102,39 +118,84 @@ export class JobMonitorRepository {
           ELSE NULL
         END,
         updated_at = excluded.updated_at
-    `).bind(
-      input.jobId, input.channelId, input.queueAttempt, input.userId,
-      input.filename, input.sizeBytes, input.now, input.now, input.now,
-    ).run();
+    `,
+      )
+      .bind(
+        input.jobId,
+        input.channelId,
+        input.queueAttempt,
+        input.userId,
+        input.filename,
+        input.sizeBytes,
+        input.now,
+        input.now,
+        input.now,
+      )
+      .run();
     const record = await this.find(input.jobId);
-    if (record === null) throw new Error("Job monitor insert/read consistency failure");
+    if (record === null)
+      throw new Error("Job monitor insert/read consistency failure");
     return record;
   }
 
-  async setMessageId(jobId: string, messageId: string, now: string): Promise<void> {
-    await this.db.prepare(`
+  async setMessageId(
+    jobId: string,
+    messageId: string,
+    now: string,
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        `
       UPDATE job_monitor_messages SET message_id = COALESCE(message_id, ?), updated_at = ? WHERE job_id = ?
-    `).bind(messageId, now, jobId).run();
+    `,
+      )
+      .bind(messageId, now, jobId)
+      .run();
   }
 
-  async stageStarted(jobId: string, stage: string, now: string, timeoutAt: string | null): Promise<void> {
-    await this.db.prepare(`
+  async stageStarted(
+    jobId: string,
+    stage: string,
+    now: string,
+    timeoutAt: string | null,
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        `
       UPDATE job_monitor_messages
       SET current_stage = ?, stage_detail = NULL, stage_started_at = ?, stage_timeout_at = ?,
           state = CASE WHEN state = 'retrying' THEN 'running' ELSE state END, updated_at = ?
       WHERE job_id = ? AND state IN ('running', 'retrying', 'cancel_requested')
-    `).bind(stage, now, timeoutAt, now, jobId).run();
+    `,
+      )
+      .bind(stage, now, timeoutAt, now, jobId)
+      .run();
   }
 
-  async updateStageDetail(jobId: string, detail: string, now: string): Promise<void> {
-    await this.db.prepare(`
+  async updateStageDetail(
+    jobId: string,
+    detail: string,
+    now: string,
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        `
       UPDATE job_monitor_messages SET stage_detail = ?, updated_at = ?
       WHERE job_id = ? AND state IN ('running', 'cancel_requested')
-    `).bind(detail, now, jobId).run();
+    `,
+      )
+      .bind(detail, now, jobId)
+      .run();
   }
 
-  async appendObservation(jobId: string, detail: string, now: string): Promise<void> {
-    await this.db.prepare(`
+  async appendObservation(
+    jobId: string,
+    detail: string,
+    now: string,
+  ): Promise<void> {
+    await this.db
+      .prepare(
+        `
       UPDATE job_monitor_messages SET
         observations = substr(
           CASE WHEN observations = '' THEN ? ELSE observations || '\n\n' || ? END,
@@ -142,31 +203,57 @@ export class JobMonitorRepository {
         ),
         updated_at = ?
       WHERE job_id = ?
-    `).bind(detail, detail, now, jobId).run();
+    `,
+      )
+      .bind(detail, detail, now, jobId)
+      .run();
   }
 
-  async requestCancellation(jobId: string, now: string): Promise<JobMonitorRecord | null> {
-    await this.db.prepare(`
+  async requestCancellation(
+    jobId: string,
+    now: string,
+  ): Promise<JobMonitorRecord | null> {
+    await this.db
+      .prepare(
+        `
       UPDATE job_monitor_messages
       SET state = 'cancel_requested', cancellation_requested_at = COALESCE(cancellation_requested_at, ?), updated_at = ?
       WHERE job_id = ? AND state IN ('running', 'retrying', 'cancel_requested')
-    `).bind(now, now, jobId).run();
+    `,
+      )
+      .bind(now, now, jobId)
+      .run();
     return this.find(jobId);
   }
 
   async isCancellationRequested(jobId: string): Promise<boolean> {
-    const row = await this.db.prepare(`
+    const row = await this.db
+      .prepare(
+        `
       SELECT 1 AS requested FROM job_monitor_messages
       WHERE job_id = ? AND state = 'cancel_requested'
-    `).bind(jobId).first();
+    `,
+      )
+      .bind(jobId)
+      .first();
     return row !== null;
   }
 
-  async transition(jobId: string, state: JobMonitorState, input: {
-    now: string; stage?: string; errorMessage?: string | null;
-  }): Promise<JobMonitorRecord | null> {
-    const terminal = ["stopped", "completed", "failed", "timed_out"].includes(state);
-    await this.db.prepare(`
+  async transition(
+    jobId: string,
+    state: JobMonitorState,
+    input: {
+      now: string;
+      stage?: string;
+      errorMessage?: string | null;
+    },
+  ): Promise<JobMonitorRecord | null> {
+    const terminal = ["stopped", "completed", "failed", "timed_out"].includes(
+      state,
+    );
+    await this.db
+      .prepare(
+        `
       UPDATE job_monitor_messages SET
         state = ?,
         current_stage = COALESCE(?, current_stage),
@@ -174,10 +261,18 @@ export class JobMonitorRepository {
         completed_at = CASE WHEN ? THEN ? ELSE completed_at END,
         updated_at = ?
       WHERE job_id = ?
-    `).bind(
-      state, input.stage ?? null, input.errorMessage ?? null,
-      terminal ? 1 : 0, input.now, input.now, jobId,
-    ).run();
+    `,
+      )
+      .bind(
+        state,
+        input.stage ?? null,
+        input.errorMessage ?? null,
+        terminal ? 1 : 0,
+        input.now,
+        input.now,
+        jobId,
+      )
+      .run();
     return this.find(jobId);
   }
 }

@@ -54,16 +54,16 @@ Metricsはcandidate returned/surface/phonetic/unique counts、candidate generati
 
 同一の小型station/path/branch/connection fixtureをlocal workerd D1とstaticで1回ずつ測定。D1削除前の結果は凍結snapshotに保存し、現行staticのcandidates/routesをVitest deep equalityで比較しています。Object property orderのJSON文字列一致とは区別します。全国全ケースの同等性保証ではありません。
 
-| Case | station ms before→after | D1 queries | 実local D1 rows read | graph searches | alignment comparisons | unique candidates |
-|---|---|---|---|---|---|---|
-| A (3 mentions) | 64 → 2 | 32 → 0 | 275 → 0 | 1 → 1 | 88 → 88 | 4 → 4 |
-| B (7 mentions) | 70 → 3 | 33 → 0 | 508 → 0 | 1 → 1 | 0 → 0 | 10 → 10 |
-| C (20 mentions) | 74 → 2 | 32 → 0 | 582 → 0 | 1 → 1 | 0 → 0 | 27 → 27 |
-| D (3 mentions) | 72 → 1 | 32 → 0 | 241 → 0 | 1 → 1 | 0 → 0 | 4 → 4 |
-| E (2 mentions) | 4 → 0 | 2 → 0 | 59 → 0 | 0 → 0 | 0 → 0 | 0 → 0 |
-| F (1 mentions) | 6 → 0 | 3 → 0 | 48 → 0 | 0 → 0 | 0 → 0 | 0 → 0 |
-| G (3 mentions) | 10 → 1 | 5 → 0 | 105 → 0 | 0 → 0 | 12 → 12 | 3 → 3 |
-| H (1 mentions) | 9 → 0 | 5 → 0 | 72 → 0 | 0 → 0 | 0 → 0 | 1 → 1 |
+| Case            | station ms before→after | D1 queries | 実local D1 rows read | graph searches | alignment comparisons | unique candidates |
+| --------------- | ----------------------- | ---------- | -------------------- | -------------- | --------------------- | ----------------- |
+| A (3 mentions)  | 64 → 2                  | 32 → 0     | 275 → 0              | 1 → 1          | 88 → 88               | 4 → 4             |
+| B (7 mentions)  | 70 → 3                  | 33 → 0     | 508 → 0              | 1 → 1          | 0 → 0                 | 10 → 10           |
+| C (20 mentions) | 74 → 2                  | 32 → 0     | 582 → 0              | 1 → 1          | 0 → 0                 | 27 → 27           |
+| D (3 mentions)  | 72 → 1                  | 32 → 0     | 241 → 0              | 1 → 1          | 0 → 0                 | 4 → 4             |
+| E (2 mentions)  | 4 → 0                   | 2 → 0      | 59 → 0               | 0 → 0          | 0 → 0                 | 0 → 0             |
+| F (1 mentions)  | 6 → 0                   | 3 → 0      | 48 → 0               | 0 → 0          | 0 → 0                 | 0 → 0             |
+| G (3 mentions)  | 10 → 1                  | 5 → 0      | 105 → 0              | 0 → 0          | 12 → 12               | 3 → 3             |
+| H (1 mentions)  | 9 → 0                   | 5 → 0      | 72 → 0               | 0 → 0          | 0 → 0                 | 1 → 1             |
 
 この小型fixtureはbranchを含むためCase Aでもgraphに入ります。通常same-lineでgraphに入らないことは別の純粋回帰testで確認しています。上記はquery減少だけでなくwall-clock/実rowsを記録した値です。総audio job時間は実音声/AIがないためbefore/after未測定です。
 
@@ -113,28 +113,28 @@ Precision/Recall/False Correction/Unresolvedの計算器・CLIと定義testあ�
 
 ## 14. Known risk classification
 
-| Risk | 状態 | 根拠 / 実用上の限界 |
-|---|---|---|
-| findCandidatePools D1 scan | resolved | D1 adapter削除、fresh masterなしpipeline完了、static index候補探索 |
-| instr() / OR条件 | resolved | Railway domain/adapterにSQLなし。Operational clip検索のORは別用途 |
-| prefecture / line context膨張 | mitigated | Static gram/adjacency pool内でcontext評価、返却3+2上限。弱い1文字探索のCPUは残る |
-| graph全ロード | mitigated | D1ロード0、static indexはisolateで一度。Startup bundle/メモリ負担は残る |
-| top-5脱落 | mitigated | unique interval/強い前後anchor/lexicalを要求するrescueのpositive/negative unit test |
-| single occurrence | mitigated | 強いroute/order/lexical/marginのみbind、弱い/phonetic/contradiction拒否unit test |
-| Gemini #1 mention漏れ | observability only | static name scan＋demo差分、強制補正追加なし。誤認識した未知語の漏れは検出困難 |
-| metadata完全一致依存 | mitigated | 旧helper削除、stable ID/roleで同期。ID欠落や複数同roleでの対応は不完全 |
-| occurrence誤判定 / includes | mitigated | source span/ID、per-event出力、重複fixture。ModelのID欠落は観測のみ |
-| Map上書き順序 | resolved | strongest-evidence mergeと入力順を反転したunit test |
-| 12分 / 14分競合 | resolved | persisted16–20分deadline、deadline atomic UPDATE/回帰test |
-| started_at曖昧 | resolved | processing/stage時計を別column、旧started_atをjob時計に使わない |
-| public内部情報漏洩 | mitigated | public formatter＋public full-pipeline test。元音声/生成文章そのものにある語は別 |
-| audio prompt injection | mitigated | untrusted JSON prompts/fixtures、実モデル耐性保証は残る。Hard output rejectionなし |
-| Gemini自由補正 | observability only | 最新方針でtrust/reconstruction、数字/候補外/未知ID等の観測。事実誤生成を機械的に拒否しない |
-| route全駅allowlist | resolved | allowedTargets自体なし。Routeの対応mention部分を参考材料として送信 |
-| multilingual event loss | mitigated | raw/semantic全coverage、JA/EN別event、Whisper segment/order/本文不変の回帰tests。誤翻訳/scalar-onlyは保証しない |
-| alpha D1 write leak | resolved | Alpha経路/type/repositoryを削除、2 presentation modesだけ |
-| 性能・精度の本番保証 | still remaining | Node/local workerdの測定のみ。実音声gold/API・本番CPU/ピークmemory/Queue/Discord確認が必要 |
-| long audio event batching | still remaining | 現在はevent構造化された単一AI request。時間順とprovenanceは保持 |
+| Risk                          | 状態               | 根拠 / 実用上の限界                                                                                             |
+| ----------------------------- | ------------------ | --------------------------------------------------------------------------------------------------------------- |
+| findCandidatePools D1 scan    | resolved           | D1 adapter削除、fresh masterなしpipeline完了、static index候補探索                                              |
+| instr() / OR条件              | resolved           | Railway domain/adapterにSQLなし。Operational clip検索のORは別用途                                               |
+| prefecture / line context膨張 | mitigated          | Static gram/adjacency pool内でcontext評価、返却3+2上限。弱い1文字探索のCPUは残る                                |
+| graph全ロード                 | mitigated          | D1ロード0、static indexはisolateで一度。Startup bundle/メモリ負担は残る                                         |
+| top-5脱落                     | mitigated          | unique interval/強い前後anchor/lexicalを要求するrescueのpositive/negative unit test                             |
+| single occurrence             | mitigated          | 強いroute/order/lexical/marginのみbind、弱い/phonetic/contradiction拒否unit test                                |
+| Gemini #1 mention漏れ         | observability only | static name scan＋demo差分、強制補正追加なし。誤認識した未知語の漏れは検出困難                                  |
+| metadata完全一致依存          | mitigated          | 旧helper削除、stable ID/roleで同期。ID欠落や複数同roleでの対応は不完全                                          |
+| occurrence誤判定 / includes   | mitigated          | source span/ID、per-event出力、重複fixture。ModelのID欠落は観測のみ                                             |
+| Map上書き順序                 | resolved           | strongest-evidence mergeと入力順を反転したunit test                                                             |
+| 12分 / 14分競合               | resolved           | persisted16–20分deadline、deadline atomic UPDATE/回帰test                                                       |
+| started_at曖昧                | resolved           | processing/stage時計を別column、旧started_atをjob時計に使わない                                                 |
+| public内部情報漏洩            | mitigated          | public formatter＋public full-pipeline test。元音声/生成文章そのものにある語は別                                |
+| audio prompt injection        | mitigated          | untrusted JSON prompts/fixtures、実モデル耐性保証は残る。Hard output rejectionなし                              |
+| Gemini自由補正                | observability only | 最新方針でtrust/reconstruction、数字/候補外/未知ID等の観測。事実誤生成を機械的に拒否しない                      |
+| route全駅allowlist            | resolved           | allowedTargets自体なし。Routeの対応mention部分を参考材料として送信                                              |
+| multilingual event loss       | mitigated          | raw/semantic全coverage、JA/EN別event、Whisper segment/order/本文不変の回帰tests。誤翻訳/scalar-onlyは保証しない |
+| alpha D1 write leak           | resolved           | Alpha経路/type/repositoryを削除、2 presentation modesだけ                                                       |
+| 性能・精度の本番保証          | still remaining    | Node/local workerdの測定のみ。実音声gold/API・本番CPU/ピークmemory/Queue/Discord確認が必要                      |
+| long audio event batching     | still remaining    | 現在はevent構造化された単一AI request。時間順とprovenanceは保持                                                 |
 
 ## 15. Evidence artifacts
 

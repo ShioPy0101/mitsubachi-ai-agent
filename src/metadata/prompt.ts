@@ -1,14 +1,6 @@
 import { stationNameInLanguage } from "../stations/language";
-import type {
-  MentionStationCandidate,
-  RoutePathCandidate,
-  StationCandidate,
-} from "../stations/types";
-import type {
-  AnnouncementAnalysis,
-  SequenceRole,
-  StationMention,
-} from "./service";
+import type { MentionStationCandidate, RoutePathCandidate, StationCandidate } from "../stations/types";
+import type { AnnouncementAnalysis, SequenceRole, StationMention } from "./service";
 
 export type StopSequenceContext = {
   id: number;
@@ -20,21 +12,14 @@ export type StopSequenceContext = {
   routeHypotheses: readonly RoutePathCandidate[];
 };
 
-export function buildGeminiNormalizationPrompt(
-  transcription: string,
-  analysis: AnnouncementAnalysis,
-  sequences: readonly StopSequenceContext[],
-): string {
+export function buildGeminiNormalizationPrompt(transcription: string, analysis: AnnouncementAnalysis, sequences: readonly StopSequenceContext[]): string {
   const structure = {
     metadata: analysis.metadata,
     semanticEvents: analysis.semantic?.events,
     sourceSegments: analysis.semantic?.sourceSegments,
     mentions: analysis.mentions,
     sequences: sequences.map((sequence) => {
-      const searchMentions = [
-        ...sequence.mentions,
-        ...sequence.contextMentions,
-      ];
+      const searchMentions = [...sequence.mentions, ...sequence.contextMentions];
       return {
         id: sequence.id,
         role: sequence.role,
@@ -46,84 +31,65 @@ export function buildGeminiNormalizationPrompt(
           text,
           role,
         })),
-        mentionCandidates: sequence.mentionCandidates.map(
-          (candidates, mentionIndex) => ({
-            mentionIndex,
-            rawMention: searchMentions[mentionIndex]?.text ?? "",
-            candidates: candidates.slice(0, 3).map((candidate) => ({
-              stationName:
-                stationNameInLanguage(
-                  candidate.station,
-                  searchMentions[mentionIndex]?.language ?? "unknown",
-                ) ?? candidate.station.name,
-              crossLanguageEvidence: candidate.crossLanguageEvidence,
-              officialJapaneseName: candidate.station.name,
-              kana: candidate.station.kana,
-              lineName: candidate.station.lineName,
-              lexicalScore: Number(candidate.lexicalScore.toFixed(3)),
-              phoneticSimilarity: Number(
-                candidate.phoneticSimilarity.toFixed(3),
-              ),
-              globallyReconciled: candidate.bound,
-              matchStrength: candidate.matchStrength,
-              routeHypothesisIds: candidate.routeHypothesisIds,
-              bestRouteScore:
-                candidate.bestRouteScore === null
-                  ? null
-                  : Number(candidate.bestRouteScore.toFixed(3)),
-              finalScore: Number(candidate.finalScore.toFixed(3)),
-            })),
-          }),
-        ),
-        stationCandidates: sequence.stationCandidates
-          .slice(0, 3)
-          .map((candidate) => ({
-            stationName: candidate.station.name,
+        mentionCandidates: sequence.mentionCandidates.map((candidates, mentionIndex) => ({
+          mentionIndex,
+          rawMention: searchMentions[mentionIndex]?.text ?? "",
+          candidates: candidates.slice(0, 3).map((candidate) => ({
+            stationName: stationNameInLanguage(candidate.station, searchMentions[mentionIndex]?.language ?? "unknown") ?? candidate.station.name,
+            crossLanguageEvidence: candidate.crossLanguageEvidence,
+            officialJapaneseName: candidate.station.name,
             kana: candidate.station.kana,
             lineName: candidate.station.lineName,
-            prefecture: candidate.station.prefecture,
-            prevStation: candidate.station.prevStation,
-            nextStation: candidate.station.nextStation,
-            routeSupported: candidate.routeSupported,
-            routeCandidateIds: candidate.routeCandidateIds,
-            bestRouteRank: candidate.bestRouteRank,
-            routeIndex: candidate.routeIndex,
-            routeOrderConsistent: candidate.routeOrderConsistent,
-            anchor: candidate.anchor,
-            score: Number(candidate.score.toFixed(3)),
+            lexicalScore: Number(candidate.lexicalScore.toFixed(3)),
+            phoneticSimilarity: Number(candidate.phoneticSimilarity.toFixed(3)),
+            globallyReconciled: candidate.bound,
+            matchStrength: candidate.matchStrength,
+            routeHypothesisIds: candidate.routeHypothesisIds,
+            bestRouteScore: candidate.bestRouteScore === null ? null : Number(candidate.bestRouteScore.toFixed(3)),
+            finalScore: Number(candidate.finalScore.toFixed(3)),
           })),
-        routeHypotheses: sequence.routeHypotheses
-          .slice(0, 2)
-          .map((route, rank) => ({
-            rank,
-            stations: (route.mentionMatches ?? []).map(
-              ({ station }) => station.name,
-            ),
-            anchorCoverage: route.anchorCoverage,
-            orderConsistency: route.orderConsistency,
-            transferCount: route.transferCount,
-            lineTransitions: route.lineTransitions,
-            direction: route.direction,
-            physicalRoute: route.physicalRoute?.segments.map(
-              ({ lineId, pathId, direction }) => ({
-                lineId,
-                pathId,
-                direction,
-              }),
-            ),
-            directionReversals: route.directionReversals,
-            pathLength: route.pathLength,
-            score: route.score,
-            exactAnchorCoverage: route.exactAnchorCoverage ?? null,
-            hardAnchorViolations: route.hardAnchorViolations ?? null,
-            source: route.source,
-            mentionMatches: route.mentionMatches?.map((match) => ({
-              mentionIndex: match.mentionIndex,
-              rawMention: match.mentionText,
-              stationName: match.station.name,
-              lexicalSimilarity: Number(match.lexicalSimilarity.toFixed(3)),
-            })),
+        })),
+        stationCandidates: sequence.stationCandidates.slice(0, 3).map((candidate) => ({
+          stationName: candidate.station.name,
+          kana: candidate.station.kana,
+          lineName: candidate.station.lineName,
+          prefecture: candidate.station.prefecture,
+          prevStation: candidate.station.prevStation,
+          nextStation: candidate.station.nextStation,
+          routeSupported: candidate.routeSupported,
+          routeCandidateIds: candidate.routeCandidateIds,
+          bestRouteRank: candidate.bestRouteRank,
+          routeIndex: candidate.routeIndex,
+          routeOrderConsistent: candidate.routeOrderConsistent,
+          anchor: candidate.anchor,
+          score: Number(candidate.score.toFixed(3)),
+        })),
+        routeHypotheses: sequence.routeHypotheses.slice(0, 2).map((route, rank) => ({
+          rank,
+          stations: (route.mentionMatches ?? []).map(({ station }) => station.name),
+          anchorCoverage: route.anchorCoverage,
+          orderConsistency: route.orderConsistency,
+          transferCount: route.transferCount,
+          lineTransitions: route.lineTransitions,
+          direction: route.direction,
+          physicalRoute: route.physicalRoute?.segments.map(({ lineId, pathId, direction }) => ({
+            lineId,
+            pathId,
+            direction,
           })),
+          directionReversals: route.directionReversals,
+          pathLength: route.pathLength,
+          score: route.score,
+          exactAnchorCoverage: route.exactAnchorCoverage ?? null,
+          hardAnchorViolations: route.hardAnchorViolations ?? null,
+          source: route.source,
+          mentionMatches: route.mentionMatches?.map((match) => ({
+            mentionIndex: match.mentionIndex,
+            rawMention: match.mentionText,
+            stationName: match.station.name,
+            lexicalSimilarity: Number(match.lexicalSimilarity.toFixed(3)),
+          })),
+        })),
       };
     }),
   };
