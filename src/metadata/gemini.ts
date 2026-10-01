@@ -78,6 +78,7 @@ export type GeminiAnalysisExtraction = AnnouncementAnalysis & {
 };
 export type GeminiNormalizationExtraction = {
   normalizedTranscription: string;
+  metadata?: Partial<import("../railway/types").RailwayAnnouncementMetadata>;
   entities: NormalizedEntity[];
   normalizedEvents?: NormalizedAnnouncementEvent[];
   diagnostics: GeminiCallDiagnostics;
@@ -352,6 +353,7 @@ export class GeminiMetadataService {
     // Missing IDs remain observations; do not splice source slices into model prose.
     return {
       normalizedTranscription: output.normalizedTranscription,
+      ...(output.metadata ? { metadata: output.metadata } : {}),
       entities: output.entities,
       ...(output.normalizedEvents
         ? { normalizedEvents: output.normalizedEvents }
