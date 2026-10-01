@@ -188,13 +188,11 @@ describe("DiscordRestClient", () => {
   });
 
   it("returns Discord error details without throwing them away", async () => {
-    const fetcher = vi
-      .fn()
-      .mockResolvedValue(
-        new Response('{"message":"Unknown Webhook","code":10015}', {
-          status: 404,
-        }),
-      );
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response('{"message":"Unknown Webhook","code":10015}', {
+        status: 404,
+      }),
+    );
     const client = new DiscordRestClient(
       "bot-token",
       "application-id",
