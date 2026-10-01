@@ -6,11 +6,13 @@ similarity 0.5, phonetic similarity about 0.333, and lexical similarity 0.5.
 The existing surface-weighted alignment selected 長瀬 in both strategies, then
 route support further promoted its candidate score.
 
-Alignment now refines an interior match only when both neighbouring aligned
-stations have direct surface/kana evidence >= 0.65, the current mention has no
+Alignment now refines a match, including at sequence boundaries, only when all
+available neighbouring aligned stations have direct surface/kana evidence
+>= 0.65, the current mention has no
 hard anchor or binding, and its direct evidence is below 0.85. Exactly one
-physical position between those neighbours must match the complete inferred
-reading and have at least the current strict lexical strength. Multiple matching
+physical position inside the ordered interval must match the complete inferred
+reading and have the same strict lexical strength (within 1e-9). At the first
+or last mention the interval extends to the physical path boundary. Multiple matching
 positions remain unresolved. This is route evidence, not phonetic hard binding.
 Scoring weights and route acceptance thresholds remain unchanged.
 
@@ -27,6 +29,7 @@ checkpoint version is updated so old 長瀬 evidence is not reused.
 ```sh
 pnpm test:station -t 'anchored exact reading|compare deterministic|安雪 / やすゆき'
 pnpm eval:station fixtures/railway/M-kintetsu-fuse-reading
+pnpm eval:station fixtures/railway/N-kintetsu-split-stop-sequences
 pnpm typecheck
 ```
 
@@ -34,12 +37,16 @@ Fixture M contains the user-supplied raw text and 伏瀬 reading. Other readings
 and analysis are manually annotated, not saved Gemini responses. Its local
 engine evaluation returns 布施 and records station D1 reads=0, writes=0.
 
-Sixteen focused tests pass, including the existing Meitetsu and 野洲 cases.
+Fixture N reproduces the reported destination / first-five stops / last-two
+stops split. The original three sequences remain separate; sequence 3 selects
+布施 → 鶴橋. No previous-sequence borrowing or additional graph search is needed.
+
+Eighteen focused tests pass, including the existing Meitetsu and 野洲 cases.
 Negative cases cover exact 長瀬 surface, missing reading, reading outside the
 neighbouring interval, weak neighbouring evidence, and multiple exact-reading
 positions. Public/demo/retry Worker pipeline tests pass (3/3).
 
-The full local unit suite passes 108/112 tests; the four previously recorded
+The full local unit suite passes 110/114 tests; the four previously recorded
 failures remain outside this fix. Typecheck passes. A bad
 inferred reading can still bias ambiguous material, and live Gemini/Discord
 results require sample review. No external AI calls or deployment are required
