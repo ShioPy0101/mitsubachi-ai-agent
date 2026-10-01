@@ -1,4 +1,4 @@
-export type CheckpointStage = "analysis" | "correction";
+export type CheckpointStage = "speech" | "analysis" | "correction";
 export interface PipelineCheckpointStore {
   read<T>(stage: CheckpointStage, source: string): Promise<T | null>;
   write<T>(stage: CheckpointStage, source: string, value: T): Promise<void>;
