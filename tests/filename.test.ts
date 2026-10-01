@@ -1,11 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { generateRailwayFilename, sanitizeFilenamePart } from "../src/railway/filename";
+import {
+  generateRailwayFilename,
+  sanitizeFilenamePart,
+} from "../src/railway/filename";
 import type { RailwayAnnouncementMetadata } from "../src/railway/types";
 
 const metadata: RailwayAnnouncementMetadata = {
-  station: null, line: "花咲線", trainType: "普通", trainName: null, trainNumber: null,
-  destination: "根室", departureTime: "13:25", arrivalTime: null, platform: null,
-  nextStation: "西和田", category: "departure", summary: "次は西和田",
+  station: null,
+  line: "花咲線",
+  trainType: "普通",
+  trainName: null,
+  trainNumber: null,
+  destination: "根室",
+  departureTime: "13:25",
+  arrivalTime: null,
+  platform: null,
+  nextStation: "西和田",
+  category: "departure",
+  summary: "次は西和田",
 };
 
 describe("filename", () => {
@@ -20,8 +32,13 @@ describe("filename", () => {
   });
 
   it("uses the announcement type when detailed metadata is unavailable", () => {
-    const empty = Object.fromEntries(Object.keys(metadata).map((key) => [key, null]));
-    const valid = { ...empty, category: "delay" } as RailwayAnnouncementMetadata;
+    const empty = Object.fromEntries(
+      Object.keys(metadata).map((key) => [key, null]),
+    );
+    const valid = {
+      ...empty,
+      category: "delay",
+    } as RailwayAnnouncementMetadata;
     expect(generateRailwayFilename(valid, "audio.mp3")).toBe("運行情報.mp3");
   });
 
@@ -40,7 +57,7 @@ describe("filename", () => {
   });
 
   it("sanitizes forbidden characters, underscores and edges", () => {
-    expect(sanitizeFilenamePart(" ._ A/B:*?\"<>|__C _. ")).toBe("A_B_C");
+    expect(sanitizeFilenamePart(' ._ A/B:*?"<>|__C _. ')).toBe("A_B_C");
     expect(sanitizeFilenamePart("abcdef", 3)).toBe("abc");
   });
 });

@@ -5,7 +5,12 @@ export function resolveStation(
   geminiStation: string | null,
 ): StationResolution {
   if (candidates.length === 0) {
-    return { stationName: null, candidateStationId: null, confidence: 0, source: "unresolved" };
+    return {
+      stationName: null,
+      candidateStationId: null,
+      confidence: 0,
+      source: "unresolved",
+    };
   }
   if (geminiStation === null) {
     return {
@@ -15,7 +20,10 @@ export function resolveStation(
       source: "unresolved",
     };
   }
-  const selected = geminiStation === null ? undefined : candidates.find(({ station }) => station.name === geminiStation);
+  const selected =
+    geminiStation === null
+      ? undefined
+      : candidates.find(({ station }) => station.name === geminiStation);
   if (selected !== undefined) {
     return {
       stationName: selected.station.name,

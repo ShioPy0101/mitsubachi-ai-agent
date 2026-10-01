@@ -2,16 +2,16 @@
 
 本番デプロイは不要です。通常のテストは `tests/no-network.ts` で外部fetchを禁止し、AI/Discordはfakeに差し替えます。実AIは明示的なevalコマンドだけが呼びます。
 
-| Level | コマンド | 対象 / 外部接続 |
-|---|---|---|
-| 1 Pure local | `pnpm test:station` | StaticRailwayRepository、補正、same-line、両方向alignment、graph、単発・top-5 rescue、merge、意味構造、表示、deadline/retry。Node Vitest。外部APIなし |
-| 2 Fixture | `pnpm eval:station fixtures/railway/B-meitetsu` / `pnpm eval:railway` | 保存済みtranscription / analysisから補正とGemini #2の入力材料を生成。外部APIなし |
-| 3 Workers AI | `pnpm eval:whisper audio.mp3 --out fixtures/captured/sample` | `@cf/openai/whisper-large-v3-turbo`実API。圧縮音声とAbortSignal、10–14分のbudget。MP3 decodeエラー時だけframes再送。PCM/WAV変換なし |
-| 3 Gemini #1 | `pnpm eval:gemini-analysis fixtures/captured/sample` | 実APIの解析・意味構造・mention・request/responseを保存 |
-| 3 Gemini #2 | `pnpm eval:normalize fixtures/captured/sample` | 静的補正材料＋保存済み解析を使い、実APIの再構成結果を保存 |
-| 3 Full | `pnpm eval:full audio.mp3 --out fixtures/captured/sample` | Whisper→Gemini #1→補正→Gemini #2。D1/Discordは呼ばない |
-| 4 Worker | `pnpm verify:local` | fresh temp local D1に全migration、master削除、FKチェック、wrangler dev `/health`。実AIなし |
-| 4 Queue/Discord | `pnpm test` | ローカルworkerd D1でpublic/demoのQueue consumer、fake AI、Discord callback、clip保存、Queue retryのcheckpoint再利用 |
+| Level           | コマンド                                                              | 対象 / 外部接続                                                                                                                                       |
+| --------------- | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 Pure local    | `pnpm test:station`                                                   | StaticRailwayRepository、補正、same-line、両方向alignment、graph、単発・top-5 rescue、merge、意味構造、表示、deadline/retry。Node Vitest。外部APIなし |
+| 2 Fixture       | `pnpm eval:station fixtures/railway/B-meitetsu` / `pnpm eval:railway` | 保存済みtranscription / analysisから補正とGemini #2の入力材料を生成。外部APIなし                                                                      |
+| 3 Workers AI    | `pnpm eval:whisper audio.mp3 --out fixtures/captured/sample`          | `@cf/openai/whisper-large-v3-turbo`実API。圧縮音声とAbortSignal、10–14分のbudget。MP3 decodeエラー時だけframes再送。PCM/WAV変換なし                   |
+| 3 Gemini #1     | `pnpm eval:gemini-analysis fixtures/captured/sample`                  | 実APIの解析・意味構造・mention・request/responseを保存                                                                                                |
+| 3 Gemini #2     | `pnpm eval:normalize fixtures/captured/sample`                        | 静的補正材料＋保存済み解析を使い、実APIの再構成結果を保存                                                                                             |
+| 3 Full          | `pnpm eval:full audio.mp3 --out fixtures/captured/sample`             | Whisper→Gemini #1→補正→Gemini #2。D1/Discordは呼ばない                                                                                                |
+| 4 Worker        | `pnpm verify:local`                                                   | fresh temp local D1に全migration、master削除、FKチェック、wrangler dev `/health`。実AIなし                                                            |
+| 4 Queue/Discord | `pnpm test`                                                           | ローカルworkerd D1でpublic/demoのQueue consumer、fake AI、Discord callback、clip保存、Queue retryのcheckpoint再利用                                   |
 
 その他: `pnpm typecheck`、`pnpm generate:railway-data`、`pnpm benchmark:static`、`pnpm eval:accuracy fixtures/captured`、`pnpm deploy:dry-run`。
 
@@ -49,7 +49,17 @@ Cloudflare REST adapterは[公式REST API](https://developers.cloudflare.com/wor
 100–300件程度の実音声ケースを同じ形式で追加できます。各caseに人手の `labels.json` を追加:
 
 ```json
-{"mentions":[{"mentionId":"mention:0:2","sourceText":"安雪","expectedText":"野洲","requiresCorrection":true,"hasCandidates":true}]}
+{
+  "mentions": [
+    {
+      "mentionId": "mention:0:2",
+      "sourceText": "安雪",
+      "expectedText": "野洲",
+      "requiresCorrection": true,
+      "hasCandidates": true
+    }
+  ]
+}
 ```
 
 `normalized.json` のentities/sourceMentionIdからprecision/recall/false correction/unresolvedを計算します。これは**IDで対応できるentityの評価**です。ID欠落や自由な文章再構成でentity自体が漏れたケースは人手確認も必要で、全文章の事実精度とは区別してください。ラベルなしの指標はnullとし、実測値を作りません。

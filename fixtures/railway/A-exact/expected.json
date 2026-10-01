@@ -1,8 +1,4 @@
 {
-  "topCandidates": [
-    "河和口",
-    "富貴",
-    "知多武豊"
-  ],
+  "topCandidates": ["河和口", "富貴", "知多武豊"],
   "annotationStatus": "synthetic candidate labels only; no real audio accuracy claim"
 }
