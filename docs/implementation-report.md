@@ -8,7 +8,7 @@ Stage portsにfake providerを注入でき、補正domainはGemini、Discord、Q
 
 ## 2. raw / semantic / normalized
 
-RawはCOALESCE checkpoint・clip upsertからの上書き禁止・破棄メソッドの削除で保持します。Semanticはevent kind、source span、segment IDs/time range（対応可能な場合）、language、occurrence、entities、semantic context、equivalent groupを持ちます。音声順のraw spanを保持し、Gemini #1のevent proposalで意味境界を補います。Normalizedはrawと別の派生結果です。
+RawはCOALESCE checkpoint・clip upsertからの上書き禁止・破棄メソッドの削除で保持します。Semanticはevent kind、source span、segment IDs/time range（対応可能な場合）、language、occurrence、entities、semantic context、equivalent groupを持ちます。Whisper segmentの原文・時刻・順序を保持し、Gemini #1のevent proposalは近似的semantic注釈として扱います。同じsegmentに複数eventがあっても原文を再分割しません。Normalizedはrawと別の派生結果です。
 
 Gemini #2にはraw、Gemini #1 metadata、semantic events、stable mention ID、上位3候補/mention、上位2routeの対応mention部分を渡します。全駅・全route station・debug metricsは渡しません。未確定候補も参考材料で、hard constraintではありません。
 
@@ -20,7 +20,7 @@ Stable ID/mention roleを使ってdestination/nextStation metadataを同期し�
 
 ## 4. Multilingual / long announcements
 
-日本語と英語を別source eventとして保持し、同内容でも削除・融合しません。英語候補は英語表記（例 Wakura Onsen）を用意します。Gemini #2のnormalizedEventsをsource ID/音声順で並べ直し、返らなかったeventだけraw spanを残します。全体をrejectしません。
+日本語と英語を別source eventとして保持し、同内容でも削除・融合しません。英語候補は英語表記（例 Wakura Onsen）を用意します。Gemini #2の非空normalizedTranscriptionをそのまま最終本文に採用します。normalizedEventsはdebug/semantic注釈であり、並べ直し・raw slice差し戻し・本文への再assemblyは行いません。欠落eventは観測のみです。
 
 Sentence境界＋意味event境界が現状のgroupingです。segment対応が可能なら音声時刻も保持します。大規模音声のAPI request分割/batching、実音声反復とWhisper chunk重複の自動判別は残課題です。legacy scalar-only出力やモデルの翻訳誤りまで機械的に保証する設計ではありません。
 
@@ -131,7 +131,7 @@ Precision/Recall/False Correction/Unresolvedの計算器・CLIと定義testあ�
 | audio prompt injection | mitigated | untrusted JSON prompts/fixtures、実モデル耐性保証は残る。Hard output rejectionなし |
 | Gemini自由補正 | observability only | 最新方針でtrust/reconstruction、数字/候補外/未知ID等の観測。事実誤生成を機械的に拒否しない |
 | route全駅allowlist | resolved | allowedTargets自体なし。Routeの対応mention部分を参考材料として送信 |
-| multilingual event loss | mitigated | raw/semantic全coverage、JA/EN別event、order/missing-event fallback tests。誤翻訳/scalar-onlyは保証しない |
+| multilingual event loss | mitigated | raw/semantic全coverage、JA/EN別event、Whisper segment/order/本文不変の回帰tests。誤翻訳/scalar-onlyは保証しない |
 | alpha D1 write leak | resolved | Alpha経路/type/repositoryを削除、2 presentation modesだけ |
 | 性能・精度の本番保証 | still remaining | Node/local workerdの測定のみ。実音声gold/API・本番CPU/ピークmemory/Queue/Discord確認が必要 |
 | long audio event batching | still remaining | 現在はevent構造化された単一AI request。時間順とprovenanceは保持 |
@@ -154,3 +154,11 @@ Precision/Recall/False Correction/Unresolvedの計算器・CLIと定義testあ�
 `npm run typecheck`成功。`npm test`はNode pure unit 80件、Worker integration/unit 130件成功（重複して実行するunit testも含む）。追加したmigration preservation testで既存clip/rawと未開始queued jobの時計を保持しました。`npm run verify:local`はfresh local D1へ全10migration適用、railway master削除、FK検証、Worker health成功。実APIへの通信、本番migration適用、deployは行っていません。
 
 Bundleは同じWranglerによるdry-runでbefore 1,141.50 KiB / gzip 200.75 KiB、after 6,778.08 KiB / gzip 849.95 KiB。[測定結果](benchmarks/bundle-comparison.json)。Static master移行でbundleが増加しました。本番cold start・CPU・ピークメモリの計測は残課題です。
+
+## Event再assembly不具合の修正
+
+Gemini #1のsourceStart/sourceEndを分割境界に追加し、Gemini #2のnormalizedEventsが返さなかった区間のraw sliceを最終本文へ挿入していた処理を削除しました。Source boundaryはWhisper segment（音声segmentがない古いtext fixtureでは原文の句読点）を基準にし、model spanはsemantic annotationだけに使用します。Gemini #2のnormalizedTranscriptionはtrim変換もせず採用し、normalizedEventsは受信したままdiagnostics用に保持します。analysis checkpoint keyをsemantic-v3へ変更しました。
+
+`J-event-assembly` fixtureは「発車いたします。 3番線で…」の日英3segmentと文途中を指すannotation、不完全なdebug eventsを再現します。Unit testでsegment共有・近似span非分割・本文不変、public/demo/Queue retry integrationで保存本文とDiscordへの本文がGemini #2の本文と一致することを確認します。Prompt/Normalization Guardの強化で対処していません。
+
+修正後の検証: `npm run typecheck`成功、`npm test`はNode 84件・Worker 134件成功。Whisper segment原文/時刻をspeech checkpointへ保存し、Queue retryでも再利用します。`eval:station fixtures/railway/J-event-assembly`も外部APIなしで成功しました。実Discordでの修正後の再送確認は別途必要です。
