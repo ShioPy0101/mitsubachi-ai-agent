@@ -27,7 +27,7 @@ Cloudflare REST adapterは[公式REST API](https://developers.cloudflare.com/wor
 
 ## Fixture
 
-現在の `fixtures/railway/` は9ケース:
+現在の `fixtures/railway/` は10ケース:
 
 - A-exact: 少数駅、同一路線
 - B-meitetsu: 神話口／福岐／千田竹豊／上／奈良／千田半田
@@ -38,6 +38,7 @@ Cloudflare REST adapterは[公式REST API](https://developers.cloudflare.com/wor
 - G-injection: role / delimiter / JSONを含む音声テキスト
 - H-single: 安雪の単発
 - I-repeated: 同じraw mentionの複数occurrence/sequence
+- J-event-assembly: 日英3 speech segment、文途中のsemantic span、不完全なdebug eventsによる再assembly不具合の回帰
 
 これらは利用者が提示した誤認識例に基づく**synthetic reproduction**です。実音声から取得したWhisper出力とは主張しません。実音声と認証情報がworkspaceにないため、実API測定は未実施です。
 
