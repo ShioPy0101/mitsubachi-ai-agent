@@ -150,3 +150,86 @@ describe("safe mechanical evidence independently of AI", () => {
     ).toBe(false);
   });
 });
+
+import { multilingualSupport } from "../src/stations/multilingual-evidence";
+import { StationCorrectionEngine } from "../src/stations/correction-engine";
+import { groupStationSequences } from "../src/stations/stop-sequences";
+import type { StationMention } from "../src/metadata/service";
+
+const translatedMentions = (): StationMention[] =>
+  [
+    ["篠原", "ja", 1, null],
+    ["安雪", "ja", 1, "やす"],
+    ["守山", "ja", 1, null],
+    ["Shinohara", "en", 2, null],
+    ["Yasu", "en", 2, null],
+    ["Moriyama", "en", 2, null],
+  ].map(([text, language, sequenceId, phoneticHint], i) => ({
+    id: `m${i}`,
+    text: text as string,
+    language: language as "ja" | "en",
+    sequenceId: sequenceId as number,
+    phoneticHint: phoneticHint as string | null,
+    equivalentEventGroupId: "same-broadcast",
+    start: i * 20,
+    end: i * 20 + 10,
+    role: "stop",
+  }));
+
+it("uses grouped multilingual stops as soft evidence without inventing occurrences", async () => {
+  const mentions = translatedMentions();
+  const cache = createStaticRailwayJobCache();
+  const result = await new StationCorrectionEngine(
+    () => new StaticRailwayRepository(railwayIndexes, cache),
+  ).run({
+    transcription: mentions.map((m) => m.text).join("、"),
+    mentions,
+    context: { lineName: "琵琶湖線" },
+  });
+  expect(result.mentionEvidence).toHaveLength(6);
+  const rescued = result.mentionEvidence.find(
+    (e) => e.mention.text === "安雪",
+  )!;
+  expect(
+    rescued.candidates.find((c) => c.station.name === "野洲")
+      ?.crossLanguageEvidence?.[0]?.groupId,
+  ).toBe("same-broadcast");
+  const target = result.sequenceSearches.find((s) => s.id === 1)!;
+  expect(
+    multilingualSupport(
+      {
+        ...target,
+        mentions: target.mentions.map((m) => ({
+          ...m,
+          equivalentEventGroupId: "another-broadcast",
+        })),
+      },
+      result.sequenceSearches,
+    ),
+  ).toBeNull();
+  expect(
+    multilingualSupport(
+      { ...target, mentions: target.mentions.slice(0, 2) },
+      result.sequenceSearches,
+    ),
+  ).toBeNull();
+  expect(
+    multilingualSupport(
+      { ...target, mentions: [...target.mentions].reverse() },
+      result.sequenceSearches,
+    ),
+  ).toBeNull();
+  expect(result.metrics.sequences.every((m) => m.d1QueryCount === 0)).toBe(
+    true,
+  );
+});
+
+it("separates translated announcements even if their provider sequence IDs coincide", () => {
+  const mentions = translatedMentions().map((m) => ({ ...m, sequenceId: 1 }));
+  const sequences = groupStationSequences(mentions);
+  expect(sequences).toHaveLength(2);
+  expect(sequences.map((s) => s.mentions.map((m) => m.language))).toEqual([
+    ["ja", "ja", "ja"],
+    ["en", "en", "en"],
+  ]);
+});

@@ -328,3 +328,66 @@ it("keeps whitespace in nonempty provider prose instead of transforming the docu
   ).normalize(raw, analysis, []);
   expect(result.normalizedTranscription).toBe(prose);
 });
+
+it("keeps ja/en/zh/ko source segments and adopts the complete multilingual provider body", async () => {
+  const blocks = [
+    "まもなく発車します。",
+    "The train is departing.",
+    "列车即将出发。",
+    "열차가 출발합니다.",
+  ];
+  const source = blocks.join("\n");
+  const representation = buildSemanticRepresentation(
+    source,
+    [],
+    [],
+    blocks.map((text, i) => ({ text, startSec: i * 10, endSec: i * 10 + 8 })),
+  );
+  const input = { ...analysis, semantic: representation };
+  expect(representation.events.map((e) => e.language)).toEqual([
+    "ja",
+    "en",
+    "zh",
+    "ko",
+  ]);
+  expect(representation.sourceSegments!.map((s) => s.text)).toEqual(blocks);
+  const body =
+    "発車いたします。\nThe train will depart.\n列车即将出发。\n열차가 곧 출발합니다.";
+  const result = await new GeminiMetadataService(
+    "key",
+    "test",
+    async (_url, init) => {
+      const request = JSON.parse(init!.body as string);
+      expect(JSON.stringify(request)).toContain("中国語(zh)");
+      expect(JSON.stringify(request)).toContain("韓国語(ko)");
+      return envelope({
+        normalizedTranscription: body,
+        normalizedEvents: representation.events.map((e, i) => ({
+          sourceEventId: e.id,
+          language: e.language,
+          text: blocks[i],
+        })),
+        entities: [],
+      });
+    },
+  ).normalize(source, input, []);
+  expect(result.normalizedTranscription).toBe(body);
+  expect(result.normalizationObservation.missingLanguages).toEqual([]);
+  expect(representation.rawTranscription).toBe(source);
+});
+
+it("observes lost languages without raw-slice insertion or rejection", async () => {
+  const source =
+    "次は京都です。Next stop Kyoto. 下一站京都。다음 역은 교토입니다.";
+  const input = {
+    ...analysis,
+    semantic: buildSemanticRepresentation(source, []),
+  };
+  const result = await new GeminiMetadataService("key", "test", async () =>
+    envelope({ normalizedTranscription: "次は京都です。", entities: [] }),
+  ).normalize(source, input, []);
+  expect(result.normalizedTranscription).toBe("次は京都です。");
+  expect(result.normalizationObservation.missingLanguages).toEqual(
+    expect.arrayContaining(["en", "zh", "ko"]),
+  );
+});
