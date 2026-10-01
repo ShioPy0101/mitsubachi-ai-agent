@@ -30,7 +30,10 @@ mentionsには駅名らしく発話された文字列を、入力中の表記を
 - 種別変更前後は必要なら別sequenceにし、変更地点はservice_change_pointとして両区間の意味が分かるようにする
 - 単独mentionのsequenceIdはnullでもよいが、複数mentionからなるdirection列には必ずsequenceIdを付ける
 - falseの場合もmentionsは原文だけから抽出し、metadataはnull、categoryはother、summaryはnull
-
+- transcription全体を最後まで走査し、駅名mentionを省略しない
+- 同じ駅名や同じ停車駅案内が後半で再度発話された場合も、別の出現として必ずmentionsへ返す
+- 既に同内容のstop listを抽出済みでも、後続のstop listを要約・省略しない
+- 「A、B、C、D…」の駅列では、駅らしい各要素を途中で打ち切らずすべて抽出する
 入力:
 ${JSON.stringify({ transcription })}`;
 }
