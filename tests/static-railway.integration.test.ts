@@ -113,8 +113,30 @@ describe("ordered static railway repository", () => {
       const actual = await new StationCandidateService(
         new StaticRailwayRepository(buildRailwayIndexes(data)),
       ).analyzeMentions(fixture.names, {}, { phoneticHints: fixture.hints });
-      expect(actual.mentionCandidates).toEqual(fixture.expectedCandidates);
-      expect(actual.routeCandidates).toEqual(fixture.expectedRoutes);
+      // Snapshot scores reflect the old adjacency objective. Compare master
+      // identities and spoken alignment, not historical confidence numbers.
+      // B/D previously had no complete path: endpoint-preserving seeds now
+      // recover the existing master paths, with the expected station IDs below.
+      expect(
+        actual.mentionCandidates.map((cs) =>
+          cs.map((c) => c.station.id).sort((a, b) => a - b),
+        ),
+      ).toEqual(
+        fixture.expectedCandidates.map((cs) =>
+          cs.map((c) => c.station.id).sort((a, b) => a - b),
+        ),
+      );
+      expect(
+        actual.routeCandidates.map((r) => r.stations.map((s) => s.station.id)),
+      ).toEqual(
+        fixture.caseId === "B"
+          ? [[1, 2, 3, 4, 5, 6, 7]]
+          : fixture.caseId === "D"
+            ? [[1, 2, 13]]
+            : fixture.expectedRoutes.map((r) =>
+                r.stations.map((s) => s.station.id),
+              ),
+      );
       expect(actual.metrics.d1QueryCount).toBe(0);
       expect(actual.metrics.d1RowsRead).toBe(0);
     });

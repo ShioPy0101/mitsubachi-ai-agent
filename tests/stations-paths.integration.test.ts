@@ -143,7 +143,15 @@ describe("static ordered station paths", () => {
       5,
     );
 
-    expect(names(routes[0]!)).toEqual(["A", "乗換1", "中間", "乗換2", "終点"]);
+    expect(names(routes[0]!)).toEqual([
+      "A",
+      "乗換1",
+      "乗換1",
+      "中間",
+      "乗換2",
+      "乗換2",
+      "終点",
+    ]);
     expect(routes[0]).toMatchObject({
       anchorCoverage: 1,
       orderConsistency: 1,
@@ -629,6 +637,7 @@ describe("static ordered station paths", () => {
     expect(names(forward[0]!)).toEqual([
       "福井",
       "芦原温泉",
+      "芦原温泉",
       "加賀温泉",
       "金沢",
     ]);
@@ -640,6 +649,7 @@ describe("static ordered station paths", () => {
     expect(names(reverse[0]!)).toEqual([
       "金沢",
       "加賀温泉",
+      "芦原温泉",
       "芦原温泉",
       "福井",
     ]);
@@ -687,4 +697,108 @@ describe("static ordered station paths", () => {
     expect(local?.score).toBeGreaterThan(detour?.score ?? 0);
     expect(detour?.score).toBeLessThanOrEqual(0.35);
   });
+});
+
+describe("multi-line spoken subsequences", () => {
+  beforeEach(() => {
+    data = { stations: [], paths: [], connections: [] };
+  });
+  async function network(passing = 0) {
+    await station(1, "始発", "Line A");
+    await station(2, "接続", "Line A");
+    await station(3, "終着", "Line B");
+    const left = [1],
+      right = [2];
+    for (let i = 0; i < passing; i++) {
+      await station(10 + i, `通過甲${i}`, "Line A");
+      left.push(10 + i);
+      await station(100 + i, `通過乙${i}`, "Line B");
+      right.push(100 + i);
+    }
+    left.push(2);
+    right.push(3);
+    await segment("path-a", left);
+    await segment("path-b", right);
+    await connectBoth("path-a", "path-b", 2, 2, left.length - 1, 0, 0);
+  }
+  for (const passing of [0, 30])
+    for (const reverse of [false, true]) {
+      it(`matches ${passing} passing stations across lines (${reverse ? "reverse" : "forward"})`, async () => {
+        await network(passing);
+        const mentions = reverse
+          ? ["終着", "接続", "始発"]
+          : ["始発", "接続", "終着"];
+        const result = await new StationCandidateService(
+          repository(),
+        ).analyzeMentions(mentions, {}, { sequenceRole: "stops" });
+        expect(result.sequenceFallbackAttempted).toBe(true);
+        expect(result.routeSearchStatus).toBe("matched");
+        const route = result.routeCandidates[0]!;
+        expect(names(route)).toEqual(mentions);
+        expect(route.hardAnchorViolations).toBe(0);
+        expect(route.physicalStations).toHaveLength(3 + passing * 2);
+        expect(route.spokenStopSequence).toHaveLength(3);
+        expect(route.physicalRoute!.segments.map((s) => s.pathId)).toEqual(
+          reverse ? ["path-b", "path-a"] : ["path-a", "path-b"],
+        );
+        expect(route.lineTransitions).toHaveLength(1);
+        expect(route.lineTransitions![0]!.atStationId).toBe(2);
+        expect(route.score).toBeGreaterThan(0.8);
+        expect(result.metrics.d1QueryCount).toBe(0);
+      });
+    }
+  it("uses the same-line fast path even with a large stop gap", async () => {
+    await network(30);
+    const result = await new StationCandidateService(
+      repository(),
+    ).analyzeMentions(["始発", "接続"], {}, { sequenceRole: "stops" });
+    expect(result.sequenceFallbackAttempted).toBe(false);
+    expect(result.routeCandidates[0]!.source).toBe("line_fast_path");
+    expect(result.routeCandidates[0]!.physicalStations).toHaveLength(32);
+  });
+  it("rejects A → D → B on a one-direction physical path", async () => {
+    for (let id = 1; id <= 5; id++) await station(id, `地点${id}`, "one");
+    await segment("one", [1, 2, 3, 4, 5]);
+    const result = await new StationCandidateService(
+      repository(),
+    ).analyzeMentions(["地点1", "地点4", "地点2"]);
+    expect(result.routeCandidates).toEqual([]);
+  });
+  it("keeps separate identities at an explicit transfer instead of deduplicating their names", async () => {
+    await station(1, "始発", "a");
+    await station(2, "接続", "a");
+    await station(3, "接続", "b");
+    await station(4, "終着", "b");
+    await segment("a", [1, 2]);
+    await segment("b", [3, 4]);
+    await connectBoth("a", "b", 2, 3, 1, 0, 1);
+    const routes = await repository().findRouteCandidates(["始発", "終着"], 3);
+    expect(routes[0]!.stations.map((s) => s.station.id)).toEqual([1, 2, 3, 4]);
+    expect(routes[0]!.lineTransitions).toEqual([
+      { fromLineId: "a", toLineId: "b", atStationId: 2, toStationId: 3 },
+    ]);
+  });
+});
+
+it("retains the last anchor when a twenty-stop announcement crosses lines", async () => {
+  data = { stations: [], paths: [], connections: [] };
+  for (let id = 1; id <= 20; id++)
+    await station(id, `停車地点${id}`, id <= 10 ? "A" : "B");
+  await segment(
+    "a",
+    Array.from({ length: 10 }, (_, i) => i + 1),
+  );
+  await segment(
+    "b",
+    Array.from({ length: 11 }, (_, i) => i + 10),
+  );
+  await connectBoth("a", "b", 10, 10, 9, 0, 0);
+  const mentions = Array.from({ length: 20 }, (_, i) => `停車地点${i + 1}`);
+  const result = await new StationCandidateService(
+    repository(),
+  ).analyzeMentions(mentions);
+  expect(result.routeSearchStatus).toBe("matched");
+  expect(names(result.routeCandidates[0]!)).toEqual(mentions);
+  expect(result.metrics.graphSearchCount).toBe(1);
+  expect(result.routeCandidates[0]!.lineTransitions).toHaveLength(1);
 });
