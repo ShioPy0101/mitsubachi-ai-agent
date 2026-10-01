@@ -12,6 +12,13 @@ Result assembly uses this final metadata for the filename, clip persistence,
 and both public/demo delivery. Explicit null values clear draft values. Raw
 transcription and analysis metadata remain unchanged.
 
+The final summary is a short factual note, for example
+「11:10発 特急サンダーバード17号・和倉温泉行き。次は敦賀」.
+Unknown fields are omitted. Stop lists can use 「停車駅：篠原・野洲・守山」;
+other announcements describe the actual guidance without generic introductory
+prose. These instructions guide Gemini output; local tests use fake responses
+and do not measure live model writing quality.
+
 Older responses/fixtures without final metadata remain supported. Linked
 station entities can update corresponding draft station, destination and next
 station fields, including stop mentions matching nextStation. A missing mention
