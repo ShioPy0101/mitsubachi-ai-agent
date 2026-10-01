@@ -433,7 +433,7 @@ export async function processJob(
   let analysis: Awaited<ReturnType<GeminiMetadataService["analyze"]>>;
 
   try {
-    const analysisKey = `${env.GEMINI_MODEL}:semantic-v3:${transcriptionText}`;
+    const analysisKey = `${env.GEMINI_MODEL}:semantic-v4:${transcriptionText}`;
     const cachedAnalysis = await checkpoints.read<typeof analysis>(
       "analysis",
       analysisKey,
@@ -521,11 +521,14 @@ export async function processJob(
 
   const railwayCache = createStaticRailwayJobCache();
   const correctionKey =
-    `static:${railwayManifest.sourceSha256}:engine-v2:` +
+    `static:${railwayManifest.sourceSha256}:engine-v3:` +
     transcriptionText +
     "\n" +
     analysis.mentions
-      .map((m) => `${m.id}:${m.role}:${m.sequenceId}:${m.phoneticHint ?? ""}`)
+      .map(
+        (m) =>
+          `${m.id}:${m.role}:${m.sequenceId}:${m.phoneticHint ?? ""}:${m.language ?? ""}:${m.equivalentEventGroupId ?? ""}`,
+      )
       .join("|");
   const cachedCorrection = await checkpoints.read<StationCorrectionResult>(
     "correction",
