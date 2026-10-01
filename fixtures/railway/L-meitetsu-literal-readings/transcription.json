@@ -1,0 +1,6 @@
+{
+  "text": "次の停車駅は、神話口、福岐、千田竹豊、上、青山、奈良、千田半田です。",
+  "language": null,
+  "segments": [],
+  "provenance": "Raw text is an existing synthetic regression; six hints reproduce the reported demo. 青山=あおやま is assumed because that field was truncated. No real-audio accuracy claim."
+}
