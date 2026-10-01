@@ -97,8 +97,17 @@ export function parsePlatformCommand(
   };
 }
 
-export const deferredResponse = (): Response =>
-  Response.json({ type: 5, data: { flags: EPHEMERAL_MESSAGE_FLAG } });
+export const queuedResponse = (position?: number | null): Response =>
+  Response.json({
+    type: 4,
+    data: {
+      content:
+        position != null && position > 0
+          ? `順番待ちしています…（待機順の目安：${position}番目）`
+          : "順番待ちしています…",
+      flags: EPHEMERAL_MESSAGE_FLAG,
+    },
+  });
 
 export const ephemeralErrorResponse = (content: string): Response =>
   Response.json({ type: 4, data: { content, flags: EPHEMERAL_MESSAGE_FLAG } });
