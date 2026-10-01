@@ -29,8 +29,31 @@ export type RoutePathStation = {
   routeIndex: number;
 };
 
+export type PhysicalRouteSegment = {
+  lineId: string;
+  pathId: string;
+  stationIds: readonly number[];
+  direction: "forward" | "reverse";
+};
+export type PhysicalRoute = { segments: readonly PhysicalRouteSegment[] };
+export type LineTransition = {
+  fromLineId: string;
+  toLineId: string;
+  atStationId: number;
+  toStationId: number;
+};
+
 export type RoutePathCandidate = {
+  physicalRoute?: PhysicalRoute;
+  lineTransitions?: readonly LineTransition[];
+  direction?: "forward" | "reverse";
+  directionReversals?: number;
+  detourRatio?: number;
   stations: RoutePathStation[];
+  /** Ordered physical path including unspoken intermediate stations. */
+  physicalStations?: RoutePathStation[];
+  /** Existing spoken mentions aligned as an ordered subsequence. */
+  spokenStopSequence?: RoutePathStation[];
   anchorCoverage: number;
   orderConsistency: number;
   transferCount: number;
@@ -69,6 +92,16 @@ export type MentionStationCandidate = {
   routeHypothesisIds: number[];
   bestRouteScore: number | null;
   finalScore: number;
+  crossLanguageEvidence?: CrossLanguageEvidence[];
+};
+
+export type CrossLanguageEvidence = {
+  groupId: string;
+  peerMentionId: string;
+  peerLanguage: import("../railway/semantic").AnnouncementLanguage;
+  peerSequenceId: number;
+  stationId: number;
+  routeScore: number;
 };
 
 export type RouteSearchStatus =

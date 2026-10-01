@@ -1,4 +1,8 @@
-import { englishStationReading, stationEnglishName } from "./language";
+import {
+  englishStationReading,
+  localizedStationSimilarity,
+  normalizeLocalizedStationName,
+} from "./language";
 import { stringSimilarity } from "./similarity";
 import type { SequenceRole } from "../metadata/service";
 import {
@@ -73,6 +77,7 @@ export type SequenceSearchOptions = {
   destinationContext?: boolean;
   phoneticHints?: readonly (string | null)[];
   bindings?: ReadonlyMap<string, Station>;
+  supportingStations?: readonly (Station | null)[];
 };
 
 export type StationCandidateDiagnostics = {
@@ -203,7 +208,7 @@ function mentionIndex(station: Station, transcription: string): number {
   return Math.min(nameIndex, kanaIndex);
 }
 
-function lexicalSimilarities(
+export function lexicalSimilarities(
   mention: string,
   station: Station,
   inferredReading?: string | null,
@@ -213,13 +218,11 @@ function lexicalSimilarities(
   phoneticSimilarity: number;
   lexicalSimilarity: number;
 } {
-  const english = /^[a-z\s-]+$/i.test(mention)
-    ? stationEnglishName(station)
-    : null;
-  const nameSimilarity = english
+  const localized = localizedStationSimilarity(mention, station);
+  const nameSimilarity = localized
     ? stringSimilarity(
-        mention.toLowerCase().replace(/[\s-]/g, ""),
-        english.toLowerCase().replace(/[\s-]/g, ""),
+        normalizeLocalizedStationName(mention),
+        normalizeLocalizedStationName(localized),
       )
     : stationNameSimilarity(mention, station.name);
   const kanaSimilarity = stationKanaSimilarity(mention, station.kana);
@@ -252,7 +255,6 @@ function alignMentionsToRoute(
   source: "line_fast_path" | "graph_fallback",
   hardAnchorNamesByMention: readonly ReadonlySet<string>[],
   boundNamesByMention: readonly (string | null)[],
-  maximumStationGap = 4,
   onComparison?: () => void,
   similaritiesFor = lexicalSimilarities,
 ): RoutePathCandidate | null {
@@ -263,17 +265,10 @@ function alignMentionsToRoute(
   )
     return null;
   if (
-    mentionTexts.length * route.stations.length * 16 >
+    mentionTexts.length * route.stations.length >
     STATION_SEQUENCE_LIMITS.alignmentComparisons
   )
     return null;
-  const effectiveMaximumStationGap = Math.min(
-    16,
-    Math.max(
-      maximumStationGap,
-      Math.ceil(route.stations.length / mentionTexts.length) * 2,
-    ),
-  );
   const alignmentValue = (mentionIndex: number, station: Station): number => {
     const similarities = similaritiesFor(
       mentionTexts[mentionIndex] ?? "",
@@ -281,6 +276,11 @@ function alignMentionsToRoute(
       phoneticHints[mentionIndex],
     );
     const lexical =
+      stringSimilarity(
+        normalizeStationName(mentionTexts[mentionIndex] ?? ""),
+        normalizeStationName(station.name),
+      ) *
+        0.15 +
       similarities.nameSimilarity * 0.75 +
       similarities.kanaSimilarity * 0.35 +
       similarities.phoneticSimilarity * 0.15;
@@ -301,29 +301,38 @@ function alignMentionsToRoute(
     mentionIndex < mentionTexts.length;
     mentionIndex += 1
   ) {
+    // Prefix maximum gives ordered-subsequence alignment in O(mentions × path).
+    // Passing any number of unspoken stations is valid; distance is not a stop
+    // count or a reason to discard an otherwise ordered railway route.
+    let prefixBest: Alignment | null = null;
     const current = route.stations.map((item, routeIndex): Alignment => {
-      let best: Alignment | null = null;
-      for (
-        let previousIndex = Math.max(
-          0,
-          routeIndex - effectiveMaximumStationGap,
-        );
-        previousIndex < routeIndex;
-        previousIndex += 1
-      ) {
-        const prior = previous[previousIndex];
-        if (prior === undefined) continue;
-        const gap = routeIndex - previousIndex;
+      const older = previous[routeIndex - 3];
+      if (older) {
         onComparison?.();
-        const value =
-          prior.value +
-          alignmentValue(mentionIndex, item.station) +
-          0.2 -
-          (gap - 1) * 0.04;
-        if (best === null || value > best.value)
-          best = { value, indexes: [...prior.indexes, routeIndex] };
+        if (!prefixBest || older.value > prefixBest.value) prefixBest = older;
       }
-      return best ?? { value: Number.NEGATIVE_INFINITY, indexes: [] };
+      // A tiny capped proximity preference breaks ambiguous lexical ties.
+      // It never grows with route length or imposes a station-gap limit.
+      let bestPrior: Alignment | null = prefixBest
+        ? { value: prefixBest.value - 0.06, indexes: prefixBest.indexes }
+        : null;
+      for (const gap of [1, 2]) {
+        const prior = previous[routeIndex - gap];
+        if (!prior) continue;
+        onComparison?.();
+        const value = prior.value - (gap - 1) * 0.03;
+        if (!bestPrior || value > bestPrior.value)
+          bestPrior = { value, indexes: prior.indexes };
+      }
+      return bestPrior && Number.isFinite(bestPrior.value)
+        ? {
+            value:
+              bestPrior.value +
+              alignmentValue(mentionIndex, item.station) +
+              0.2,
+            indexes: [...bestPrior.indexes, routeIndex],
+          }
+        : { value: Number.NEGATIVE_INFINITY, indexes: [] };
     });
     previous = current;
   }
@@ -387,22 +396,17 @@ function alignMentionsToRoute(
   const coherentHardEvidence =
     hardAnchorCount === 1 || exactAnchorCoverage >= 0.6;
   if (
-    coherentHardEvidence &&
+    (coherentHardEvidence || hardAnchorCount === mentionTexts.length) &&
     hardAnchorViolations.some(
-      ({ lexicalSimilarity }) => lexicalSimilarity === 0,
+      ({ lexicalSimilarity }) =>
+        hardAnchorCount === mentionTexts.length || lexicalSimilarity === 0,
     )
   )
     return null;
   const covered = lexicalValues.filter((value) => value >= 0.25).length;
   const strong = lexicalValues.filter((value) => value >= 0.65).length;
-  const gaps = best.indexes
-    .slice(1)
-    .map((value, index) => value - (best.indexes[index] ?? value));
-  const continuity =
-    gaps.length === 0
-      ? 0
-      : gaps.reduce((sum, gap) => sum + Math.max(0, 1 - (gap - 1) * 0.25), 0) /
-        gaps.length;
+  // Valid increasing physical indexes are sufficient for stop-list continuity.
+  const continuity = 1;
   const meanLexical =
     lexicalValues.reduce((sum, value) => sum + value, 0) / lexicalValues.length;
   const anchorCoverage = covered / mentionTexts.length;
@@ -416,7 +420,9 @@ function alignMentionsToRoute(
         (strong / mentionTexts.length) * 0.15 +
         (hardAnchorCount === 0 ? 0 : exactAnchorCoverage * 0.15) -
         hardAnchorViolationRatio * 0.05 -
-        route.transferCount * 0.08,
+        route.transferCount * 0.015 -
+        (route.detourRatio ?? 0) * 0.2 -
+        (route.directionReversals ?? 0) * 0.15,
     ),
   );
   if (
@@ -424,20 +430,20 @@ function alignMentionsToRoute(
     score < 0.43
   )
     return null;
-  const stations = mentionMatches.map(({ station }, routeIndex) => ({
+  const stations = mentionMatches.map(({ station, routeIndex }) => ({
     station,
     routeIndex,
   }));
   return {
+    ...route,
     stations,
-    mentionMatches: mentionMatches.map((match, routeIndex) => ({
-      ...match,
-      routeIndex,
-    })),
+    physicalStations: route.stations,
+    spokenStopSequence: stations,
+    mentionMatches,
     anchorCoverage,
     orderConsistency: 1,
     transferCount: route.transferCount,
-    pathLength: stations.length,
+    pathLength: route.stations.length,
     score,
     source,
     exactAnchorCoverage,
@@ -611,6 +617,9 @@ export class StationCandidateService {
       [
         ...new Map(
           [
+            ...(options.supportingStations?.[index]
+              ? [options.supportingStations[index]!]
+              : []),
             ...(surfacePools[index] ?? []),
             ...(phoneticPools[index] ?? []),
             ...(boundStations[index] === null ||
@@ -687,7 +696,6 @@ export class StationCandidateService {
     const countComparison = (): void => {
       alignmentComparisonCount += 1;
     };
-    const maximumStationGap = options.sequenceRole === "direction" ? 16 : 4;
     const lineLookupStartedAt = Date.now();
     const lineCandidateSeeds: LineCandidateSeed[] = perMentionPools.flatMap(
       (stations, mentionIndex) =>
@@ -724,7 +732,7 @@ export class StationCandidateService {
         : lineRouteCandidates
             .map((route) =>
               alignmentComparisonCount +
-                (mentionTexts?.length ?? 0) * route.stations.length * 16 >
+                3 * (mentionTexts?.length ?? 0) * route.stations.length >
               STATION_SEQUENCE_LIMITS.alignmentComparisons
                 ? null
                 : alignMentionsToRoute(
@@ -734,7 +742,6 @@ export class StationCandidateService {
                     "line_fast_path",
                     hardAnchorNamesByMention,
                     boundNamesByMention,
-                    maximumStationGap,
                     countComparison,
                     cachedLexical,
                   ),
@@ -746,24 +753,32 @@ export class StationCandidateService {
       ...alignedLineRoutes.map(({ score }) => score),
     );
     const fallbackSeedStartedAt = Date.now();
-    const fallbackSeedNames = [
-      ...new Set([
-        ...anchorNames,
-        ...(mentionTexts ?? []).flatMap((mention, mentionIndex) =>
-          (perMentionPools[mentionIndex] ?? [])
-            .map((station) => ({
-              station,
-              ...cachedLexical(mention, station, phoneticHints[mentionIndex]),
-            }))
-            .filter(({ lexicalSimilarity }) => lexicalSimilarity >= 0.5)
-            .sort(
-              (left, right) => right.lexicalSimilarity - left.lexicalSimilarity,
-            )
-            .slice(0, 1)
-            .map(({ station }) => station.name),
-        ),
-      ]),
-    ].slice(0, STATION_SEQUENCE_LIMITS.fallbackSeeds);
+    const orderedFallbackSeeds =
+      mentionTexts === null
+        ? anchorNames
+        : mentionTexts.flatMap((mention, mentionIndex) =>
+            (perMentionPools[mentionIndex] ?? [])
+              .map((station) => ({
+                station,
+                ...cachedLexical(mention, station, phoneticHints[mentionIndex]),
+              }))
+              .filter((c) => c.lexicalSimilarity >= 0.5)
+              .sort((a, b) => b.lexicalSimilarity - a.lexicalSimilarity)
+              .slice(0, 1)
+              .map((c) => c.station.name),
+          );
+    const uniqueFallbackSeeds = [...new Set(orderedFallbackSeeds)];
+    // Retain both ends of long multi-line announcements while keeping four seeds.
+    const fallbackSeedNames =
+      uniqueFallbackSeeds.length <= STATION_SEQUENCE_LIMITS.fallbackSeeds
+        ? uniqueFallbackSeeds
+        : [
+            ...uniqueFallbackSeeds.slice(
+              0,
+              STATION_SEQUENCE_LIMITS.fallbackSeeds - 1,
+            ),
+            uniqueFallbackSeeds.at(-1)!,
+          ];
     let hypothesisGenerationMs = Date.now() - fallbackSeedStartedAt;
     const sequenceFallbackAttempted =
       mentionTexts === null
@@ -800,7 +815,7 @@ export class StationCandidateService {
         : graphRoutes
             .map((route) =>
               alignmentComparisonCount +
-                (mentionTexts?.length ?? 0) * route.stations.length * 16 >
+                3 * (mentionTexts?.length ?? 0) * route.stations.length >
               STATION_SEQUENCE_LIMITS.alignmentComparisons
                 ? null
                 : alignMentionsToRoute(
@@ -810,7 +825,6 @@ export class StationCandidateService {
                     "graph_fallback",
                     hardAnchorNamesByMention,
                     boundNamesByMention,
-                    maximumStationGap,
                     countComparison,
                     cachedLexical,
                   ),
@@ -972,7 +986,7 @@ export class StationCandidateService {
           match.routeIndex < next.routeIndex &&
           next.routeIndex - previous.routeIndex <= 4;
         const competitors = anchoredInterval
-          ? route.stations
+          ? (route.physicalStations ?? route.stations)
               .filter(
                 (s) =>
                   s.routeIndex > previous.routeIndex &&

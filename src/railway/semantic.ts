@@ -4,7 +4,14 @@ const stationNames = [...railwayIndexes.byName.keys()]
   .filter((name) => name.length >= 2)
   .sort((a, b) => b.length - a.length || a.localeCompare(b));
 
-export type AnnouncementLanguage = "ja" | "en" | "unknown";
+export const announcementLanguages = [
+  "ja",
+  "en",
+  "zh",
+  "ko",
+  "unknown",
+] as const;
+export type AnnouncementLanguage = (typeof announcementLanguages)[number];
 export const announcementEventKinds = [
   "DepartureAnnouncement",
   "ArrivalAnnouncement",
@@ -78,11 +85,30 @@ export type NormalizedAnnouncementEvent = {
   text: string;
 };
 export const announcementLanguage = (text: string): AnnouncementLanguage =>
-  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(text)
-    ? "ja"
-    : /[a-z]/i.test(text)
-      ? "en"
-      : "unknown";
+  /\p{Script=Hangul}/u.test(text)
+    ? "ko"
+    : /[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(text)
+      ? "ja"
+      : /\p{Script=Han}/u.test(text)
+        ? "zh"
+        : /[a-z]/i.test(text)
+          ? "en"
+          : "unknown";
+
+// Script-based observation is approximate, especially for Han-only Japanese.
+// Explicit semantic annotations remain the preferred language labels.
+export function announcementLanguagesIn(text: string): AnnouncementLanguage[] {
+  const found = new Set<AnnouncementLanguage>();
+  for (const piece of text.split(/[。.!?！？\n]+/u)) {
+    if (!piece.trim()) continue;
+    found.add(announcementLanguage(piece));
+    if (/\p{Script=Hangul}/u.test(piece)) found.add("ko");
+    if (/[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(piece))
+      found.add("ja");
+    if (/[a-z]{2}/i.test(piece)) found.add("en");
+  }
+  return [...found];
+}
 
 // Longest-match scan is local static data, never sent to a language model.
 // One-character station names require explicit mentions to avoid matching grammar.

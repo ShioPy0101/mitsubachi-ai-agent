@@ -9,7 +9,14 @@ export type StationSequence = {
 
 function sequenceRole(mentions: readonly StationMention[]): SequenceRole {
   const roles = new Set(mentions.map(({ role }) => role));
-  if ([...roles].every((role) => role === "stop" || role === "service_change_point" || role === "next_stop")) {
+  if (
+    [...roles].every(
+      (role) =>
+        role === "stop" ||
+        role === "service_change_point" ||
+        role === "next_stop",
+    )
+  ) {
     return "stops";
   }
   if ([...roles].every((role) => role === "direction")) return "direction";
@@ -18,7 +25,11 @@ function sequenceRole(mentions: readonly StationMention[]): SequenceRole {
 }
 
 function mentionSequenceRole(mention: StationMention): SequenceRole {
-  if (mention.role === "stop" || mention.role === "service_change_point" || mention.role === "next_stop") {
+  if (
+    mention.role === "stop" ||
+    mention.role === "service_change_point" ||
+    mention.role === "next_stop"
+  ) {
     return "stops";
   }
   if (mention.role === "direction") return "direction";
@@ -26,21 +37,34 @@ function mentionSequenceRole(mention: StationMention): SequenceRole {
   return "unknown";
 }
 
-function nearbyDirectionRuns(mentions: readonly StationMention[], firstSyntheticId: number): StationSequence[] {
-  const directions = mentions.filter(({ role, sequenceId }) => role === "direction" && sequenceId === null);
+function nearbyDirectionRuns(
+  mentions: readonly StationMention[],
+  firstSyntheticId: number,
+): StationSequence[] {
+  const directions = mentions.filter(
+    ({ role, sequenceId }) => role === "direction" && sequenceId === null,
+  );
   const sequences: StationSequence[] = [];
   let run: StationMention[] = [];
   let nextId = firstSyntheticId;
   const flush = (): void => {
     if (run.length >= 2) {
-      sequences.push({ id: nextId, role: "direction", mentions: run, contextMentions: [] });
+      sequences.push({
+        id: nextId,
+        role: "direction",
+        mentions: run,
+        contextMentions: [],
+      });
       nextId += 1;
     }
     run = [];
   };
   for (const mention of directions) {
     const previous = run.at(-1);
-    const gap = previous?.end != null && mention.start !== null ? mention.start - previous.end : 0;
+    const gap =
+      previous?.end != null && mention.start !== null
+        ? mention.start - previous.end
+        : 0;
     if (previous !== undefined && gap > 8) flush();
     run.push(mention);
   }
@@ -54,12 +78,18 @@ function nearestDestinationAfter(
 ): StationMention | null {
   const end = sequence.mentions.at(-1)?.end;
   if (end == null) return destinations[0] ?? null;
-  return destinations
-    .filter(({ start }) => start !== null && start >= end && start - end <= 160)
-    .sort((left, right) => (left.start ?? 0) - (right.start ?? 0))[0] ?? null;
+  return (
+    destinations
+      .filter(
+        ({ start }) => start !== null && start >= end && start - end <= 160,
+      )
+      .sort((left, right) => (left.start ?? 0) - (right.start ?? 0))[0] ?? null
+  );
 }
 
-export function groupStationSequences(mentions: readonly StationMention[]): StationSequence[] {
+export function groupStationSequences(
+  mentions: readonly StationMention[],
+): StationSequence[] {
   const groups = new Map<number, StationMention[]>();
   let maximumId = 0;
   for (const mention of mentions) {
@@ -69,12 +99,31 @@ export function groupStationSequences(mentions: readonly StationMention[]): Stat
     group.push(mention);
     groups.set(mention.sequenceId, group);
   }
+  // One provider sequence ID may accidentally span translated announcements.
+  // Preserve separate spoken sequences instead of treating them as one route.
+  for (const [id, values] of [...groups]) {
+    const languages = new Set(values.map((m) => m.language ?? "unknown"));
+    if (languages.size < 2) continue;
+    const partitions = new Map<string, StationMention[]>();
+    for (const mention of values) {
+      const language = mention.language ?? "unknown";
+      const part = partitions.get(language) ?? [];
+      part.push(mention);
+      partitions.set(language, part);
+    }
+    let first = true;
+    for (const part of partitions.values()) {
+      groups.set(first ? id : ++maximumId, part);
+      first = false;
+    }
+  }
   let nextExplicitId = maximumId + 1;
   const explicit = [...groups]
     .sort(([left], [right]) => left - right)
     .flatMap(([id, sequenceMentions]): StationSequence[] => {
       const role = sequenceRole(sequenceMentions);
-      if (role !== "unknown") return [{ id, role, mentions: sequenceMentions, contextMentions: [] }];
+      if (role !== "unknown")
+        return [{ id, role, mentions: sequenceMentions, contextMentions: [] }];
       const partitions = new Map<SequenceRole, StationMention[]>();
       for (const mention of sequenceMentions) {
         const mentionRole = mentionSequenceRole(mention);
@@ -90,29 +139,41 @@ export function groupStationSequences(mentions: readonly StationMention[]): Stat
       }));
     });
   const inferredDirections = nearbyDirectionRuns(mentions, nextExplicitId);
-  let nextId = Math.max(
-    maximumId,
-    ...explicit.map(({ id }) => id),
-    ...inferredDirections.map(({ id }) => id),
-    0,
-  ) + 1;
+  let nextId =
+    Math.max(
+      maximumId,
+      ...explicit.map(({ id }) => id),
+      ...inferredDirections.map(({ id }) => id),
+      0,
+    ) + 1;
   const assigned = new Set(explicit.flatMap(({ mentions: values }) => values));
-  for (const sequence of inferredDirections) for (const mention of sequence.mentions) assigned.add(mention);
+  for (const sequence of inferredDirections)
+    for (const mention of sequence.mentions) assigned.add(mention);
   const destinations = mentions.filter(({ role }) => role === "destination");
   const standaloneDestinations = destinations
     .filter((mention) => !assigned.has(mention))
     .map((mention): StationSequence => ({
-      id: nextId++, role: "destination", mentions: [mention], contextMentions: [],
+      id: nextId++,
+      role: "destination",
+      mentions: [mention],
+      contextMentions: [],
     }));
-  const sequences = [...explicit, ...inferredDirections, ...standaloneDestinations];
+  const sequences = [
+    ...explicit,
+    ...inferredDirections,
+    ...standaloneDestinations,
+  ];
   for (const sequence of sequences) {
     if (sequence.role !== "direction") continue;
     const destination = nearestDestinationAfter(sequence, destinations);
-    if (destination !== null && !sequence.mentions.includes(destination)) sequence.contextMentions.push(destination);
+    if (destination !== null && !sequence.mentions.includes(destination))
+      sequence.contextMentions.push(destination);
   }
   return sequences.sort((left, right) => left.id - right.id);
 }
 
-export function groupStopSequences(mentions: readonly StationMention[]): StationSequence[] {
+export function groupStopSequences(
+  mentions: readonly StationMention[],
+): StationSequence[] {
   return groupStationSequences(mentions).filter(({ role }) => role === "stops");
 }

@@ -48,8 +48,8 @@ export function indexRouteGraph(
 }
 export function comparePathCost(left: SegmentPath, right: SegmentPath): number {
   return (
-    left.transferCount - right.transferCount ||
     left.distance - right.distance ||
+    left.transferCount - right.transferCount ||
     left.segments.length - right.segments.length
   );
 }
@@ -214,7 +214,11 @@ export function scoreRoute(
     pathLength === 0
       ? 1
       : Math.max(0, pathLength - shortestLength) / pathLength;
-  const localPathAllowance = Math.max(4, anchorNames.length * 4);
+  const localPathAllowance = Math.max(
+    shortestLength,
+    4,
+    anchorNames.length * 4,
+  );
   const localityPenalty = Math.min(
     0.55,
     Math.max(0, pathLength - localPathAllowance) * 0.015,
@@ -225,10 +229,17 @@ export function scoreRoute(
       1,
       anchorCoverage * 0.55 +
         orderConsistency * 0.35 -
-        transferCount * 0.08 -
+        transferCount * 0.015 -
         detourRatio * 0.1 -
         localityPenalty,
     ),
   );
-  return { anchorCoverage, orderConsistency, transferCount, pathLength, score };
+  return {
+    anchorCoverage,
+    orderConsistency,
+    transferCount,
+    pathLength,
+    score,
+    detourRatio,
+  };
 }
