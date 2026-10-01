@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isSupportedAudioAttachment } from "../src/discord/attachments";
 import {
-  deferredResponse,
+  queuedResponse,
   parsePlatformCommand,
 } from "../src/discord/interactions";
 import { verifyDiscordSignature } from "../src/discord/signatures";
@@ -153,9 +153,19 @@ describe("/platform-ai-agent interaction", () => {
     ).toBe(false);
   });
 
-  it("creates an ephemeral Discord deferred ACK", async () => {
-    const response = deferredResponse();
-    expect(await response.json()).toEqual({ type: 5, data: { flags: 64 } });
+  it("shows the waiting position in an ephemeral receipt", async () => {
+    const response = queuedResponse(3);
+    expect(await response.json()).toEqual({
+      type: 4,
+      data: {
+        content: "順番待ちしています…（待機順の目安：3番目）",
+        flags: 64,
+      },
+    });
+    expect(await queuedResponse().json()).toEqual({
+      type: 4,
+      data: { content: "順番待ちしています…", flags: 64 },
+    });
   });
 
   it("rejects malformed signatures", async () => {
