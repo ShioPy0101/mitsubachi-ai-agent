@@ -1,6 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import migrationBaseline from "./fixtures/d1-migration-baseline.json";
-import { StationCandidateService } from "../src/stations/candidate-service";
+import {
+  lexicalSimilarities,
+  STATION_SEQUENCE_LIMITS,
+  StationCandidateService,
+} from "../src/stations/candidate-service";
+import {
+  bestContainedSimilarity,
+  stringSimilarity,
+} from "../src/stations/similarity";
 import { generateRailwayData } from "../src/stations/static-generator";
 import { assertRailwayDataIntegrity } from "../src/stations/static-schema";
 import { buildRailwayIndexes } from "../src/stations/static-indexes";
@@ -202,5 +210,66 @@ describe("ordered static railway repository", () => {
       "野洲",
       "守山",
     ]);
+  });
+});
+
+describe("安雪 / やすゆき phonetic candidate generation", () => {
+  it("retains 野洲 in the bounded phonetic pool using contained reading evidence", async () => {
+    expect(stringSimilarity("やすゆき", "やす")).toBe(0.5);
+    expect(bestContainedSimilarity("やすゆき", "やす")).toBe(1);
+    const repository = new StaticRailwayRepository(railwayIndexes);
+    const result = await repository.findCandidatePools(
+      ["安雪"],
+      ["やすゆき"],
+      {},
+      STATION_SEQUENCE_LIMITS.surfaceCandidatesPerMention,
+      STATION_SEQUENCE_LIMITS.phoneticCandidatesPerMention,
+    );
+    expect(result.phonetic[0]!.map((s) => s.name)).toContain("野洲");
+    expect(result.phonetic[0]).toHaveLength(
+      STATION_SEQUENCE_LIMITS.phoneticCandidatesPerMention,
+    );
+    // Suffix matches otherwise win the old station-ID tie-break and evict 野洲.
+    expect(result.phonetic[0]!.every((s) => s.kana === "やす")).toBe(true);
+    expect(repository.getQueryCount()).toBe(0);
+  });
+
+  it("scores the inferred reading highly without making phonetics hard lexical evidence", () => {
+    const yasu = [...railwayIndexes.byId.values()].find(
+      (s) => s.name === "野洲",
+    )!;
+    const similarities = lexicalSimilarities("安雪", yasu, "やすゆき");
+    expect(similarities.phoneticSimilarity).toBe(1);
+    expect(similarities.nameSimilarity).toBe(0);
+    expect(similarities.kanaSimilarity).toBe(0);
+    expect(similarities.lexicalSimilarity).toBe(0.5);
+  });
+
+  it("uses 京都 and 野洲 as fallback seeds and aligns the returned physical route", async () => {
+    const repository = new StaticRailwayRepository(railwayIndexes);
+    const graphSearch = vi.spyOn(repository, "findRouteCandidates");
+    const result = await new StationCandidateService(
+      repository,
+    ).analyzeMentions(
+      ["京都", "安雪"],
+      {},
+      { sequenceRole: "stops", phoneticHints: [null, "やすゆき"] },
+    );
+    expect(graphSearch).toHaveBeenCalledTimes(1);
+    expect(graphSearch.mock.calls[0]![0]).toEqual(["京都", "野洲"]);
+    const physicalRoutes = await (graphSearch.mock.results[0]!
+      .value as ReturnType<StaticRailwayRepository["findRouteCandidates"]>);
+    expect(physicalRoutes[0]!.stations.map((s) => s.station.name)).toEqual(
+      expect.arrayContaining(["京都", "野洲"]),
+    );
+    expect(result.routeSearchStatus).toBe("matched");
+    expect(
+      result.routeCandidates[0]!.stations.map((s) => s.station.name),
+    ).toEqual(["京都", "野洲"]);
+    expect(result.routeCandidates[0]!.hardAnchorViolations).toBe(0);
+    expect(
+      result.mentionCandidates[1]!.find((c) => c.station.name === "野洲")!
+        .bound,
+    ).toBe(false);
   });
 });
