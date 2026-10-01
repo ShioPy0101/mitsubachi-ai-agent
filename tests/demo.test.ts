@@ -125,7 +125,16 @@ describe("owner-only demo", () => {
         if (geminiRequests === 1) return new Response("temporary Gemini failure", { status: 503 });
         const output = geminiRequests === 2
           ? geminiAnalysisOutput
-          : { normalizedTranscription: "次はテスト駅です", entities: [] };
+          : {
+              segments: [{
+                segmentId: 0,
+                sourceText: "次はテスト駅です",
+                normalizedText: "次はテスト駅です",
+                language: "ja",
+                quality: "normal",
+              }],
+              entities: [],
+            };
         return Response.json({
           candidates: [{ content: { parts: [{ text: JSON.stringify(output) }] } }],
         });
@@ -198,7 +207,7 @@ describe("owner-only demo", () => {
     expect(discordContents.some((content) =>
       content.includes("同じ文字起こしのままこの段階だけ再試行します（2/3）"))).toBe(true);
     expect(discordContents).toContain("🔧 Gemini #1が完了しました（交通案内判定: true、駅mention: 1件）。");
-    expect(discordContents).toContain("🔧 Gemini #2で構造とsequence候補に制約された文字起こしを生成しています…");
+    expect(discordContents).toContain("🔧 Gemini #2でsegment順を保持した文字起こしを正規化しています…");
     expect(discordContents.some((content) => content.startsWith("解析完了\n"))).toBe(true);
     expect(discordFilenames).toContain("platform-ai-agent-demo-debug.md");
     const resultCall = fetcher.mock.calls.find(([, init]) => {

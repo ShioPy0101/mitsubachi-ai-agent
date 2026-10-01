@@ -445,6 +445,7 @@ async function processJob(
   const attachment = attachmentFor(job);
   let audio: ArrayBuffer | null = null;
   let transcriptionText = job.transcriptionText;
+  let transcriptionSegments = job.transcriptionSegments ?? [];
   let transcriptionResult: TranscriptionResult | null = null;
   let needsTranscriptionCheckpoint = false;
   if (transcriptionText === null) {
@@ -510,6 +511,7 @@ async function processJob(
       return "stopped";
     }
     transcriptionText = transcription.text;
+    transcriptionSegments = transcription.segments;
     needsTranscriptionCheckpoint = true;
   } else {
     console.info("audio_job_transcription_checkpoint_reused", { jobId: job.id, attempt });
@@ -529,7 +531,8 @@ async function processJob(
     return "failed";
   }
   if (needsTranscriptionCheckpoint) {
-    await runJobStage("transcription_checkpoint", () => jobs.saveTranscription(job.id, transcriptionText));
+    await runJobStage("transcription_checkpoint", () =>
+      jobs.saveTranscription(job.id, transcriptionText, transcriptionSegments));
     console.info("audio_job_transcription_checkpoint_saved", { jobId: job.id, attempt });
     if (showDemoProgress && transcriptionResult !== null) {
       const preparation = transcriptionResult.audioPreparation?.strategy === "mp3_rebuilt"
@@ -741,11 +744,16 @@ async function processJob(
     mentionCandidates: stationSearch.mentionCandidates,
     routeHypotheses: stationSearch.routeCandidates,
   }));
-  await updateProgress(job, "Gemini #2で構造とsequence候補に制約された文字起こしを生成しています…", callbacks, discord, showDemoProgress);
+  await updateProgress(job, "Gemini #2でsegment順を保持した文字起こしを正規化しています…", callbacks, discord, showDemoProgress);
   let normalization: Awaited<ReturnType<GeminiMetadataService["normalize"]>>;
   try {
     normalization = await runGeminiStage("gemini_normalization", () =>
-      gemini.normalize(transcriptionText, analysisForNormalization, normalizationSequences));
+      gemini.normalize(
+        transcriptionText,
+        analysisForNormalization,
+        normalizationSequences,
+        transcriptionSegments.map(({ text }, segmentId) => ({ segmentId, text })),
+      ));
   } catch (error) {
     return handleGeminiFailure(error, "gemini_normalization");
   }
@@ -799,7 +807,7 @@ async function processJob(
       whisper: {
         model: whisperModel,
         settings: whisperSettings,
-        result: transcriptionResult ?? { language: null, text: transcriptionText, segments: [] },
+        result: transcriptionResult ?? { language: null, text: transcriptionText, segments: transcriptionSegments },
       },
       transcription: transcriptionText,
       analysis,
@@ -811,6 +819,8 @@ async function processJob(
       },
       isTransitAnnouncement: analysis.isTransitAnnouncement,
       normalizedTranscription: normalization.normalizedTranscription,
+      normalizedSegments: normalization.segments,
+      normalizedEntities: normalization.entities,
       metadata,
       resolution,
       filename,
@@ -852,6 +862,7 @@ function demoJob(message: DemoAudioJobMessage): AudioJob {
     status: "queued",
     errorMessage: null,
     transcriptionText: null,
+    transcriptionSegments: null,
     createdAt: new Date().toISOString(),
     startedAt: null,
     completedAt: null,

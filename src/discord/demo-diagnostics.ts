@@ -1,4 +1,9 @@
-import type { GeminiAnalysisExtraction, GeminiDiagnostics } from "../metadata/gemini";
+import type {
+  GeminiAnalysisExtraction,
+  GeminiDiagnostics,
+  NormalizedEntity,
+  NormalizedSegment,
+} from "../metadata/gemini";
 import type { SequenceRole } from "../metadata/service";
 import type { RailwayAnnouncementMetadata } from "../railway/types";
 import { STATION_SEQUENCE_LIMITS, type StationCandidateDiagnostics } from "../stations/candidate-service";
@@ -29,6 +34,8 @@ export type DemoDiagnostics = {
   gemini: GeminiDiagnostics;
   isTransitAnnouncement: boolean;
   normalizedTranscription: string;
+  normalizedSegments: NormalizedSegment[];
+  normalizedEntities: NormalizedEntity[];
   metadata: RailwayAnnouncementMetadata;
   resolution: StationResolution;
   filename: string;
@@ -146,8 +153,12 @@ export function formatDemoDiagnostics(value: DemoDiagnostics): string[] {
     ...codeMessages("11. Gemini #2 リクエスト（秘密値除外）", "json", json(value.gemini.normalization.request)),
     ...codeMessages("12. Gemini #2 完全なプロンプト", "text", value.gemini.normalization.prompt),
     ...codeMessages("13. Gemini #2 raw response", "json", json(value.gemini.normalization.response)),
-    ...codeMessages("14. 補正後文字起こし", "text", value.normalizedTranscription),
-    ...codeMessages("15. 最終解析結果", "json", json({
+    ...codeMessages("14. 正規化segment・entity provenance", "json", json({
+      segments: value.normalizedSegments,
+      entities: value.normalizedEntities,
+    })),
+    ...codeMessages("15. 補正後文字起こし", "text", value.normalizedTranscription),
+    ...codeMessages("16. 最終解析結果", "json", json({
       normalizationGuard: value.gemini.normalizationGuard,
       isTransitAnnouncement: value.isTransitAnnouncement,
       metadata: value.metadata,
@@ -201,6 +212,8 @@ export function formatDemoDiagnosticPreviews(value: DemoDiagnostics): string[] {
       "**✅ 最終判定**",
       fenced("json", clipped(json({
         normalizationGuard: value.gemini.normalizationGuard,
+        normalizedSegments: value.normalizedSegments,
+        normalizedEntities: value.normalizedEntities,
         normalizedTranscription: value.normalizedTranscription,
         metadata: value.metadata,
         stationResolution: value.resolution,
