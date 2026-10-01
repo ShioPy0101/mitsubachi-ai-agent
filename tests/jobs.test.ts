@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { DemoJobProducer, JobProducer, type JobQueue, type JobStore } from "../src/jobs/producer";
-import { staleAudioJobCutoff, staleAudioJobTimeoutMs } from "../src/jobs/staleness";
+import {
+  audioJobElapsedMs,
+  isStaleAudioJob,
+  staleAudioJobCutoff,
+  staleAudioJobTimeoutMs,
+} from "../src/jobs/staleness";
 import { whisperProcessingTimeoutMs } from "../src/jobs/processing-timeout";
 import { runStage, shouldRetryAudioJob } from "../src/jobs/consumer";
 import { WhisperAudioDecodeError } from "../src/transcription/workers-ai";
@@ -73,6 +78,18 @@ describe("stale audio jobs", () => {
     expect(staleAudioJobTimeoutMs).toBe(12 * 60 * 1000);
     expect(staleAudioJobCutoff(new Date("2026-09-30T08:00:00.000Z")))
       .toBe("2026-09-30T07:48:00.000Z");
+  });
+
+  it("does not classify a 160 second job as stale", () => {
+    const now = new Date("2026-10-01T08:21:37.609Z");
+    expect(audioJobElapsedMs("2026-10-01T08:18:56.054Z", "2026-10-01T08:18:57.609Z", now))
+      .toBe(160_000);
+    expect(isStaleAudioJob("2026-10-01T08:18:56.054Z", "2026-10-01T08:18:57.609Z", now))
+      .toBe(false);
+  });
+
+  it("requires a valid effective start timestamp", () => {
+    expect(isStaleAudioJob("invalid", null, new Date("2026-10-01T08:30:00.000Z"))).toBe(false);
   });
 });
 

@@ -33,7 +33,12 @@ import {
   AudioJobProcessingTimeoutError,
   whisperProcessingTimeoutMs,
 } from "./processing-timeout";
-import { staleAudioJobCutoff, staleAudioJobTimeoutMs } from "./staleness";
+import {
+  audioJobElapsedMs,
+  isStaleAudioJob,
+  staleAudioJobCutoff,
+  staleAudioJobTimeoutMs,
+} from "./staleness";
 import type { AudioJob, AudioJobMessage, DemoAudioJobMessage } from "./types";
 import { createJobMonitor, JobCancellationRequestedError, type JobMonitor } from "./job-monitor";
 
@@ -364,16 +369,37 @@ export async function stopStaleAudioJobs(env: Env, now = new Date()): Promise<nu
   const callbacks = new CallbackSecretsRepository(env.DB);
   const discord = new DiscordRestClient(env.DISCORD_BOT_TOKEN, env.DISCORD_APPLICATION_ID);
   const monitor = createJobMonitor(env, discord);
-  const staleJobs = await jobs.findStaleActive(staleAudioJobCutoff(now));
+  const cutoff = staleAudioJobCutoff(now);
+  const staleJobs = await jobs.findStaleActive(cutoff);
   let stopped = 0;
 
   for (const job of staleJobs) {
-    const didStop = await jobs.failIfActive(job.id, "processing_timeout", now.toISOString());
+    const elapsedMs = audioJobElapsedMs(job.createdAt, job.startedAt, now);
+    if (!isStaleAudioJob(job.createdAt, job.startedAt, now)) {
+      console.error("audio_job_false_stale_candidate_skipped", {
+        jobId: job.id,
+        status: job.status,
+        createdAt: job.createdAt,
+        startedAt: job.startedAt,
+        observedAt: now.toISOString(),
+        cutoff,
+        elapsedMs,
+      });
+      continue;
+    }
+    const didStop = await jobs.failIfStaleActive(
+      job.id,
+      cutoff,
+      "processing_timeout",
+      now.toISOString(),
+    );
     if (!didStop) continue;
     stopped += 1;
     const error = new Error(
       `audio job exceeded ${staleAudioJobTimeoutMs / 60_000} minute limit `
-      + `(status=${job.status}, createdAt=${job.createdAt}, startedAt=${job.startedAt ?? "none"})`,
+      + `(status=${job.status}, createdAt=${job.createdAt}, startedAt=${job.startedAt ?? "none"}, `
+      + `observedAt=${now.toISOString()}, elapsedSeconds=${elapsedMs === null ? "invalid" : (elapsedMs / 1000).toFixed(1)}, `
+      + `cutoff=${cutoff})`,
     );
     console.error("audio_job_stale_stopped", { jobId: job.id, ...errorDetails(error) });
     await monitor.transition(job.id, "timed_out", "processing_timeout", error);
