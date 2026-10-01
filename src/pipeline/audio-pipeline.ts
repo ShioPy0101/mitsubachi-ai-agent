@@ -521,7 +521,7 @@ export async function processJob(
 
   const railwayCache = createStaticRailwayJobCache();
   const correctionKey =
-    `static:${railwayManifest.sourceSha256}:engine-v5-reading-ties:` +
+    `static:${railwayManifest.sourceSha256}:engine-v6-boundary-reading-ties:` +
     transcriptionText +
     "\n" +
     analysis.mentions
