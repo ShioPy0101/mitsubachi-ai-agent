@@ -27,7 +27,10 @@ export function stringSimilarity(left: string, right: string): number {
   return Math.max(0, 1 - levenshteinDistance(left, right) / maximumLength);
 }
 
-export function bestContainedSimilarity(haystack: string, needle: string): number {
+export function bestContainedSimilarity(
+  haystack: string,
+  needle: string,
+): number {
   if (needle.length === 0) return 0;
   if (haystack.includes(needle)) return 1;
   let best = stringSimilarity(haystack, needle);
@@ -35,16 +38,43 @@ export function bestContainedSimilarity(haystack: string, needle: string): numbe
   const maximum = Math.min(haystack.length, needle.length + 2);
   for (let length = minimum; length <= maximum; length += 1) {
     for (let start = 0; start + length <= haystack.length; start += 1) {
-      best = Math.max(best, stringSimilarity(haystack.slice(start, start + length), needle));
+      best = Math.max(
+        best,
+        stringSimilarity(haystack.slice(start, start + length), needle),
+      );
     }
   }
   return best;
 }
 
-export function stationNameSimilarity(transcription: string, stationName: string): number {
-  return bestContainedSimilarity(normalizeStationName(transcription), normalizeStationName(stationName));
+export function stationNameMentionSimilarity(
+  mention: string,
+  stationName: string,
+): number {
+  return stringSimilarity(
+    normalizeStationName(mention),
+    normalizeStationName(stationName),
+  );
 }
 
-export function stationKanaSimilarity(transcription: string, stationKana: string | null): number {
-  return stationKana === null ? 0 : bestContainedSimilarity(normalizeKana(transcription), normalizeKana(stationKana));
+export function stationNameContainedSimilarity(
+  transcription: string,
+  stationName: string,
+): number {
+  return bestContainedSimilarity(
+    normalizeStationName(transcription),
+    normalizeStationName(stationName),
+  );
+}
+
+export function stationKanaSimilarity(
+  transcription: string,
+  stationKana: string | null,
+): number {
+  return stationKana === null
+    ? 0
+    : bestContainedSimilarity(
+        normalizeKana(transcription),
+        normalizeKana(stationKana),
+      );
 }
