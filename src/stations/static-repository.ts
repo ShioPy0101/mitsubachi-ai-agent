@@ -6,7 +6,7 @@ import {
   normalizeKana,
 } from "./normalization";
 import { rankLineEvidence, materializeLineRoutes } from "./line-routes";
-import { stringSimilarity } from "./similarity";
+import { bestContainedSimilarity, stringSimilarity } from "./similarity";
 import {
   comparePathCost,
   enumerateSegmentPaths,
@@ -211,14 +211,26 @@ export class StaticRailwayRepository implements StationRepository {
 
           return {
             station,
+            // At equal similarity, retain the leading reading before a suffix
+            // (やすゆき → やす ahead of ゆき) within the bounded pool.
+            readingPrefix:
+              kana != null &&
+              kana.length > 0 &&
+              reading.startsWith(normalizeKana(kana)),
             similarity:
-              kana == null ? 0 : stringSimilarity(reading, normalizeKana(kana)),
+              kana == null
+                ? 0
+                : Math.max(
+                    stringSimilarity(reading, normalizeKana(kana)),
+                    bestContainedSimilarity(reading, normalizeKana(kana)),
+                  ),
           };
         })
         .filter(({ similarity }) => similarity >= 0.6)
         .sort(
           (a, b) =>
             b.similarity - a.similarity ||
+            Number(b.readingPrefix) - Number(a.readingPrefix) ||
             Math.abs((a.station.normalizedKana?.length ?? 0) - reading.length) -
               Math.abs(
                 (b.station.normalizedKana?.length ?? 0) - reading.length,
