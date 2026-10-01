@@ -267,7 +267,7 @@ export function formatDemoDiagnosticPreviews(value: DemoDiagnostics): string[] {
           .slice(0, 3)
           .map(
             (route) =>
-              `${route.stations.map(({ station }) => station.name).join(" → ")} (score=${route.score.toFixed(3)})`,
+              `${route.stations.map(({ station }) => station.name).join(" → ")} (score=${route.score.toFixed(3)}, physical=${route.pathLength}, transitions=${route.lineTransitions?.map((t) => `${t.fromLineId}→${t.toLineId}@${t.atStationId}`).join(",") || "none"})`,
           )
           .join("\n");
         const context =
@@ -306,7 +306,7 @@ export function formatDemoDiagnosticPreviews(value: DemoDiagnostics): string[] {
       fenced("text", clipped(sequenceSummary, 1_600)),
     ].join("\n"),
     [
-      "**🤖 Gemini #2 制約付き補正**",
+      "**🤖 Gemini #2 文章再構成**",
       `送信先: ${typeof normalizationRequest.endpoint === "string" ? normalizationRequest.endpoint : "不明"}`,
       "Gemini #2 raw response:",
       fenced("json", clipped(json(value.gemini.normalization.response), 1_400)),
