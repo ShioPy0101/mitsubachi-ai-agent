@@ -34,6 +34,7 @@ export interface StationRepository {
     cacheHits: number;
     cacheMisses: number;
     lineRouteLoadingMs?: number;
+    sequencePreRankComparisons?: number;
   };
   findCandidatePool(
     searchText: string,
@@ -47,6 +48,11 @@ export interface StationRepository {
     surfaceLimit: number,
     phoneticLimit: number,
   ): Promise<{ surface: Station[][]; phonetic: Station[][] }>;
+  findSequenceLineRouteCandidates?(
+    mentions: readonly string[],
+    hints: readonly (string | null)[],
+    maxLines: number,
+  ): Promise<RoutePathCandidate[]>;
   findLineRouteCandidates?(
     candidates: readonly LineCandidateSeed[],
     maxLines: number,
@@ -77,6 +83,8 @@ export const STATION_SEQUENCE_LIMITS = {
 } as const;
 
 export type SequenceSearchOptions = {
+  matchingStrategy?: "strict" | "contained";
+  alignmentBudget?: number;
   sequenceRole?: SequenceRole;
   destinationContext?: boolean;
   phoneticHints?: readonly (string | null)[];
@@ -99,6 +107,23 @@ export type StationCandidateDiagnostics = {
   routeCandidates: RoutePathCandidate[];
   candidates: StationCandidate[];
   metrics: StationSequenceMetrics;
+  strategyComparison?: {
+    selected: "strict" | "contained";
+    reason:
+      | "only_matched_strategy"
+      | "stronger_shared_lexical_evidence"
+      | "strict_tie_break"
+      | "neither_matched";
+    attempts: {
+      strategy: "strict" | "contained";
+      status: RouteSearchStatus;
+      score: number;
+      routeStations: string[];
+      fallback: boolean;
+      totalMs: number;
+      graphSearchCount: number;
+    }[];
+  };
 };
 
 export type StationSequenceMetrics = {
@@ -119,6 +144,7 @@ export type StationSequenceMetrics = {
   alignmentRouteCount: number;
   alignmentComparisonCount: number;
   d1QueryCount: number;
+  sequencePreRankComparisons?: number;
   candidateGenerationMs: number;
   lineLookupMs: number;
   lineRouteLoadingMs?: number;
@@ -475,6 +501,11 @@ function deduplicateRoutes(
 }
 
 export class StationCandidateService {
+  private graphLoads = new Map<string, Promise<RoutePathCandidate[]>>();
+  private candidatePools = new Map<
+    string,
+    Promise<{ surface: Station[][]; phonetic: Station[][] }>
+  >();
   constructor(private readonly repository: StationRepository) {}
 
   async candidates(
@@ -496,12 +527,114 @@ export class StationCandidateService {
     context: StationContext = {},
     options: SequenceSearchOptions = {},
   ): Promise<StationCandidateDiagnostics> {
-    return this.analyzeInternal(
+    if (options.matchingStrategy)
+      return this.analyzeInternal(
+        mentionTexts.join("、"),
+        mentionTexts,
+        context,
+        options,
+      );
+    const startedAt = Date.now();
+    const strict = await this.analyzeInternal(
       mentionTexts.join("、"),
       mentionTexts,
       context,
-      options,
+      { ...options, matchingStrategy: "strict" },
     );
+    const contained = await this.analyzeInternal(
+      mentionTexts.join("、"),
+      mentionTexts,
+      context,
+      {
+        ...options,
+        matchingStrategy: "contained",
+        alignmentBudget: Math.max(
+          0,
+          STATION_SEQUENCE_LIMITS.alignmentComparisons -
+            strict.metrics.alignmentComparisonCount,
+        ),
+      },
+    );
+    const quality = (result: StationCandidateDiagnostics): number[] => {
+      const route = result.routeCandidates[0];
+      if (!route) return [0, 0, 0, 0];
+      const values = (route.mentionMatches ?? []).map(
+        (m) =>
+          lexicalSimilarities(
+            m.mentionText,
+            m.station,
+            options.phoneticHints?.[m.mentionIndex],
+          ).lexicalSimilarity,
+      );
+      return [
+        1,
+        values.filter((v) => v >= 0.25).length,
+        values.reduce((a, b) => a + b, 0),
+        -(route.detourRatio ?? 0) - (route.directionReversals ?? 0),
+      ];
+    };
+    const strictQuality = quality(strict),
+      containedQuality = quality(contained);
+    const difference =
+      strictQuality
+        .map((v, i) => v - containedQuality[i]!)
+        .find((v) => Math.abs(v) > 1e-9) ?? 0;
+    const selected = difference < 0 ? contained : strict;
+    const strategy =
+      difference < 0 ? ("contained" as const) : ("strict" as const);
+    const metrics = { ...selected.metrics };
+    for (const key of [
+      "d1QueryCount",
+      "candidateRowsReturned",
+      "d1RowsRead",
+      "candidateGenerationMs",
+      "lineLookupMs",
+      "lineRouteLoadingMs",
+      "hypothesisGenerationMs",
+      "graphSearchMs",
+      "alignmentMs",
+      "alignmentComparisonCount",
+      "graphSearchCount",
+      "cacheHits",
+      "cacheMisses",
+      "sequencePreRankComparisons",
+    ] as const)
+      metrics[key] = (strict.metrics[key] ?? 0) + (contained.metrics[key] ?? 0);
+    metrics.fallbackExecuted =
+      strict.metrics.fallbackExecuted || contained.metrics.fallbackExecuted;
+    metrics.totalMs = Date.now() - startedAt;
+    return {
+      ...selected,
+      metrics,
+      strategyComparison: {
+        selected: strategy,
+        reason:
+          !strict.routeCandidates.length && !contained.routeCandidates.length
+            ? "neither_matched"
+            : !strict.routeCandidates.length ||
+                !contained.routeCandidates.length
+              ? "only_matched_strategy"
+              : difference === 0
+                ? "strict_tie_break"
+                : "stronger_shared_lexical_evidence",
+        attempts: (
+          [
+            ["strict", strict],
+            ["contained", contained],
+          ] as const
+        ).map(([strategy, result]) => ({
+          strategy,
+          status: result.routeSearchStatus,
+          score: result.routeCandidates[0]?.score ?? 0,
+          fallback: result.sequenceFallbackAttempted,
+          totalMs: result.metrics.totalMs,
+          graphSearchCount: result.metrics.graphSearchCount,
+          routeStations:
+            result.routeCandidates[0]?.stations.map((s) => s.station.name) ??
+            [],
+        })),
+      },
+    };
   }
 
   private async analyzeInternal(
@@ -523,6 +656,23 @@ export class StationCandidateService {
       let value = lexicalCache.get(key);
       if (!value) {
         value = lexicalSimilarities(mention, station, hint);
+        if (
+          options.matchingStrategy === "contained" &&
+          !localizedStationSimilarity(mention, station)
+        ) {
+          value = {
+            ...value,
+            nameSimilarity: bestContainedSimilarity(
+              normalizeStationName(mention),
+              normalizeStationName(station.name),
+            ),
+          };
+          value.lexicalSimilarity = Math.max(
+            value.nameSimilarity,
+            value.kanaSimilarity,
+            value.phoneticSimilarity * 0.5,
+          );
+        }
         lexicalCache.set(key, value);
       }
       return value;
@@ -551,13 +701,28 @@ export class StationCandidateService {
       mentionTexts !== null &&
       this.repository.findCandidatePools !== undefined
     ) {
-      const result = await this.repository.findCandidatePools(
-        mentionTexts,
-        phoneticHints,
-        context,
-        STATION_SEQUENCE_LIMITS.surfaceCandidatesPerMention,
-        STATION_SEQUENCE_LIMITS.phoneticCandidatesPerMention,
-      );
+      const key = [
+        ...mentionTexts,
+        ...phoneticHints,
+        context.lineName,
+        context.prefecture,
+        context.previousStation,
+        context.nextStation,
+      ]
+        .map((v) => `${v?.length ?? 0}:${v ?? ""}`)
+        .join("|");
+      let load = this.candidatePools.get(key);
+      if (!load) {
+        load = this.repository.findCandidatePools(
+          mentionTexts,
+          phoneticHints,
+          context,
+          STATION_SEQUENCE_LIMITS.surfaceCandidatesPerMention,
+          STATION_SEQUENCE_LIMITS.phoneticCandidatesPerMention,
+        );
+        this.candidatePools.set(key, load);
+      }
+      const result = await load;
       surfacePools = result.surface;
       phoneticPools = result.phonetic;
     } else if (mentionTexts !== null) {
@@ -665,7 +830,7 @@ export class StationCandidateService {
         return new Set(
           (perMentionPools[index] ?? [])
             .filter((station) => {
-              const similarities = cachedLexical(mention, station);
+              const similarities = lexicalSimilarities(mention, station);
               return (
                 similarities.nameSimilarity === 1 ||
                 similarities.kanaSimilarity === 1
@@ -698,6 +863,10 @@ export class StationCandidateService {
         : [
             ...new Set(hardAnchorNamesByMention.flatMap((names) => [...names])),
           ].slice(0, 12);
+    const alignmentBudget = Math.min(
+      STATION_SEQUENCE_LIMITS.alignmentComparisons,
+      options.alignmentBudget ?? STATION_SEQUENCE_LIMITS.alignmentComparisons,
+    );
     let alignmentComparisonCount = 0;
     const countComparison = (): void => {
       alignmentComparisonCount += 1;
@@ -725,10 +894,17 @@ export class StationCandidateService {
     const lineRouteCandidates =
       mentionTexts !== null &&
       this.repository.findLineRouteCandidates !== undefined
-        ? await this.repository.findLineRouteCandidates(
-            lineCandidateSeeds,
-            STATION_SEQUENCE_LIMITS.lineHypotheses,
-          )
+        ? options.matchingStrategy === "contained" &&
+          this.repository.findSequenceLineRouteCandidates
+          ? await this.repository.findSequenceLineRouteCandidates(
+              mentionTexts,
+              phoneticHints,
+              STATION_SEQUENCE_LIMITS.lineHypotheses,
+            )
+          : await this.repository.findLineRouteCandidates(
+              lineCandidateSeeds,
+              STATION_SEQUENCE_LIMITS.lineHypotheses,
+            )
         : [];
     const lineLookupMs = Date.now() - lineLookupStartedAt;
     const alignmentStartedAt = Date.now();
@@ -739,7 +915,7 @@ export class StationCandidateService {
             .map((route) =>
               alignmentComparisonCount +
                 3 * (mentionTexts?.length ?? 0) * route.stations.length >
-              STATION_SEQUENCE_LIMITS.alignmentComparisons
+              alignmentBudget
                 ? null
                 : alignMentionsToRoute(
                     mentionTexts,
@@ -766,7 +942,11 @@ export class StationCandidateService {
             (perMentionPools[mentionIndex] ?? [])
               .map((station) => ({
                 station,
-                ...cachedLexical(mention, station, phoneticHints[mentionIndex]),
+                ...lexicalSimilarities(
+                  mention,
+                  station,
+                  phoneticHints[mentionIndex],
+                ),
               }))
               .filter((c) => c.lexicalSimilarity >= 0.5)
               .sort((a, b) => b.lexicalSimilarity - a.lexicalSimilarity)
@@ -802,14 +982,21 @@ export class StationCandidateService {
       ),
     );
     const graphSearchStartedAt = Date.now();
-    const graphRoutes =
-      sequenceFallbackAttempted && graphRouteLimit > 0
-        ? await this.repository.findRouteCandidates(
-            mentionTexts === null ? anchorNames : fallbackSeedNames,
-            graphRouteLimit,
-            2,
-          )
-        : [];
+    let graphSearchCount = 0;
+    let graphRoutes: RoutePathCandidate[] = [];
+    if (sequenceFallbackAttempted && graphRouteLimit > 0) {
+      const seeds = mentionTexts === null ? anchorNames : fallbackSeedNames;
+      const key =
+        `${graphRouteLimit}:2:` +
+        seeds.map((s) => `${s.length}:${s}`).join("|");
+      let load = this.graphLoads.get(key);
+      if (!load) {
+        graphSearchCount = 1;
+        load = this.repository.findRouteCandidates(seeds, graphRouteLimit, 2);
+        this.graphLoads.set(key, load);
+      }
+      graphRoutes = await load;
+    }
     const graphSearchMs = Date.now() - graphSearchStartedAt;
     const graphAlignmentStartedAt = Date.now();
     const alignedGraphRoutes =
@@ -822,7 +1009,7 @@ export class StationCandidateService {
             .map((route) =>
               alignmentComparisonCount +
                 3 * (mentionTexts?.length ?? 0) * route.stations.length >
-              STATION_SEQUENCE_LIMITS.alignmentComparisons
+              alignmentBudget
                 ? null
                 : alignMentionsToRoute(
                     mentionTexts,
@@ -1027,7 +1214,11 @@ export class StationCandidateService {
             kanaSimilarity,
             phoneticSimilarity,
             lexicalSimilarity,
-          } = cachedLexical(mentionText, station, phoneticHints[mentionIndex]);
+          } = lexicalSimilarities(
+            mentionText,
+            station,
+            phoneticHints[mentionIndex],
+          );
           const bound = boundNamesByMention[mentionIndex] === station.name;
           const supportingRoutes = routeMatches.filter(
             ({ match }) => match.station.id === station.id,
@@ -1119,7 +1310,7 @@ export class StationCandidateService {
       lineIdsLoaded: Math.ceil(lineRouteCandidates.length / 2),
       routeHypothesesGenerated: lineRouteCandidates.length + graphRoutes.length,
       routeHypothesesKept: routeCandidates.length,
-      graphSearchCount: sequenceFallbackAttempted ? 1 : 0,
+      graphSearchCount,
       fallbackExecuted: sequenceFallbackAttempted,
       fallbackSeedCount: sequenceFallbackAttempted
         ? fallbackSeedNames.length
@@ -1131,6 +1322,9 @@ export class StationCandidateService {
         (this.repository.getQueryCount?.() ?? initialQueryCount) -
           initialQueryCount,
       ),
+      sequencePreRankComparisons:
+        (this.repository.getCostMetrics?.().sequencePreRankComparisons ?? 0) -
+        (initialCost?.sequencePreRankComparisons ?? 0),
       candidateGenerationMs,
       lineLookupMs,
       lineRouteLoadingMs:

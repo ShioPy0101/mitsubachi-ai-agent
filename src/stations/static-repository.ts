@@ -31,17 +31,20 @@ export type StaticRailwayJobCache = {
   positions: Map<string, PositionedStation[]>;
   lineRoutes: Map<string, Promise<RoutePathCandidate[]>>;
   graphRoutes: Map<string, Promise<RoutePathCandidate[]>>;
+  sequenceRoutes: Map<string, Promise<RoutePathCandidate[]>>;
 };
 export const createStaticRailwayJobCache = (): StaticRailwayJobCache => ({
   positions: new Map(),
   lineRoutes: new Map(),
   graphRoutes: new Map(),
+  sequenceRoutes: new Map(),
 });
 export class StaticRailwayRepository implements StationRepository {
   private rowsReturned = 0;
   private routeLoadingMs = 0;
   private hits = 0;
   private misses = 0;
+  private sequencePreRankComparisons = 0;
   constructor(
     private readonly indexes: RailwayIndexes,
     private readonly cache = createStaticRailwayJobCache(),
@@ -56,6 +59,7 @@ export class StaticRailwayRepository implements StationRepository {
       lineRouteLoadingMs: this.routeLoadingMs,
       cacheHits: this.hits,
       cacheMisses: this.misses,
+      sequencePreRankComparisons: this.sequencePreRankComparisons,
     };
   }
   private containing(text: string, kind: "name" | "kana"): Station[] {
@@ -319,6 +323,108 @@ export class StaticRailwayRepository implements StationRepository {
     this.cache.lineRoutes.set(key, load);
     return load;
   }
+  async findSequenceLineRouteCandidates(
+    mentions: readonly string[],
+    hints: readonly (string | null)[],
+    maxLines: number,
+  ): Promise<RoutePathCandidate[]> {
+    if (mentions.length < 2 || maxLines < 1) return [];
+    const key =
+      maxLines +
+      ":" +
+      mentions
+        .map(
+          (m, i) =>
+            `${m.length}:${m}:${hints[i]?.length ?? 0}:${hints[i] ?? ""}`,
+        )
+        .join("|");
+    const cached = this.cache.sequenceRoutes.get(key);
+    if (cached) {
+      this.hits++;
+      return cached;
+    }
+    this.misses++;
+    const load = Promise.resolve().then(() => {
+      // Score each station/mention once; shared paths reuse the same evidence.
+      // This is a separate lexical co-occurrence hypothesis, never a binding.
+      const normalizedMentions = mentions.map(normalizeStationName);
+      const normalizedHints = hints.map((h) => (h ? normalizeKana(h) : null));
+      const exactPathIds = new Set(
+        normalizedMentions.flatMap((m) =>
+          (this.indexes.byName.get(m) ?? []).flatMap((station) =>
+            (this.indexes.memberships.get(station.id) ?? []).map(
+              (membership) => membership.line_id,
+            ),
+          ),
+        ),
+      );
+      if (!exactPathIds.size) return []; // No anchor: retain the independent strict/graph result.
+      const paths = [...exactPathIds].map((id) =>
+        this.indexes.pathsById.get(id)!,
+      );
+      let comparisons = 0;
+      const scores = new Map<number, number[]>();
+      for (const id of new Set(paths.flatMap((path) => path.stationIds))) {
+        const station = this.indexes.byId.get(id)!;
+        scores.set(
+          station.id,
+          normalizedMentions.map((mention, i) =>
+            Math.max(
+              bestContainedSimilarity(mention, station.normalizedName),
+              normalizedHints[i] && station.normalizedKana
+                ? bestContainedSimilarity(
+                    normalizedHints[i]!,
+                    station.normalizedKana,
+                  ) * 0.5
+                : 0,
+            ),
+          ),
+        );
+      }
+      const lines = paths
+        .map((path) => {
+          const cost = 2 * mentions.length * path.stationIds.length;
+          if (
+            comparisons + cost > 20_000 ||
+            path.stationIds.length > STATION_SEQUENCE_LIMITS.routeLength
+          )
+            return { lineId: path.pathId, preScore: -1 };
+          comparisons += cost;
+          this.sequencePreRankComparisons += cost;
+          const orderedStrength = (ids: readonly number[]) => {
+            if (ids.length < mentions.length) return 0;
+            let previous = ids.map((id) => scores.get(id)![0]!);
+            for (let i = 1; i < mentions.length; i++) {
+              let best = -Infinity;
+              previous = ids.map((id, j) => {
+                if (j) best = Math.max(best, previous[j - 1]!);
+                return best + scores.get(id)![i]!;
+              });
+            }
+            return Math.max(0, ...previous) / Math.max(1, mentions.length);
+          };
+          return {
+            lineId: path.pathId,
+            preScore: Math.max(
+              orderedStrength(path.stationIds),
+              orderedStrength([...path.stationIds].reverse()),
+            ),
+          };
+        })
+        .filter((line) => line.preScore >= 0)
+        .sort(
+          (a, b) => b.preScore - a.preScore || a.lineId.localeCompare(b.lineId),
+        )
+        .slice(0, maxLines);
+      return materializeLineRoutes(
+        lines,
+        new Map(lines.map((l) => [l.lineId, this.positions(l.lineId)])),
+      );
+    });
+    this.cache.sequenceRoutes.set(key, load);
+    return load;
+  }
+
   private positions(pathId: string): PositionedStation[] {
     const cached = this.cache.positions.get(pathId);
     if (cached) {
