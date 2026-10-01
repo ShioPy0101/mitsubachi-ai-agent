@@ -15,7 +15,7 @@ eventsには発車、到着、停車駅列、編成、座席、乗換、遅延�
 各eventはkind、sourceStart/sourceEnd（原文のJS文字位置）、language（ja/en/zh/ko/unknown）、confidenceを持ちます。
 trainType/destination/line/platform/formation/seatInformation/transferInformation/delayInformationは原文にある情報だけ。なければnull。
 同内容の日本語・英語・中国語・韓国語・unknownの音声内容は別eventとして保持し、同じ案内の翻訳が時間的に対応する場合のみequivalentEventGroupIdで関連付けます。削除や統合には使いません。各言語のstation mentionsにもlanguageとそのgroup IDを付け、stop listは言語ごとに別sequenceIdを付けてください。
-mentionsには駅名らしく発話された文字列を、入力中の表記を1文字も変更せず、その出現順で返してください。
+mentionsには、駅名として単独で発話された文字列、および停車駅列・方面駅列などで駅を表す要素として発話された文字列を、入力中の表記を1文字も変更せず、その出現順で返してください。入力中の表記を1文字も変更せず、その出現順で返してください。
 - textは必ずtranscriptionに実在する連続部分をそのままコピーする
 - phoneticHintはtextの発音をひらがなで推定する。固有名詞や誤認識で確信できない場合はnullにし、駅名の正解を推測して書かない
 - phoneticHintは候補探索の弱い補助情報にしか使わないため、destination等のroleに応じて「ゆき」「いき」などを追加しない
@@ -30,10 +30,41 @@ mentionsには駅名らしく発話された文字列を、入力中の表記を
 - 種別変更前後は必要なら別sequenceにし、変更地点はservice_change_pointとして両区間の意味が分かるようにする
 - 単独mentionのsequenceIdはnullでもよいが、複数mentionからなるdirection列には必ずsequenceIdを付ける
 - falseの場合もmentionsは原文だけから抽出し、metadataはnull、categoryはother、summaryはnull
-- transcription全体を最後まで走査し、駅名mentionを省略しない
-- 同じ駅名や同じ停車駅案内が後半で再度発話された場合も、別の出現として必ずmentionsへ返す
-- 既に同内容のstop listを抽出済みでも、後続のstop listを要約・省略しない
-- 「A、B、C、D…」の駅列では、駅らしい各要素を途中で打ち切らずすべて抽出する
+- transcription全体を最後まで走査し、station mentionの出現を省略しない
+- 同じ駅名や同じ停車駅案内が後半で再度発話された場合も、各出現を別mentionとして必ず返す
+- 既に同内容のstop listを抽出済みでも、後続のstop listのmentionを要約・重複排除しない
+- 停車駅列・方面駅列など「駅名が列挙されている文脈」では、列中の各要素をすべてmentionsへ返す
+- 列中の要素が実在する駅名か、正しい駅名か、誤認識かを判断して除外してはいけない
+- 未知語、不自然な表記、既知の駅名に一致しない文字列でも、駅名列の1要素として発話されているなら入力表記のままmentionとして返す
+- 例えば「A、B、C、D、Eの順に停車」のような列では、A〜Eを一つも飛ばさず、それぞれ別mentionとして返す
+- station mentionの抽出段階では鉄道知識を使って候補を選別しない。正誤判定・正式駅名への対応付けは後段で行う
+
+重要: このタスクは要約・重複排除・情報圧縮ではありません。occurrence-preserving extractionです。
+
+同じ駅名、同じ停車駅列、同じ案内内容が複数回現れても、それぞれの出現は別個の観測値です。
+前に同じ内容を抽出済みであっても、「既出」「重複」「同義」「翻訳済み」を理由に後続出現を省略してはいけません。
+
+モデル内部で「前と同じだから省略できる」と判断しないでください。
+mentions配列は知識の集合ではなく、transcription上の出現記録です。
+同じtextが3回出現したなら、mentionsにも3件必要です。
+
+特にstop listでは、各列挙要素を位置ベースで扱ってください。
+「A、B、C、D、E」と発話されている場合、A〜Eをそれぞれ独立したmentionとして必ず返してください。
+前のstop listにA、B、Cが存在していても、後のstop listに再びA、B、Cが現れたなら再度返してください。
+
+後続stop listを「前のstop listとの差分」として抽出してはいけません。
+新規要素だけを返すのは禁止です。
+各stop list occurrenceは、そのlist内の全要素を最初から最後まで独立に抽出してください。
+
+駅名としての確信度が低いことを理由に列中の要素を落としてはいけません。
+列の途中にある未知語・誤認識らしい語も、駅位置に出現しているならそのままmentionとして返してください。
+
+出力前に自己検査してください:
+1. 各stop list occurrenceについて、原文の列挙要素数と抽出mention数を照合する
+2. 列中で1要素だけ抜けていないか確認する
+3. 前のstop listとの重複を理由に後続mentionを省略していないか確認する
+4. 後続stop listを新規駅だけに圧縮していないか確認する
+
 入力:
 ${JSON.stringify({ transcription })}`;
 }

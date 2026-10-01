@@ -1,25 +1,9 @@
-import {
-  observeNormalization,
-  type NormalizationObservation,
-} from "./normalization-observation";
-import {
-  announcementLanguage,
-  buildSemanticRepresentation,
-  type NormalizedAnnouncementEvent,
-} from "../railway/semantic";
+import { observeNormalization, type NormalizationObservation } from "./normalization-observation";
+import { announcementLanguage, buildSemanticRepresentation, type NormalizedAnnouncementEvent } from "../railway/semantic";
 import type { z } from "zod";
 import { buildGeminiAnalysisPrompt } from "./analysis-prompt";
-import {
-  buildGeminiNormalizationPrompt,
-  type StopSequenceContext,
-} from "./prompt";
-import {
-  GeminiAnalysisSchema,
-  GeminiNormalizationSchema,
-  GeminiResponseSchema,
-  geminiAnalysisJsonSchema,
-  geminiNormalizationJsonSchema,
-} from "./schema";
+import { buildGeminiNormalizationPrompt, type StopSequenceContext } from "./prompt";
+import { GeminiAnalysisSchema, GeminiNormalizationSchema, GeminiResponseSchema, geminiAnalysisJsonSchema, geminiNormalizationJsonSchema } from "./schema";
 import type { AnnouncementAnalysis, StationMention } from "./service";
 
 export class GeminiSafetyBlockedError extends Error {
@@ -49,17 +33,11 @@ export class GeminiRequestTimeoutError extends Error {
 }
 
 export function isRetryableGeminiError(error: unknown): boolean {
-  if (error instanceof GeminiApiError)
-    return error.status === 429 || error.status >= 500;
-  return (
-    error instanceof GeminiRequestTimeoutError || error instanceof TypeError
-  );
+  if (error instanceof GeminiApiError) return error.status === 429 || error.status >= 500;
+  return error instanceof GeminiRequestTimeoutError || error instanceof TypeError;
 }
 
-export type HttpFetcher = (
-  input: string | URL | Request,
-  init?: RequestInit,
-) => Promise<Response>;
+export type HttpFetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 export type GeminiCallDiagnostics = {
   prompt: string;
@@ -84,42 +62,40 @@ export type GeminiNormalizationExtraction = {
   normalizationObservation: NormalizationObservation;
 };
 const defaultFetcher: HttpFetcher = (input, init) => fetch(input, init);
-export type NormalizedEntity = z.output<
-  typeof GeminiNormalizationSchema
->["entities"][number];
+export type NormalizedEntity = z.output<typeof GeminiNormalizationSchema>["entities"][number];
 function sanitizeMentions(
   transcription: string,
   mentions: readonly StationMention[],
   events: readonly import("../railway/semantic").SemanticEventProposal[] = [],
 ): StationMention[] {
-  let cursor = 0;
   const sanitized: StationMention[] = [];
+
   for (const mention of mentions) {
-    let start = transcription.indexOf(mention.text, cursor);
-    // Never alias a missing later occurrence to an earlier one.
-    if (start < 0) continue;
+    let start: number | null = null;
+
+    if (mention.start != null && mention.end != null && transcription.slice(mention.start, mention.end) === mention.text) {
+      start = mention.start;
+    } else {
+      const found = transcription.indexOf(mention.text);
+      if (found >= 0) start = found;
+    }
+
+    if (start == null) continue;
+
     const end = start + mention.text.length;
+
     sanitized.push({
       ...mention,
       id: `mention:${start}:${end}`,
-      language:
-        mention.language ??
-        events.find((e) => e.sourceStart <= start && e.sourceEnd >= end)
-          ?.language ??
-        announcementLanguage(mention.text),
+      language: mention.language ?? events.find((e) => e.sourceStart <= start && e.sourceEnd >= end)?.language ?? announcementLanguage(mention.text),
       equivalentEventGroupId:
-        mention.equivalentEventGroupId ??
-        events.find((e) => e.sourceStart <= start && e.sourceEnd >= end)
-          ?.equivalentEventGroupId ??
-        null,
+        mention.equivalentEventGroupId ?? events.find((e) => e.sourceStart <= start && e.sourceEnd >= end)?.equivalentEventGroupId ?? null,
       start,
       end,
     });
-    cursor = end;
   }
-  return sanitized.sort(
-    (left, right) => (left.start ?? 0) - (right.start ?? 0),
-  );
+
+  return sanitized.sort((left, right) => (left.start ?? 0) - (right.start ?? 0));
 }
 
 type GeneratedJson = {
@@ -135,11 +111,7 @@ export class GeminiMetadataService {
     private readonly timeoutMs = defaultGeminiTimeoutMs,
   ) {}
 
-  private async generate(
-    prompt: string,
-    responseJsonSchema: unknown,
-    signal?: AbortSignal,
-  ): Promise<GeneratedJson> {
+  private async generate(prompt: string, responseJsonSchema: unknown, signal?: AbortSignal): Promise<GeneratedJson> {
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model)}:generateContent`;
     const requestBody = {
       contents: [{ role: "user", parts: [{ text: prompt }] }],
@@ -148,12 +120,9 @@ export class GeminiMetadataService {
         responseMimeType: "application/json",
         responseJsonSchema,
       },
-      safetySettings: [
-        "HARM_CATEGORY_HARASSMENT",
-        "HARM_CATEGORY_HATE_SPEECH",
-        "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-        "HARM_CATEGORY_DANGEROUS_CONTENT",
-      ].map((category) => ({ category, threshold: "BLOCK_LOW_AND_ABOVE" })),
+      safetySettings: ["HARM_CATEGORY_HARASSMENT", "HARM_CATEGORY_HATE_SPEECH", "HARM_CATEGORY_SEXUALLY_EXPLICIT", "HARM_CATEGORY_DANGEROUS_CONTENT"].map(
+        (category) => ({ category, threshold: "BLOCK_LOW_AND_ABOVE" }),
+      ),
     };
     const controller = new AbortController();
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
@@ -179,11 +148,7 @@ export class GeminiMetadataService {
             signal: controller.signal,
             body: JSON.stringify(requestBody),
           });
-          if (!response.ok)
-            throw new GeminiApiError(
-              response.status,
-              (await response.text()).slice(0, 500),
-            );
+          if (!response.ok) throw new GeminiApiError(response.status, (await response.text()).slice(0, 500));
           return response.json() as Promise<unknown>;
         })(),
         timeout,
@@ -193,43 +158,18 @@ export class GeminiMetadataService {
       signal?.removeEventListener("abort", abort);
     }
     const envelope = GeminiResponseSchema.parse(rawResponse);
-    const promptBlockedCategories =
-      envelope.promptFeedback?.safetyRatings
-        ?.filter((rating) => rating.blocked)
-        .map((rating) => rating.category) ?? [];
+    const promptBlockedCategories = envelope.promptFeedback?.safetyRatings?.filter((rating) => rating.blocked).map((rating) => rating.category) ?? [];
     if (envelope.promptFeedback?.blockReason !== undefined) {
-      throw new GeminiSafetyBlockedError(
-        promptBlockedCategories.length > 0
-          ? promptBlockedCategories
-          : [envelope.promptFeedback.blockReason],
-      );
+      throw new GeminiSafetyBlockedError(promptBlockedCategories.length > 0 ? promptBlockedCategories : [envelope.promptFeedback.blockReason]);
     }
     const candidate = envelope.candidates[0];
-    const responseBlockedCategories =
-      candidate?.safetyRatings
-        ?.filter((rating) => rating.blocked)
-        .map((rating) => rating.category) ?? [];
-    const blockedFinishReasons = new Set([
-      "SAFETY",
-      "BLOCKLIST",
-      "PROHIBITED_CONTENT",
-      "SPII",
-      "RECITATION",
-    ]);
-    if (
-      responseBlockedCategories.length > 0 ||
-      (candidate?.finishReason !== undefined &&
-        blockedFinishReasons.has(candidate.finishReason))
-    ) {
-      throw new GeminiSafetyBlockedError(
-        responseBlockedCategories.length > 0
-          ? responseBlockedCategories
-          : [candidate?.finishReason ?? "SAFETY"],
-      );
+    const responseBlockedCategories = candidate?.safetyRatings?.filter((rating) => rating.blocked).map((rating) => rating.category) ?? [];
+    const blockedFinishReasons = new Set(["SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "RECITATION"]);
+    if (responseBlockedCategories.length > 0 || (candidate?.finishReason !== undefined && blockedFinishReasons.has(candidate.finishReason))) {
+      throw new GeminiSafetyBlockedError(responseBlockedCategories.length > 0 ? responseBlockedCategories : [candidate?.finishReason ?? "SAFETY"]);
     }
     const responseText = candidate?.content?.parts?.[0]?.text;
-    if (responseText === undefined)
-      throw new Error("Gemini response did not contain JSON text");
+    if (responseText === undefined) throw new Error("Gemini response did not contain JSON text");
     return {
       responseText,
       diagnostics: {
@@ -249,26 +189,13 @@ export class GeminiMetadataService {
     };
   }
 
-  async analyze(
-    transcription: string,
-    signal?: AbortSignal,
-  ): Promise<GeminiAnalysisExtraction> {
-    const generated = await this.generate(
-      buildGeminiAnalysisPrompt(transcription),
-      geminiAnalysisJsonSchema,
-      signal,
-    );
-    const parsed = GeminiAnalysisSchema.parse(
-      JSON.parse(generated.responseText) as unknown,
-    );
+  async analyze(transcription: string, signal?: AbortSignal): Promise<GeminiAnalysisExtraction> {
+    const generated = await this.generate(buildGeminiAnalysisPrompt(transcription), geminiAnalysisJsonSchema, signal);
+    const parsed = GeminiAnalysisSchema.parse(JSON.parse(generated.responseText) as unknown);
     return {
       isTransitAnnouncement: parsed.isTransitAnnouncement,
       mentions: sanitizeMentions(transcription, parsed.mentions, parsed.events),
-      semantic: buildSemanticRepresentation(
-        transcription,
-        sanitizeMentions(transcription, parsed.mentions, parsed.events),
-        parsed.events,
-      ),
+      semantic: buildSemanticRepresentation(transcription, sanitizeMentions(transcription, parsed.mentions, parsed.events), parsed.events),
       metadata: {
         station: null,
         line: parsed.line,
@@ -293,11 +220,7 @@ export class GeminiMetadataService {
     sequences: readonly StopSequenceContext[],
     signal?: AbortSignal,
   ): Promise<GeminiNormalizationExtraction> {
-    const generated = await this.generate(
-      buildGeminiNormalizationPrompt(transcription, analysis, sequences),
-      geminiNormalizationJsonSchema,
-      signal,
-    );
+    const generated = await this.generate(buildGeminiNormalizationPrompt(transcription, analysis, sequences), geminiNormalizationJsonSchema, signal);
     let raw: unknown;
     try {
       raw = JSON.parse(generated.responseText);
@@ -306,43 +229,25 @@ export class GeminiMetadataService {
     }
     const parsed = GeminiNormalizationSchema.safeParse(raw);
     if (!parsed.success) {
-      const empty =
-        typeof raw === "object" &&
-        raw !== null &&
-        "normalizedTranscription" in raw &&
-        raw.normalizedTranscription === "";
+      const empty = typeof raw === "object" && raw !== null && "normalizedTranscription" in raw && raw.normalizedTranscription === "";
       return {
         normalizedTranscription: transcription,
         entities: [],
         diagnostics: generated.diagnostics,
         normalizationObservation: {
-          ...observeNormalization(
-            transcription,
-            transcription,
-            analysis,
-            sequences,
-          ),
+          ...observeNormalization(transcription, transcription, analysis, sequences),
           outcome: empty ? "empty_output" : "invalid_output",
         },
       };
     }
     const output = parsed.data;
-    const observation = observeNormalization(
-      transcription,
-      output.normalizedTranscription,
-      analysis,
-      sequences,
-      output.entities,
-      output.normalizedEvents,
-    );
+    const observation = observeNormalization(transcription, output.normalizedTranscription, analysis, sequences, output.entities, output.normalizedEvents);
     // Events are annotations for diagnostics, never an alternative document.
     // Missing IDs remain observations; do not splice source slices into model prose.
     return {
       normalizedTranscription: output.normalizedTranscription,
       entities: output.entities,
-      ...(output.normalizedEvents
-        ? { normalizedEvents: output.normalizedEvents }
-        : {}),
+      ...(output.normalizedEvents ? { normalizedEvents: output.normalizedEvents } : {}),
       diagnostics: generated.diagnostics,
       normalizationObservation: observation,
     };

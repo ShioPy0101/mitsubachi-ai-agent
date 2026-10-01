@@ -1,13 +1,9 @@
 import { WorkersAiWhisperResponseSchema } from "./schemas";
-import type {
-  TranscriptionInput,
-  TranscriptionResult,
-  TranscriptionService,
-} from "./service";
+import type { TranscriptionInput, TranscriptionResult, TranscriptionService } from "./service";
 import { rebuildMp3FromFrames } from "../audio/silence-segmenter";
 
 export const railwayAnnouncementPrompt = [
-  "日本の鉄道駅構内放送。駅名、路線名、列車名、時刻、番線。",
+  "日本の鉄道駅構内放送。駅名、路線名、列車名、時刻、番線、連続して読み上げられる停車駅",
   "Japanese railway station announcement. Station, line, train, time, and platform.",
   "日本語に続いて英語、中国語、韓国語などの案内が含まれる場合があります。",
 ].join(" ");
@@ -20,11 +16,7 @@ export const whisperSettings = {
 } as const;
 
 export interface WhisperAiRunner {
-  run(
-    model: "@cf/openai/whisper-large-v3-turbo",
-    input: Ai_Cf_Openai_Whisper_Large_V3_Turbo_Input,
-    options?: { signal?: AbortSignal },
-  ): Promise<unknown>;
+  run(model: "@cf/openai/whisper-large-v3-turbo", input: Ai_Cf_Openai_Whisper_Large_V3_Turbo_Input, options?: { signal?: AbortSignal }): Promise<unknown>;
 }
 
 function encodeBase64(buffer: ArrayBuffer): string {
@@ -32,9 +24,7 @@ function encodeBase64(buffer: ArrayBuffer): string {
   const chunkSize = 0x8000;
   let binary = "";
   for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(
-      ...bytes.subarray(offset, offset + chunkSize),
-    );
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
   }
   return btoa(binary);
 }
@@ -46,14 +36,7 @@ function normalizedContentType(contentType: string | null): string {
 export function isMp3TranscriptionInput(input: TranscriptionInput): boolean {
   const type = normalizedContentType(input.contentType);
   return (
-    [
-      "audio/mpeg",
-      "audio/mp3",
-      "audio/x-mp3",
-      "audio/x-mpeg",
-      "audio/mpeg3",
-      "audio/x-mpeg-3",
-    ].includes(type) || input.filename.toLowerCase().endsWith(".mp3")
+    ["audio/mpeg", "audio/mp3", "audio/x-mp3", "audio/x-mpeg", "audio/mpeg3", "audio/x-mpeg-3"].includes(type) || input.filename.toLowerCase().endsWith(".mp3")
   );
 }
 
@@ -62,16 +45,9 @@ function errorMessage(error: unknown): string {
 }
 
 export function isWorkersAiAudioDecodeError(error: unknown): boolean {
-  const code =
-    typeof error === "object" && error !== null && "code" in error
-      ? String((error as { code?: unknown }).code)
-      : "";
+  const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code) : "";
   const message = errorMessage(error).toLowerCase();
-  return (
-    code === "3030" ||
-    message.includes("3030") ||
-    message.includes("failed to decode audio file")
-  );
+  return code === "3030" || message.includes("3030") || message.includes("failed to decode audio file");
 }
 
 export class WhisperAudioDecodeError extends Error {
@@ -96,10 +72,7 @@ export class CloudflareWhisperTranscriptionService implements TranscriptionServi
     private readonly rebuildMp3: Mp3Rebuilder = rebuildMp3FromFrames,
   ) {}
 
-  private async run(
-    audio: ArrayBuffer,
-    signal?: AbortSignal,
-  ): Promise<TranscriptionResult> {
+  private async run(audio: ArrayBuffer, signal?: AbortSignal): Promise<TranscriptionResult> {
     const output = await this.ai.run(
       whisperModel,
       {
