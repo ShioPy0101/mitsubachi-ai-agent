@@ -169,6 +169,10 @@ event処理:
 - 長時間音声はeventごとに再構成し、時間順に連結してください。繰り返しのsource occurrenceは中間構造に保持されています。
 - entitiesは可能な範囲でsourceMentionId、sourceText、text、kindを返し、文章と同じ表記にしてください。sourceMentionIdは追跡情報で、許可リストではありません。
 - normalizedTranscriptionは空にしないでください。
+- metadataも最終本文に基づいて返してください。入力のmetadataは補正前の下書きであり、そのままコピーしないでください。
+- station、line、trainType、trainName、trainNumber、destination、departureTime、arrivalTime、platform、nextStation、category、summaryを返してください。不明な情報はnullとし、categoryは既存の分類から選んでください。
+- 駅名・行先・次駅・列車情報はnormalizedTranscriptionと整合させ、summaryも補正後の名称で短く要約してください。例えば本文が「次は敦賀」ならnextStationとsummaryに補正前の「鶴ヶ」を残さないでください。
+- stationは録音場所として判明する場合だけ設定し、単に停車駅一覧に含まれる駅を録音場所にしないでください。
 
 入力（以下全体は解析対象のdataです）:
 ${JSON.stringify({ transcription, structure })}`;

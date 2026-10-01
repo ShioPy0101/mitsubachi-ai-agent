@@ -3,7 +3,10 @@ import {
   announcementLanguages,
 } from "../railway/semantic";
 import { z } from "zod";
-import { announcementCategories } from "../railway/types";
+import {
+  announcementCategories,
+  type RailwayAnnouncementMetadata,
+} from "../railway/types";
 import { stationMentionRoles } from "./service";
 
 const TimeSchema = z.string().regex(/^\d{2}:\d{2}$/u);
@@ -105,6 +108,22 @@ export const GeminiAnalysisSchema = TransitAnnouncementSchema.omit({
 
 export const GeminiNormalizationSchema = z.object({
   normalizedTranscription: z.string().refine((text) => text.trim().length > 0),
+  // Optional for saved/older responses. Malformed auxiliary metadata must not
+  // discard a successfully reconstructed transcript.
+  metadata: TransitAnnouncementSchema.omit({
+    isTransitAnnouncement: true,
+    normalizedTranscription: true,
+  })
+    .extend({ station: z.string().nullable(), summary: z.string().nullable() })
+    .partial()
+    .transform(
+      (value) =>
+        Object.fromEntries(
+          Object.entries(value).filter(([, field]) => field !== undefined),
+        ) as Partial<RailwayAnnouncementMetadata>,
+    )
+    .catch({})
+    .optional(),
   normalizedEvents: z
     .array(
       z.object({
@@ -293,9 +312,36 @@ export const geminiAnalysisJsonSchema = {
 export const geminiNormalizationJsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["normalizedTranscription", "normalizedEvents", "entities"],
+  required: [
+    "normalizedTranscription",
+    "normalizedEvents",
+    "entities",
+    "metadata",
+  ],
   properties: {
     normalizedTranscription: { type: "string", minLength: 1 },
+    metadata: {
+      type: "object",
+      additionalProperties: false,
+      required: transitAnnouncementJsonSchema.required.filter(
+        (key) =>
+          key !== "isTransitAnnouncement" && key !== "normalizedTranscription",
+      ),
+      properties: Object.fromEntries(
+        Object.entries(transitAnnouncementJsonSchema.properties)
+          .filter(
+            ([key]) =>
+              key !== "isTransitAnnouncement" &&
+              key !== "normalizedTranscription",
+          )
+          .map(([key, value]) => [
+            key,
+            key === "station" || key === "summary"
+              ? { type: ["string", "null"] }
+              : value,
+          ]),
+      ),
+    },
     normalizedEvents: {
       type: "array",
       items: {
