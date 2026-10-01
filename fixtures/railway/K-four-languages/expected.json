@@ -1,0 +1,6 @@
+{
+  "topCandidates": null,
+  "sourceSegmentCount": 4,
+  "languages": ["ja", "en", "zh", "ko"],
+  "annotationStatus": "Synthetic multilingual preservation regression, not measured real audio accuracy"
+}

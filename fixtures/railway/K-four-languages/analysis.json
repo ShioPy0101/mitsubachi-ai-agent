@@ -1,0 +1,195 @@
+{
+  "isTransitAnnouncement": true,
+  "mentions": [
+    {
+      "id": "mention:4:6",
+      "text": "福井",
+      "phoneticHint": null,
+      "start": 4,
+      "end": 6,
+      "language": "ja",
+      "role": "stop",
+      "sequenceId": 1,
+      "equivalentEventGroupId": "four-language-stops"
+    },
+    {
+      "id": "mention:7:11",
+      "text": "芦原温泉",
+      "phoneticHint": null,
+      "start": 7,
+      "end": 11,
+      "language": "ja",
+      "role": "stop",
+      "sequenceId": 1,
+      "equivalentEventGroupId": "four-language-stops"
+    },
+    {
+      "id": "mention:12:16",
+      "text": "加賀温泉",
+      "phoneticHint": null,
+      "start": 12,
+      "end": 16,
+      "language": "ja",
+      "role": "stop",
+      "sequenceId": 1,
+      "equivalentEventGroupId": "four-language-stops"
+    },
+    {
+      "id": "mention:17:19",
+      "text": "金沢",
+      "phoneticHint": null,
+      "start": 17,
+      "end": 19,
+      "language": "ja",
+      "role": "stop",
+      "sequenceId": 1,
+      "equivalentEventGroupId": "four-language-stops"
+    },
+    {
+      "id": "mention:37:42",
+      "text": "Fukui",
+      "phoneticHint": null,
+      "start": 37,
+      "end": 42,
+      "language": "en",
+      "role": "stop",
+      "sequenceId": 2,
+      "equivalentEventGroupId": "four-language-stops"
+    },
+    {
+      "id": "mention:44:55",
+      "text": "Awara Onsen",
+      "phoneticHint": null,
+      "start": 44,
+      "end": 55,
+      "language": "en",
+      "role": "stop",
+      "sequenceId": 2,
+      "equivalentEventGroupId": "four-language-stops"
+    },
+    {
+      "id": "mention:57:67",
+      "text": "Kaga Onsen",
+      "phoneticHint": null,
+      "start": 57,
+      "end": 67,
+      "language": "en",
+      "role": "stop",
+      "sequenceId": 2,
+      "equivalentEventGroupId": "four-language-stops"
+    },
+    {
+      "id": "mention:72:80",
+      "text": "Kanazawa",
+      "phoneticHint": null,
+      "start": 72,
+      "end": 80,
+      "language": "en",
+      "role": "stop",
+      "sequenceId": 2,
+      "equivalentEventGroupId": "four-language-stops"
+    },
+    {
+      "id": "mention:86:88",
+      "text": "福井",
+      "phoneticHint": null,
+      "start": 86,
+      "end": 88,
+      "language": "zh",
+      "role": "stop",
+      "sequenceId": 3,
+      "equivalentEventGroupId": "four-language-stops"
+    },
+    {
+      "id": "mention:89:93",
+      "text": "芦原温泉",
+      "phoneticHint": null,
+      "start": 89,
+      "end": 93,
+      "language": "zh",
+      "role": "stop",
+      "sequenceId": 3,
+      "equivalentEventGroupId": "four-language-stops"
+    },
+    {
+      "id": "mention:94:98",
+      "text": "加贺温泉",
+      "phoneticHint": null,
+      "start": 94,
+      "end": 98,
+      "language": "zh",
+      "role": "stop",
+      "sequenceId": 3,
+      "equivalentEventGroupId": "four-language-stops"
+    },
+    {
+      "id": "mention:99:101",
+      "text": "金泽",
+      "phoneticHint": null,
+      "start": 99,
+      "end": 101,
+      "language": "zh",
+      "role": "stop",
+      "sequenceId": 3,
+      "equivalentEventGroupId": "four-language-stops"
+    },
+    {
+      "id": "mention:108:111",
+      "text": "후쿠이",
+      "phoneticHint": null,
+      "start": 108,
+      "end": 111,
+      "language": "ko",
+      "role": "stop",
+      "sequenceId": 4,
+      "equivalentEventGroupId": "four-language-stops"
+    },
+    {
+      "id": "mention:113:118",
+      "text": "아와라온천",
+      "phoneticHint": null,
+      "start": 113,
+      "end": 118,
+      "language": "ko",
+      "role": "stop",
+      "sequenceId": 4,
+      "equivalentEventGroupId": "four-language-stops"
+    },
+    {
+      "id": "mention:120:124",
+      "text": "가가온천",
+      "phoneticHint": null,
+      "start": 120,
+      "end": 124,
+      "language": "ko",
+      "role": "stop",
+      "sequenceId": 4,
+      "equivalentEventGroupId": "four-language-stops"
+    },
+    {
+      "id": "mention:126:130",
+      "text": "가나자와",
+      "phoneticHint": null,
+      "start": 126,
+      "end": 130,
+      "language": "ko",
+      "role": "stop",
+      "sequenceId": 4,
+      "equivalentEventGroupId": "four-language-stops"
+    }
+  ],
+  "metadata": {
+    "station": null,
+    "line": null,
+    "trainType": null,
+    "trainName": null,
+    "trainNumber": null,
+    "destination": null,
+    "departureTime": null,
+    "arrivalTime": null,
+    "platform": null,
+    "nextStation": null,
+    "summary": null,
+    "category": "general_information"
+  }
+}
