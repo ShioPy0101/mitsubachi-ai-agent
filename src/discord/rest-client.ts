@@ -1,4 +1,5 @@
 import type { DiscordAttachment } from "./schemas";
+import { EPHEMERAL_MESSAGE_FLAG } from "./message-flags";
 
 const defaultFetcher: typeof fetch = (input, init) => fetch(input, init);
 const defaultRequestTimeoutMs = 30_000;
@@ -61,8 +62,13 @@ async function apiResult(response: Response): Promise<DiscordApiResult> {
 function messagePayload(
   content: string,
   file?: DiscordFile,
+  ephemeral = false,
 ): { body: BodyInit; contentTypeHeader?: string } {
-  const payload = { content, allowed_mentions: { parse: [] } };
+  const payload = {
+    content,
+    allowed_mentions: { parse: [] },
+    ...(ephemeral ? { flags: EPHEMERAL_MESSAGE_FLAG } : {}),
+  };
   if (file === undefined) {
     return {
       body: JSON.stringify(payload),
@@ -206,7 +212,7 @@ export class DiscordRestClient {
     content: string,
     file?: DiscordFile,
   ): Promise<DiscordApiResult> {
-    const payload = messagePayload(content, file);
+    const payload = messagePayload(content, file, true);
     for (let attempt = 0; attempt <= maximumRateLimitRetries; attempt += 1) {
       const response = await this.request(
         `https://discord.com/api/v10/webhooks/${this.applicationId}/${token}`,
