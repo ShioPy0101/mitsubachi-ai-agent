@@ -138,6 +138,7 @@ function routeSummary(diagnostics: StationCandidateDiagnostics): unknown {
     sequenceFallbackAttempted: diagnostics.sequenceFallbackAttempted,
     fallbackSearchStatus: diagnostics.fallbackSearchStatus,
     metrics: diagnostics.metrics,
+    strategyComparison: diagnostics.strategyComparison,
     mentionCandidates: diagnostics.mentionCandidates,
     searchedRouteCandidates: diagnostics.routeCandidates.map((route, rank) => ({
       rank,
@@ -274,7 +275,11 @@ export function formatDemoDiagnosticPreviews(value: DemoDiagnostics): string[] {
           sequence.contextMentions.length === 0
             ? ""
             : ` / context=${sequence.contextMentions.map(({ text, role }) => `${text}[${role}]`).join(" → ")}`;
-        return `sequence ${sequence.id} [${sequence.role}]: ${sequence.mentions.map(({ text, role }) => `${text}[${role}]`).join(" → ")}${context}\nstatus=${sequence.stationSearch.routeSearchStatus} / fallback=${sequence.stationSearch.sequenceFallbackAttempted}\n${routes || "経路候補なし"}`;
+        const comparison = sequence.stationSearch.strategyComparison;
+        const strategy = comparison
+          ? `\nstrategy=${comparison.selected} (${comparison.reason}) / ${comparison.attempts.map((a) => `${a.strategy}:${a.status}`).join(" / ")}`
+          : "";
+        return `sequence ${sequence.id} [${sequence.role}]: ${sequence.mentions.map(({ text, role }) => `${text}[${role}]`).join(" → ")}${context}\nstatus=${sequence.stationSearch.routeSearchStatus} / fallback=${sequence.stationSearch.sequenceFallbackAttempted}${strategy}\n${routes || "経路候補なし"}`;
       })
       .join("\n\n") || "経路探索sequenceなし";
   const analysisRequest = (value.gemini.analysis.request ?? {}) as {
