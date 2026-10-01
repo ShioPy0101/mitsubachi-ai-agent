@@ -41,7 +41,7 @@ const metadata = {
   platform: null,
   nextStation: "安雪",
   category: "general_information" as const,
-  summary: "次は安雪を含む停車駅案内",
+  summary: "停車駅：篠原・安雪・守山",
 };
 const mentions = ["篠原", "安雪", "守山"].map((text) => ({
   text,
@@ -112,7 +112,7 @@ describe("fresh local D1 and queue pipeline with fake providers", () => {
                   metadata: {
                     ...metadata,
                     nextStation: "野洲",
-                    summary: "次は野洲を含む停車駅案内",
+                    summary: "停車駅：篠原・野洲・守山",
                   },
                   normalizedEvents: [
                     {
@@ -214,13 +214,13 @@ describe("fresh local D1 and queue pipeline with fake providers", () => {
         raw_transcription: raw,
         normalized_transcription: normalized,
         next_station: "野洲",
-        summary: "次は野洲を含む停車駅案内",
+        summary: "停車駅：篠原・野洲・守山",
       });
       expect(String(clip?.generated_filename)).toContain("次は野洲");
       expect(String(clip?.generated_filename)).not.toContain("安雪");
       expect(
         delivered.some((content) =>
-          content.includes("次は野洲を含む停車駅案内"),
+          content.includes("停車駅：篠原・野洲・守山"),
         ),
       ).toBe(true);
       expect(delivered.some((content) => content.includes(normalized))).toBe(
