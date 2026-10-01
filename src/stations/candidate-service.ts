@@ -10,7 +10,11 @@ import {
   normalizeKana,
   normalizeStationName,
 } from "./normalization";
-import { stationKanaSimilarity, stationNameSimilarity } from "./similarity";
+import {
+  bestContainedSimilarity,
+  stationKanaSimilarity,
+  stationNameMentionSimilarity,
+} from "./similarity";
 import {
   STATION_MATCH_WEIGHTS,
   type MentionRouteMatch,
@@ -156,7 +160,10 @@ export function scoreStation(
   transcription: string,
   context: StationContext,
 ): StationCandidate {
-  const nameSimilarity = stationNameSimilarity(transcription, station.name);
+  const nameSimilarity = bestContainedSimilarity(
+    normalizeStationName(transcription),
+    normalizeStationName(station.name),
+  );
   const kanaSimilarity = stationKanaSimilarity(transcription, station.kana);
   const lineBonus =
     context.lineName != null && station.lineName === context.lineName ? 1 : 0;
@@ -224,7 +231,7 @@ export function lexicalSimilarities(
         normalizeLocalizedStationName(mention),
         normalizeLocalizedStationName(localized),
       )
-    : stationNameSimilarity(mention, station.name);
+    : stationNameMentionSimilarity(mention, station.name);
   const kanaSimilarity = stationKanaSimilarity(mention, station.kana);
   const phoneticSimilarity =
     inferredReading == null
