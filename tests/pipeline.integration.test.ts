@@ -134,6 +134,7 @@ describe("fresh local D1 and queue pipeline with fake providers", () => {
             init?.body instanceof FormData
               ? JSON.parse(String(init.body.get("payload_json")))
               : JSON.parse(String(init?.body));
+          if (init?.method === "POST") expect(payload.flags).toBe(64);
           delivered.push(payload.content ?? "");
           return new Response(null, { status: 204 });
         }
