@@ -12,6 +12,7 @@ export default defineConfig({
       "tests/correction-security.test.ts",
       "tests/local-railway.test.ts",
       "tests/local-policies.test.ts",
+      "tests/private-delivery.test.ts",
     ],
   },
 });
