@@ -375,7 +375,49 @@ function alignMentionsToRoute(
     null,
   );
   if (best === null || best.indexes.length !== mentionTexts.length) return null;
-  const mentionMatches: MentionRouteMatch[] = best.indexes.map(
+  const refinedIndexes = [...best.indexes];
+  // Resolve weak surface/reading ties only inside an already aligned pair of
+  // strong neighbours. This changes route material, never hard binding, and
+  // preserves every ordering constraint and the existing scoring thresholds.
+  for (let i = 1; i < mentionTexts.length - 1; i++) {
+    const hint = phoneticHints[i];
+    if (!hint || hardAnchorNamesByMention[i]?.size || boundNamesByMention[i])
+      continue;
+    const current = lexicalSimilarities(
+      mentionTexts[i]!,
+      route.stations[refinedIndexes[i]!]!.station,
+      hint,
+    );
+    if (Math.max(current.nameSimilarity, current.kanaSimilarity) >= 0.85)
+      continue;
+    const left = refinedIndexes[i - 1]!,
+      right = refinedIndexes[i + 1]!;
+    const neighboursStrong = [i - 1, i + 1].every((j) => {
+      const evidence = lexicalSimilarities(
+        mentionTexts[j]!,
+        route.stations[refinedIndexes[j]!]!.station,
+      );
+      return Math.max(evidence.nameSimilarity, evidence.kanaSimilarity) >= 0.65;
+    });
+    if (!neighboursStrong) continue;
+    const exactReadingIndexes: number[] = [];
+    for (let index = left + 1; index < right; index++) {
+      onComparison?.();
+      const station = route.stations[index]!.station;
+      if (!station.kana || normalizeKana(hint) !== normalizeKana(station.kana))
+        continue;
+      const evidence = lexicalSimilarities(mentionTexts[i]!, station, hint);
+      if (
+        evidence.lexicalSimilarity >= current.lexicalSimilarity &&
+        evidence.phoneticSimilarity > current.phoneticSimilarity
+      )
+        exactReadingIndexes.push(index);
+    }
+    // Multiple matching physical positions remain ambiguous.
+    if (exactReadingIndexes.length === 1)
+      refinedIndexes[i] = exactReadingIndexes[0]!;
+  }
+  const mentionMatches: MentionRouteMatch[] = refinedIndexes.map(
     (routeIndex, mentionIndex) => {
       const station = route.stations[routeIndex]!.station;
       return {
@@ -914,7 +956,7 @@ export class StationCandidateService {
         : lineRouteCandidates
             .map((route) =>
               alignmentComparisonCount +
-                3 * (mentionTexts?.length ?? 0) * route.stations.length >
+                4 * (mentionTexts?.length ?? 0) * route.stations.length >
               alignmentBudget
                 ? null
                 : alignMentionsToRoute(
@@ -1008,7 +1050,7 @@ export class StationCandidateService {
         : graphRoutes
             .map((route) =>
               alignmentComparisonCount +
-                3 * (mentionTexts?.length ?? 0) * route.stations.length >
+                4 * (mentionTexts?.length ?? 0) * route.stations.length >
               alignmentBudget
                 ? null
                 : alignMentionsToRoute(
