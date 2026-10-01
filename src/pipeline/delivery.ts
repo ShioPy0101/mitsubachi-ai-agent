@@ -226,35 +226,11 @@ export async function notify(
     return true;
   }
 
-  if (job.source.channelId !== null) {
-    try {
-      const result = await discord.sendChannelMessage(
-        job.source.channelId,
-        content,
-        file,
-      );
-
-      if (result.ok) {
-        console.info("audio_job_discord_channel_sent", {
-          jobId: job.id,
-        });
-
-        return true;
-      }
-
-      console.error("audio_job_discord_channel_send_failed", {
-        jobId: job.id,
-        status: result.status,
-        responseBody: result.responseBody,
-      });
-    } catch (error) {
-      console.error("audio_job_discord_channel_send_failed", {
-        jobId: job.id,
-        ...errorDetails(error),
-      });
-    }
-  }
-
+  // Interaction results are private. An expired/failed callback must never
+  // turn a private result, attachment or failure into a channel message.
+  console.warn("audio_job_discord_private_delivery_unavailable", {
+    jobId: job.id,
+  });
   return false;
 }
 
