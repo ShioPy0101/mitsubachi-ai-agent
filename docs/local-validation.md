@@ -15,7 +15,7 @@
 
 その他: `pnpm typecheck`、`pnpm generate:railway-data`、`pnpm benchmark:static`、`pnpm eval:accuracy fixtures/captured`、`pnpm deploy:dry-run`。
 
-手動のローカルWorker起動は `pnpm db:migrate:local` → `pnpm dev --local` → `curl http://localhost:8787/health`。`verify:local` は通常のローカルDBと別の一時storageを使います。本番migrationやdeployを実行しません。
+実AIを使う手動のローカルWorker起動は `pnpm db:migrate:local` → `pnpm dev --port 8787` → `curl http://localhost:8787/health`。Workers AI bindingは `remote: true`、D1・Queueはlocalです。`wrangler dev --local` はremote bindingも無効化するため、実音声処理では付けないでください。起動ログが `env.AI: remote` であることを確認します。`verify:local` は外部AIを呼ばないhealth/migration検証なので意図的に `--local` を使い、通常のローカルDBと別の一時storageを使います。本番migrationやdeployを実行しません。
 
 ## 実APIの設定
 
