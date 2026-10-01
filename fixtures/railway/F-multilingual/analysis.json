@@ -1,0 +1,39 @@
+{
+  "isTransitAnnouncement": true,
+  "mentions": [
+    {
+      "id": "mention:2:6",
+      "text": "和倉温泉",
+      "start": 2,
+      "end": 6,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:26:38",
+      "text": "Wakuda Onsen",
+      "start": 26,
+      "end": 38,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": "わくだおんせん",
+      "language": "en"
+    }
+  ],
+  "metadata": {
+    "station": null,
+    "line": null,
+    "trainType": null,
+    "trainName": null,
+    "trainNumber": null,
+    "destination": null,
+    "departureTime": null,
+    "arrivalTime": null,
+    "platform": null,
+    "nextStation": null,
+    "summary": null,
+    "category": "general_information"
+  }
+}

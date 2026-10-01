@@ -1,0 +1,39 @@
+{
+  "isTransitAnnouncement": true,
+  "mentions": [
+    {
+      "id": "mention:7:8",
+      "text": "あ",
+      "start": 7,
+      "end": 8,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:9:10",
+      "text": "い",
+      "start": 9,
+      "end": 10,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    }
+  ],
+  "metadata": {
+    "station": null,
+    "line": null,
+    "trainType": null,
+    "trainName": null,
+    "trainNumber": null,
+    "destination": null,
+    "departureTime": null,
+    "arrivalTime": null,
+    "platform": null,
+    "nextStation": null,
+    "summary": null,
+    "category": "general_information"
+  }
+}

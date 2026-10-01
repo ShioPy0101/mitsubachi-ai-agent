@@ -1,0 +1,49 @@
+{
+  "isTransitAnnouncement": true,
+  "mentions": [
+    {
+      "id": "mention:7:10",
+      "text": "河和口",
+      "start": 7,
+      "end": 10,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:11:14",
+      "text": "太田川",
+      "start": 11,
+      "end": 14,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:15:21",
+      "text": "中部国際空港",
+      "start": 15,
+      "end": 21,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    }
+  ],
+  "metadata": {
+    "station": null,
+    "line": null,
+    "trainType": null,
+    "trainName": null,
+    "trainNumber": null,
+    "destination": null,
+    "departureTime": null,
+    "arrivalTime": null,
+    "platform": null,
+    "nextStation": null,
+    "summary": null,
+    "category": "general_information"
+  }
+}

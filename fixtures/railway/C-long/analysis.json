@@ -1,0 +1,219 @@
+{
+  "isTransitAnnouncement": true,
+  "mentions": [
+    {
+      "id": "mention:7:10",
+      "text": "河和口",
+      "start": 7,
+      "end": 10,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:11:13",
+      "text": "富貴",
+      "start": 11,
+      "end": 13,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:14:18",
+      "text": "知多武豊",
+      "start": 14,
+      "end": 18,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:19:21",
+      "text": "上ゲ",
+      "start": 19,
+      "end": 21,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:22:24",
+      "text": "青山",
+      "start": 22,
+      "end": 24,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:25:27",
+      "text": "成岩",
+      "start": 25,
+      "end": 27,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:28:32",
+      "text": "知多半田",
+      "start": 28,
+      "end": 32,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:33:36",
+      "text": "住吉町",
+      "start": 33,
+      "end": 36,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:37:40",
+      "text": "半田口",
+      "start": 37,
+      "end": 40,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:41:43",
+      "text": "植大",
+      "start": 41,
+      "end": 43,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:44:47",
+      "text": "阿久比",
+      "start": 44,
+      "end": 47,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:48:50",
+      "text": "坂部",
+      "start": 48,
+      "end": 50,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:51:53",
+      "text": "白沢",
+      "start": 51,
+      "end": 53,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:54:57",
+      "text": "巽ヶ丘",
+      "start": 54,
+      "end": 57,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:58:62",
+      "text": "八幡新田",
+      "start": 58,
+      "end": 62,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:63:67",
+      "text": "南加木屋",
+      "start": 63,
+      "end": 67,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:68:72",
+      "text": "高横須賀",
+      "start": 68,
+      "end": 72,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:73:76",
+      "text": "太田川",
+      "start": 73,
+      "end": 76,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:77:81",
+      "text": "新日鉄前",
+      "start": 77,
+      "end": 81,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    },
+    {
+      "id": "mention:82:85",
+      "text": "聚楽園",
+      "start": 82,
+      "end": 85,
+      "role": "stop",
+      "sequenceId": 1,
+      "phoneticHint": null,
+      "language": "ja"
+    }
+  ],
+  "metadata": {
+    "station": null,
+    "line": null,
+    "trainType": null,
+    "trainName": null,
+    "trainNumber": null,
+    "destination": null,
+    "departureTime": null,
+    "arrivalTime": null,
+    "platform": null,
+    "nextStation": null,
+    "summary": null,
+    "category": "general_information"
+  }
+}
