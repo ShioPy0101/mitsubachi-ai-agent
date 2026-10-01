@@ -80,6 +80,26 @@ const selectJobSql = `
 export class JobsRepository {
   constructor(private readonly db: D1Database) {}
 
+  /** Snapshot of waiting jobs in this shared queue, not a FIFO guarantee. */
+  async queuePosition(id: string): Promise<number | null> {
+    const row = await this.db
+      .prepare(
+        `
+      SELECT 1 + (
+        SELECT COUNT(*) FROM audio_jobs waiting
+        WHERE waiting.status = 'queued'
+          AND (waiting.created_at < target.created_at
+            OR (waiting.created_at = target.created_at AND waiting.rowid < target.rowid))
+      ) AS position
+      FROM audio_jobs target
+      WHERE target.id = ? AND target.status = 'queued'
+    `,
+      )
+      .bind(id)
+      .first<{ position: number }>();
+    return row?.position ?? null;
+  }
+
   async create(
     input: NewAudioJob,
     now: string,
