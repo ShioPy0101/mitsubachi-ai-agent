@@ -376,10 +376,11 @@ function alignMentionsToRoute(
   );
   if (best === null || best.indexes.length !== mentionTexts.length) return null;
   const refinedIndexes = [...best.indexes];
-  // Resolve weak surface/reading ties only inside an already aligned pair of
-  // strong neighbours. This changes route material, never hard binding, and
+  // Resolve equal lexical-strength ties using an exact reading on the aligned
+  // path, including sequence boundaries. Require strong available neighbours.
+  // This changes route material, never hard binding, and
   // preserves every ordering constraint and the existing scoring thresholds.
-  for (let i = 1; i < mentionTexts.length - 1; i++) {
+  for (let i = 0; i < mentionTexts.length; i++) {
     const hint = phoneticHints[i];
     if (!hint || hardAnchorNamesByMention[i]?.size || boundNamesByMention[i])
       continue;
@@ -390,15 +391,22 @@ function alignMentionsToRoute(
     );
     if (Math.max(current.nameSimilarity, current.kanaSimilarity) >= 0.85)
       continue;
-    const left = refinedIndexes[i - 1]!,
-      right = refinedIndexes[i + 1]!;
-    const neighboursStrong = [i - 1, i + 1].every((j) => {
-      const evidence = lexicalSimilarities(
-        mentionTexts[j]!,
-        route.stations[refinedIndexes[j]!]!.station,
-      );
-      return Math.max(evidence.nameSimilarity, evidence.kanaSimilarity) >= 0.65;
-    });
+    const left = i === 0 ? -1 : refinedIndexes[i - 1]!,
+      right =
+        i === mentionTexts.length - 1
+          ? route.stations.length
+          : refinedIndexes[i + 1]!;
+    const neighboursStrong = [i - 1, i + 1]
+      .filter((j) => j >= 0 && j < mentionTexts.length)
+      .every((j) => {
+        const evidence = lexicalSimilarities(
+          mentionTexts[j]!,
+          route.stations[refinedIndexes[j]!]!.station,
+        );
+        return (
+          Math.max(evidence.nameSimilarity, evidence.kanaSimilarity) >= 0.65
+        );
+      });
     if (!neighboursStrong) continue;
     const exactReadingIndexes: number[] = [];
     for (let index = left + 1; index < right; index++) {
@@ -408,7 +416,8 @@ function alignMentionsToRoute(
         continue;
       const evidence = lexicalSimilarities(mentionTexts[i]!, station, hint);
       if (
-        evidence.lexicalSimilarity >= current.lexicalSimilarity &&
+        Math.abs(evidence.lexicalSimilarity - current.lexicalSimilarity) <
+          1e-9 &&
         evidence.phoneticSimilarity > current.phoneticSimilarity
       )
         exactReadingIndexes.push(index);
