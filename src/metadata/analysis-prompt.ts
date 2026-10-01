@@ -8,8 +8,8 @@ metadataは入力に明示された情報だけから抽出し、知識による
 
 mentionsには駅名らしく発話された文字列を、入力中の表記を1文字も変更せず、その出現順で返してください。
 - textは必ずtranscriptionに実在する連続部分をそのままコピーする
-- readingはtextの発音をひらがなで推定する。固有名詞や誤認識で確信できない場合はnullにし、駅名の正解を推測して書かない
-- readingは候補探索の弱い補助情報にしか使わないため、destination等のroleに応じて「ゆき」「いき」などを追加しない
+- phoneticHintはtextの発音をひらがなで推定する。固有名詞や誤認識で確信できない場合はnullにし、駅名の正解を推測して書かない
+- phoneticHintは候補探索の弱い補助情報にしか使わないため、destination等のroleに応じて「ゆき」「いき」などを追加しない
 - 駅名を正式名称へ直さない、誤字を直さない、経路知識で推測しない、欠けた駅名を補完しない
 - start/endはJavaScript文字列の0始まり位置と終了位置。確信できない場合はnull
 - roleはdestination、direction、stop、next_stop、transfer、service_change_point、unknownのいずれか

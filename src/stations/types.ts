@@ -35,7 +35,7 @@ export type RoutePathCandidate = {
   transferCount: number;
   pathLength: number;
   score: number;
-  source?: "anchor" | "sequence_fallback";
+  source?: "line_fast_path" | "graph_fallback";
   mentionMatches?: MentionRouteMatch[];
   exactAnchorCoverage?: number;
   hardAnchorViolations?: number;
