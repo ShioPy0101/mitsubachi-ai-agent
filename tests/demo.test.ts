@@ -1,6 +1,7 @@
 import { env as localEnv } from "cloudflare:test";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { handleDemoCommand } from "../src/routes/interactions";
+import { JobsRepository } from "../src/db/jobs-repository";
 import type { AudioJobMessage } from "../src/jobs/types";
 
 const demoCommand = {
@@ -26,9 +27,36 @@ beforeEach(async () => {
   CREATE TABLE IF NOT EXISTS ephemeral_attachment_references (job_id TEXT PRIMARY KEY, attachment_id TEXT, url TEXT, expires_at TEXT, created_at TEXT);
   CREATE TABLE IF NOT EXISTS interaction_callback_secrets (interaction_id TEXT PRIMARY KEY, job_id TEXT UNIQUE, token TEXT, expires_at TEXT, created_at TEXT);`);
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe("owner-only demo", () => {
+  it("keeps an accepted job when the optional position lookup fails", async () => {
+    vi.spyOn(JobsRepository.prototype, "queuePosition").mockRejectedValue(
+      new Error("read failed"),
+    );
+    const send = vi.fn().mockResolvedValue(undefined);
+    const response = await handleDemoCommand(demoCommand, {
+      AUDIO_JOBS: { send },
+      DISCORD_CONTROL_USER_IDS: '["owner"]',
+      MAX_AUDIO_BYTES: "3",
+      DB: localEnv.DB,
+    });
+    expect(await response.json()).toEqual({
+      type: 4,
+      data: { content: "順番待ちしています…", flags: 64 },
+    });
+    expect(send).toHaveBeenCalledOnce();
+    expect(
+      (
+        await new JobsRepository(localEnv.DB).findByInteractionId(
+          demoCommand.interactionId,
+        )
+      )?.status,
+    ).toBe("queued");
+  });
   it("rejects an unconfigured user before enqueueing any processing", async () => {
     const send = vi.fn();
     const response = await handleDemoCommand(
@@ -57,7 +85,13 @@ describe("owner-only demo", () => {
       DB: localEnv.DB,
     });
 
-    expect(await response.json()).toEqual({ type: 5, data: { flags: 64 } });
+    expect(await response.json()).toEqual({
+      type: 4,
+      data: {
+        content: "順番待ちしています…（待機順の目安：1番目）",
+        flags: 64,
+      },
+    });
     expect(send).toHaveBeenCalledWith(
       { jobId: expect.any(String) },
       { contentType: "json" },

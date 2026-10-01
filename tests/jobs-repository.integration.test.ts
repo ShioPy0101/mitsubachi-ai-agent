@@ -57,6 +57,25 @@ describe("D1 audio job timeout handling", () => {
     );
   });
 
+  it("counts only waiting jobs and uses insertion order for equal timestamps", async () => {
+    const now = "2026-09-30T07:00:00.000Z";
+    await insertJob("completed", "completed", "2026-09-30T06:00:00.000Z", null);
+    await insertJob("active", "transcribing", "2026-09-30T06:01:00.000Z", now);
+    await insertJob("z-first", "queued", now, null);
+    await insertJob("a-second", "queued", now, null);
+    await insertJob("later", "queued", "2026-09-30T07:01:00.000Z", null);
+    const jobs = new JobsRepository(env.DB);
+    expect(await jobs.queuePosition("z-first")).toBe(1);
+    expect(await jobs.queuePosition("a-second")).toBe(2);
+    expect(await jobs.queuePosition("later")).toBe(3);
+    expect(await jobs.queuePosition("active")).toBeNull();
+    expect(await jobs.queuePosition("missing")).toBeNull();
+    await jobs.updateStatus("z-first", "transcribing");
+    expect(await jobs.queuePosition("a-second")).toBe(1);
+    await jobs.updateStatus("z-first", "queued", "transient_processing_error");
+    expect(await jobs.queuePosition("a-second")).toBe(2);
+  });
+
   it("does not stop a fourteen-minute transcription at twelve minutes", async () => {
     await insertJob(
       "long-whisper",
