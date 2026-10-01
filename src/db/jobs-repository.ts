@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { jobStatuses, type AudioJob, type JobStatus, type NewAudioJob } from "../jobs/types";
-import type { TranscriptionSegment } from "../transcription/service";
 
 const JobRowSchema = z.object({
   id: z.string(),
@@ -18,28 +17,12 @@ const JobRowSchema = z.object({
   status: z.enum(jobStatuses),
   error_message: z.string().nullable(),
   transcription_text: z.string().nullable(),
-  transcription_segments: z.string().nullable(),
   created_at: z.string(),
   started_at: z.string().nullable(),
   completed_at: z.string().nullable(),
 });
 
 type JobRow = z.output<typeof JobRowSchema>;
-
-const TranscriptionSegmentsSchema = z.array(z.object({
-  startSec: z.number().nonnegative(),
-  endSec: z.number().nonnegative(),
-  text: z.string(),
-}));
-
-function parseTranscriptionSegments(value: string | null): TranscriptionSegment[] | null {
-  if (value === null) return null;
-  try {
-    return TranscriptionSegmentsSchema.parse(JSON.parse(value) as unknown);
-  } catch {
-    return null;
-  }
-}
 
 function toJob(rowInput: unknown): AudioJob {
   const row = JobRowSchema.parse(rowInput);
@@ -52,7 +35,6 @@ function toJob(rowInput: unknown): AudioJob {
     status: row.status,
     errorMessage: row.error_message,
     transcriptionText: row.transcription_text,
-    transcriptionSegments: parseTranscriptionSegments(row.transcription_segments),
     createdAt: row.created_at,
     startedAt: row.started_at,
     completedAt: row.completed_at,
@@ -191,21 +173,15 @@ export class JobsRepository {
     return row !== null;
   }
 
-  async saveTranscription(
-    id: string,
-    transcriptionText: string,
-    transcriptionSegments: readonly TranscriptionSegment[],
-  ): Promise<void> {
+  async saveTranscription(id: string, transcriptionText: string): Promise<void> {
     await this.db
-      .prepare("UPDATE audio_jobs SET transcription_text = ?, transcription_segments = ? WHERE id = ?")
-      .bind(transcriptionText, JSON.stringify(transcriptionSegments), id)
+      .prepare("UPDATE audio_jobs SET transcription_text = ? WHERE id = ?")
+      .bind(transcriptionText, id)
       .run();
   }
 
   async discardTranscription(id: string): Promise<void> {
-    await this.db.prepare(`
-      UPDATE audio_jobs SET transcription_text = NULL, transcription_segments = NULL WHERE id = ?
-    `).bind(id).run();
+    await this.db.prepare("UPDATE audio_jobs SET transcription_text = NULL WHERE id = ?").bind(id).run();
   }
 
   async clearEphemeral(jobId: string): Promise<void> {

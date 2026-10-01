@@ -7,11 +7,7 @@ import {
 } from "./schema";
 import type { z } from "zod";
 import { buildGeminiAnalysisPrompt } from "./analysis-prompt";
-import {
-  buildGeminiNormalizationPrompt,
-  type NormalizationInputSegment,
-  type StopSequenceContext,
-} from "./prompt";
+import { buildGeminiNormalizationPrompt, type StopSequenceContext } from "./prompt";
 import type { AnnouncementAnalysis, StationMention } from "./service";
 import type { RailwayAnnouncementMetadata } from "../railway/types";
 import { levenshteinDistance, stringSimilarity } from "../stations/similarity";
@@ -94,7 +90,6 @@ export type GeminiDiagnostics = {
 export type GeminiAnalysisExtraction = AnnouncementAnalysis & { diagnostics: GeminiCallDiagnostics };
 export type GeminiNormalizationExtraction = {
   normalizedTranscription: string;
-  segments: NormalizedSegment[];
   entities: NormalizedEntity[];
   diagnostics: GeminiCallDiagnostics;
   normalizationGuard: NormalizationGuard;
@@ -116,7 +111,6 @@ type EntityCorrectionAssessment = {
 };
 
 export type NormalizedEntity = z.output<typeof GeminiNormalizationSchema>["entities"][number];
-export type NormalizedSegment = z.output<typeof GeminiNormalizationSchema>["segments"][number];
 
 export function applyNormalizedEntitiesToMetadata(
   metadata: RailwayAnnouncementMetadata,
@@ -427,77 +421,6 @@ function failedNormalizationGuard(
   };
 }
 
-function normalizationInputSegments(
-  transcription: string,
-  segments: readonly NormalizationInputSegment[],
-): NormalizationInputSegment[] {
-  const usable = segments.filter(({ text }) => text.trim() !== "");
-  return usable.length > 0 ? [...usable] : [{ segmentId: 0, text: transcription }];
-}
-
-function joinNormalizedSegments(segments: readonly NormalizedSegment[]): string {
-  return segments
-    .map((segment) => (segment.normalizedText ?? segment.sourceText).trim())
-    .filter((text) => text !== "")
-    .join("\n");
-}
-
-function fallbackNormalizedSegments(segments: readonly NormalizationInputSegment[]): NormalizedSegment[] {
-  return segments.map(({ segmentId, text }) => ({
-    segmentId,
-    sourceText: text,
-    normalizedText: text,
-    language: null,
-    quality: "uncertain",
-  }));
-}
-
-function preserveSegmentContent(segment: NormalizedSegment): NormalizedSegment {
-  if (segment.normalizedText === null) return segment;
-  const source = comparisonText(segment.sourceText);
-  const normalized = comparisonText(segment.normalizedText);
-  const catastrophicDeletion = source.length >= 20 && normalized.length < source.length * 0.5;
-  const sourceLatin = [...source].filter((character) => /[A-Za-z]/u.test(character)).length;
-  const normalizedLatin = [...normalized].filter((character) => /[A-Za-z]/u.test(character)).length;
-  const translatedFromLatin = sourceLatin >= 10
-    && sourceLatin / Math.max(1, source.length) >= 0.6
-    && normalizedLatin / Math.max(1, normalized.length) < 0.4;
-  if (!catastrophicDeletion && !translatedFromLatin) return segment;
-  return { ...segment, normalizedText: segment.sourceText, quality: "uncertain" };
-}
-
-function validatedNormalizedSegments(
-  inputs: readonly NormalizationInputSegment[],
-  outputs: readonly NormalizedSegment[],
-): NormalizedSegment[] | null {
-  if (outputs.length !== inputs.length) return null;
-  const byId = new Map<number, NormalizedSegment>();
-  for (const output of outputs) {
-    if (byId.has(output.segmentId)) return null;
-    byId.set(output.segmentId, output);
-  }
-  const normalized: NormalizedSegment[] = [];
-  for (const input of inputs) {
-    const output = byId.get(input.segmentId);
-    if (output === undefined || output.sourceText !== input.text) return null;
-    normalized.push(preserveSegmentContent({ ...output, sourceText: input.text }));
-  }
-  return normalized;
-}
-
-function entitiesHaveValidProvenance(
-  entities: readonly NormalizedEntity[],
-  segments: readonly NormalizedSegment[],
-): boolean {
-  const segmentsById = new Map(segments.map((segment) => [segment.segmentId, segment]));
-  return entities.every((entity) => {
-    const segment = segmentsById.get(entity.segmentId);
-    if (segment === undefined) return false;
-    if (entity.sourceText !== null) return segment.sourceText.includes(entity.sourceText);
-    return (segment.normalizedText ?? segment.sourceText).includes(entity.text);
-  });
-}
-
 export class GeminiMetadataService {
   constructor(
     private readonly apiKey: string,
@@ -606,13 +529,9 @@ export class GeminiMetadataService {
     transcription: string,
     analysis: AnnouncementAnalysis,
     sequences: readonly StopSequenceContext[],
-    inputSegments: readonly NormalizationInputSegment[] = [],
   ): Promise<GeminiNormalizationExtraction> {
-    const segments = normalizationInputSegments(transcription, inputSegments);
-    const fallbackSegments = fallbackNormalizedSegments(segments);
-    const fallbackTranscription = joinNormalizedSegments(fallbackSegments) || transcription;
     const generated = await this.generate(
-      buildGeminiNormalizationPrompt(transcription, analysis, sequences, segments),
+      buildGeminiNormalizationPrompt(transcription, analysis, sequences),
       geminiNormalizationJsonSchema,
     );
     let raw: unknown;
@@ -620,21 +539,17 @@ export class GeminiMetadataService {
       raw = JSON.parse(generated.responseText) as unknown;
     } catch {
       return {
-        normalizedTranscription: fallbackTranscription,
-        segments: fallbackSegments,
+        normalizedTranscription: transcription,
         entities: [],
         diagnostics: generated.diagnostics,
         normalizationGuard: failedNormalizationGuard(transcription, analysis, sequences, "invalid_output"),
       };
     }
-    const emptyOutput = typeof raw === "object" && raw !== null && "segments" in raw
-      && (Array.isArray(raw.segments) && (raw.segments.length === 0 || raw.segments.some((segment) =>
-        typeof segment === "object" && segment !== null
-          && "normalizedText" in segment && segment.normalizedText === "")));
+    const emptyOutput = typeof raw === "object" && raw !== null
+      && "normalizedTranscription" in raw && raw.normalizedTranscription === "";
     if (emptyOutput) {
       return {
-        normalizedTranscription: fallbackTranscription,
-        segments: fallbackSegments,
+        normalizedTranscription: transcription,
         entities: [],
         diagnostics: generated.diagnostics,
         normalizationGuard: failedNormalizationGuard(transcription, analysis, sequences, "empty_output"),
@@ -643,35 +558,22 @@ export class GeminiMetadataService {
     const parsedResult = GeminiNormalizationSchema.safeParse(raw);
     if (!parsedResult.success) {
       return {
-        normalizedTranscription: fallbackTranscription,
-        segments: fallbackSegments,
+        normalizedTranscription: transcription,
         entities: [],
         diagnostics: generated.diagnostics,
         normalizationGuard: failedNormalizationGuard(transcription, analysis, sequences, "invalid_output"),
       };
     }
     const parsed = parsedResult.data;
-    const normalizedSegments = validatedNormalizedSegments(segments, parsed.segments);
-    if (normalizedSegments === null || !entitiesHaveValidProvenance(parsed.entities, normalizedSegments)) {
-      return {
-        normalizedTranscription: fallbackTranscription,
-        segments: fallbackSegments,
-        entities: [],
-        diagnostics: generated.diagnostics,
-        normalizationGuard: failedNormalizationGuard(transcription, analysis, sequences, "invalid_output"),
-      };
-    }
-    const normalizedTranscription = joinNormalizedSegments(normalizedSegments);
     const normalizationGuard = checkNormalization(
       transcription,
-      normalizedTranscription,
+      parsed.normalizedTranscription,
       analysis,
       sequences,
       parsed.entities,
     );
     return {
-      normalizedTranscription: normalizationGuard.accepted ? normalizedTranscription : fallbackTranscription,
-      segments: normalizationGuard.accepted ? normalizedSegments : fallbackSegments,
+      normalizedTranscription: normalizationGuard.accepted ? parsed.normalizedTranscription : transcription,
       entities: normalizationGuard.accepted ? parsed.entities : [],
       diagnostics: generated.diagnostics,
       normalizationGuard,

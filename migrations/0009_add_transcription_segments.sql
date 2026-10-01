@@ -1,1 +1,0 @@
-ALTER TABLE audio_jobs ADD COLUMN transcription_segments TEXT;

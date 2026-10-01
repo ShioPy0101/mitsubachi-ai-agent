@@ -118,40 +118,15 @@ const geminiEnvelope = (value: unknown): Response => Response.json({
   candidates: [{ content: { parts: [{ text: JSON.stringify(value) }] } }],
 });
 
-const normalizationOutput = (
-  sourceText: string,
-  normalizedText: string,
-  entities: Array<{
-    text: string;
-    kind: "station" | "line" | "train_name" | "train_type" | "destination" | "other_proper_noun";
-    sourceText: string | null;
-    segmentId?: number;
-  }> = [],
-) => ({
-  segments: [{
-    segmentId: 0,
-    sourceText,
-    normalizedText,
-    language: "ja",
-    quality: sourceText === normalizedText ? "normal" : "corrected",
-  }],
-  entities: entities.map((entity) => ({ segmentId: 0, ...entity })),
-});
-
 describe("two-stage Gemini metadata boundary", () => {
   it("validates the separate analysis and normalization schemas", () => {
     expect(GeminiAnalysisSchema.parse(validAnalysisOutput).departureTime).toBe("13:25");
     expect(() => GeminiAnalysisSchema.parse({ ...validAnalysisOutput, departureTime: "1:25" })).toThrow();
     expect(() => GeminiAnalysisSchema.parse({ ...validAnalysisOutput, station: "架空駅" })).toThrow();
-    expect(() => GeminiNormalizationSchema.parse({ segments: [], entities: [] })).not.toThrow();
-    expect(() => GeminiNormalizationSchema.parse({
-      segments: [{
-        segmentId: 0, sourceText: "入力", normalizedText: null, language: "ja", quality: "normal",
-      }],
-      entities: [],
-    })).toThrow();
+    expect(() => GeminiNormalizationSchema.parse({ normalizedTranscription: "  " })).toThrow();
+    expect(() => GeminiNormalizationSchema.parse({ normalizedTranscription: "次は高松です" })).toThrow();
     expect(geminiAnalysisJsonSchema.properties.mentions.type).toBe("array");
-    expect(geminiNormalizationJsonSchema.properties.segments.type).toBe("array");
+    expect(geminiNormalizationJsonSchema.properties.normalizedTranscription.minLength).toBe(1);
     expect(geminiNormalizationJsonSchema.required).toContain("entities");
   });
 
@@ -166,7 +141,7 @@ describe("two-stage Gemini metadata boundary", () => {
 
     const secondPrompt = buildGeminiNormalizationPrompt("A、B、C", analysis, []);
     expect(secondPrompt).toContain("役割別sequenceごと");
-    expect(secondPrompt).toContain("文法的な崩れ、不自然な助詞");
+    expect(secondPrompt).toContain("文法的な崩れ、重複、不自然な助詞");
     expect(secondPrompt).toContain("候補経路だけを根拠に停車駅列全体を再構成しない");
     expect(secondPrompt).toContain("destination、direction、transfer、stop");
     expect(secondPrompt).toContain("exact matchでも");
@@ -174,9 +149,6 @@ describe("two-stage Gemini metadata boundary", () => {
     expect(secondPrompt).toContain("補正を支持する「証拠」");
     expect(secondPrompt).toContain("採用必須の制約や答えではない");
     expect(secondPrompt).toContain("固有名詞は、経路上に存在するという理由だけで変更しない");
-    expect(secondPrompt).toContain("segmentIdで厳密に1:1対応");
-    expect(secondPrompt).toContain("翻訳して一方へ統合せず、要約や重複排除をせず");
-    expect(secondPrompt).toContain("別言語での同内容");
   });
 
   it("passes direction and destination context to full-transcription normalization", () => {
@@ -204,7 +176,7 @@ describe("two-stage Gemini metadata boundary", () => {
 
     expect(prompt).toContain('"role":"direction"');
     expect(prompt).toContain('"contextMentions":[{"text":"久保川","role":"destination"}]');
-    expect(prompt).toContain("入力segmentsを1件ずつ正規化");
+    expect(prompt).toContain("normalizedTranscriptionを生成");
   });
 
   it("keeps only verbatim Gemini #1 mentions and preserves their spoken order", async () => {
@@ -231,7 +203,7 @@ describe("two-stage Gemini metadata boundary", () => {
   });
 
   it("falls back to raw text when Gemini #2 returns an empty normalized value", async () => {
-    const fetcher = async (): Promise<Response> => geminiEnvelope({ segments: [], entities: [] });
+    const fetcher = async (): Promise<Response> => geminiEnvelope({ normalizedTranscription: "", entities: [] });
     const result = await new GeminiMetadataService("secret", "gemini-test", fetcher)
       .normalize("補正前の駅放送", analysis, []);
     expect(result.normalizedTranscription).toBe("補正前の駅放送");
@@ -256,130 +228,10 @@ describe("two-stage Gemini metadata boundary", () => {
     });
   });
 
-  it("preserves multilingual segments, source order, unintelligible audio and entity provenance", async () => {
-    const inputSegments = [
-      { segmentId: 0, text: "停車駅は鶴ヶ、福井、阿波羅温泉、香川温泉です。" },
-      {
-        segmentId: 1,
-        text: "This train will be stopping at Tsuruga, Fukui, Awara Onsen, and Kaga Onsen before arriving at Kanazawa.",
-      },
-      { segmentId: 2, text: "スポーツは、ランメンとお待ち、自分の遅れ..." },
-    ];
-    const raw = inputSegments.map(({ text }) => text).join("\n");
-    const fetcher = async (): Promise<Response> => geminiEnvelope({
-      // Gemini output order is intentionally wrong; application order must win.
-      segments: [
-        {
-          segmentId: 2,
-          sourceText: inputSegments[2]!.text,
-          normalizedText: null,
-          language: "ja",
-          quality: "unintelligible",
-        },
-        {
-          segmentId: 0,
-          sourceText: inputSegments[0]!.text,
-          normalizedText: "停車駅は敦賀、福井、芦原温泉、加賀温泉です。",
-          language: "ja",
-          quality: "corrected",
-        },
-        {
-          segmentId: 1,
-          sourceText: inputSegments[1]!.text,
-          normalizedText: inputSegments[1]!.text,
-          language: "en",
-          quality: "normal",
-        },
-      ],
-      entities: [
-        { text: "敦賀", kind: "station", sourceText: "鶴ヶ", segmentId: 0 },
-        { text: "敦賀", kind: "station", sourceText: "Tsuruga", segmentId: 1 },
-        { text: "福井", kind: "station", sourceText: "Fukui", segmentId: 1 },
-        { text: "芦原温泉", kind: "station", sourceText: "Awara Onsen", segmentId: 1 },
-        { text: "加賀温泉", kind: "station", sourceText: "Kaga Onsen", segmentId: 1 },
-        { text: "金沢", kind: "destination", sourceText: "Kanazawa", segmentId: 1 },
-      ],
-    });
-
-    const result = await new GeminiMetadataService("secret", "gemini-test", fetcher)
-      .normalize(raw, analysis, [], inputSegments);
-
-    expect(result.segments.map(({ segmentId }) => segmentId)).toEqual([0, 1, 2]);
-    expect(result.segments).toHaveLength(inputSegments.length);
-    expect(result.normalizedTranscription).toBe([
-      "停車駅は敦賀、福井、芦原温泉、加賀温泉です。",
-      inputSegments[1]!.text,
-      inputSegments[2]!.text,
-    ].join("\n"));
-    expect(result.normalizedTranscription).toContain("Tsuruga, Fukui, Awara Onsen, and Kaga Onsen");
-    expect(result.segments[2]).toMatchObject({
-      sourceText: inputSegments[2]!.text,
-      normalizedText: null,
-      quality: "unintelligible",
-    });
-    expect(result.entities.find(({ text }) => text === "敦賀")?.segmentId).toBe(0);
-    expect(result.entities.find(({ sourceText }) => sourceText === "Tsuruga")?.segmentId).toBe(1);
-  });
-
-  it("falls back to every source segment when Gemini omits a segment", async () => {
-    const inputSegments = [
-      { segmentId: 0, text: "日本語の停車駅案内です。" },
-      { segmentId: 1, text: "This is the same guidance in English." },
-    ];
-    const raw = inputSegments.map(({ text }) => text).join("\n");
-    const fetcher = async (): Promise<Response> => geminiEnvelope({
-      segments: [{
-        segmentId: 0,
-        sourceText: inputSegments[0]!.text,
-        normalizedText: inputSegments[0]!.text,
-        language: "ja",
-        quality: "normal",
-      }],
-      entities: [],
-    });
-
-    const result = await new GeminiMetadataService("secret", "gemini-test", fetcher)
-      .normalize(raw, analysis, [], inputSegments);
-
-    expect(result.normalizedTranscription).toBe(raw);
-    expect(result.segments).toHaveLength(2);
-    expect(result.normalizationGuard).toMatchObject({ accepted: false, reason: "invalid_output" });
-  });
-
-  it("does not let Gemini erase or translate a semantically duplicated English segment", async () => {
-    const japanese = "この列車は敦賀、福井、芦原温泉、加賀温泉に停車して金沢へ参ります。";
-    const english = "This train will be stopping at Tsuruga, Fukui, Awara Onsen, and Kaga Onsen before arriving at Kanazawa.";
-    const inputSegments = [
-      { segmentId: 0, text: japanese },
-      { segmentId: 1, text: english },
-    ];
-    const fetcher = async (): Promise<Response> => geminiEnvelope({
-      segments: [
-        {
-          segmentId: 0, sourceText: japanese, normalizedText: japanese, language: "ja", quality: "normal",
-        },
-        {
-          segmentId: 1,
-          sourceText: english,
-          normalizedText: "日本語案内と同じ内容です。",
-          language: "en",
-          quality: "corrected",
-        },
-      ],
-      entities: [],
-    });
-
-    const result = await new GeminiMetadataService("secret", "gemini-test", fetcher)
-      .normalize(`${japanese}\n${english}`, analysis, [], inputSegments);
-
-    expect(result.normalizedTranscription).toBe(`${japanese}\n${english}`);
-    expect(result.segments[1]).toMatchObject({ normalizedText: english, quality: "uncertain" });
-  });
-
   it("keeps a constrained Gemini rewrite while reporting unsupported corrections", async () => {
     const transcription = "2番線に電車か参ります黄色い線までお下かりください名鉄名古屋神宮方面の普通名鉄一宮行き神話口福岐千田竹豊上青山奈良は千田半田の順に止まり千田半田から快速急行に変わり集落園にも止まります";
     const overcorrected = "まもなく2番線に電車が参ります。黄色い線までお下がりください。名鉄名古屋、神宮前方面の普通、名鉄一宮行きです。神宮前、堀田、伝馬、大江、大同町、柴田、聚楽園の順に止まります。聚楽園から快速急行に変わり、太田川にも止まります。";
-    const fetcher = async (): Promise<Response> => geminiEnvelope(normalizationOutput(transcription, overcorrected));
+    const fetcher = async (): Promise<Response> => geminiEnvelope({ normalizedTranscription: overcorrected, entities: [] });
     const result = await new GeminiMetadataService("secret", "gemini-test", fetcher)
       .normalize(transcription, analysis, []);
 
@@ -396,7 +248,7 @@ describe("two-stage Gemini metadata boundary", () => {
   it("accepts a localized correction in a long announcement", async () => {
     const transcription = `まもなく列車が到着します。${"案内をよくお聞きください。".repeat(5)}黄色い展示ブロックまでお下がりください。`;
     const corrected = transcription.replace("黄色い展示ブロック", "黄色い点字ブロック");
-    const fetcher = async (): Promise<Response> => geminiEnvelope(normalizationOutput(transcription, corrected));
+    const fetcher = async (): Promise<Response> => geminiEnvelope({ normalizedTranscription: corrected, entities: [] });
     const result = await new GeminiMetadataService("secret", "gemini-test", fetcher)
       .normalize(transcription, analysis, []);
 
@@ -414,14 +266,12 @@ describe("two-stage Gemini metadata boundary", () => {
     ]);
 
     const guard = checkNormalization(raw, corrected, context.analysis, context.sequences, [
-      { text: "しまんと6号", kind: "train_name", sourceText: "島本6号", segmentId: 0 },
+      { text: "しまんと6号", kind: "train_name", sourceText: "島本6号" },
       ...[
         ["土佐山田", "戸佐山"], ["大杉", "大杉"], ["大歩危", "大桶"], ["阿波池田", "阿波池田"],
         ["琴平", "小戸屋"], ["善通寺", "禅津"], ["丸亀", "丸溜"], ["多度津", "板津"],
         ["坂出", "坂井出"], ["高松", "高松"], ["児島", "小島"], ["岡山", "岡山"],
-      ].map(([text, sourceText]) => ({
-        text: text!, kind: "station" as const, sourceText: sourceText!, segmentId: 0,
-      })),
+      ].map(([text, sourceText]) => ({ text: text!, kind: "station" as const, sourceText: sourceText! })),
     ]);
 
     expect(guard).toMatchObject({
@@ -451,7 +301,7 @@ describe("two-stage Gemini metadata boundary", () => {
     ]);
 
     expect(checkNormalization(raw, corrected, context.analysis, context.sequences, [{
-      text: "架空中央", kind: "station", sourceText: "戸佐山", segmentId: 0,
+      text: "架空中央", kind: "station", sourceText: "戸佐山",
     }])).toMatchObject({
       accepted: true,
       risk: "medium",
@@ -468,7 +318,7 @@ describe("two-stage Gemini metadata boundary", () => {
       ["戸佐山", "土佐山田"], ["大桶", "大歩危"], ["小戸屋", "琴平"],
     ], ["土佐山田", "大杉", "大歩危", "阿波池田", "琴平"]);
     const normalizedEntities = ["土佐山田", "大杉", "大歩危", "阿波池田", "琴平"]
-      .map((text) => ({ text, kind: "station" as const, sourceText: null, segmentId: 0 }));
+      .map((text) => ({ text, kind: "station" as const, sourceText: null }));
 
     expect(checkNormalization(
       raw,
@@ -507,7 +357,10 @@ describe("two-stage Gemini metadata boundary", () => {
     expect(guard.risk).toBe("high");
     expect(guard.nonEntitySimilarity).toBeLessThan(0.78);
 
-    const fetcher = async (): Promise<Response> => geminiEnvelope(normalizationOutput(raw, corrected));
+    const fetcher = async (): Promise<Response> => geminiEnvelope({
+      normalizedTranscription: corrected,
+      entities: [],
+    });
     const result = await new GeminiMetadataService("secret", "gemini-test", fetcher)
       .normalize(raw, analysis, []);
     expect(result.normalizedTranscription).toBe(raw);
@@ -525,15 +378,16 @@ describe("two-stage Gemini metadata boundary", () => {
     expect(prompt).toContain("候補外の似た中間的名称を独自生成しない");
     expect(prompt).toContain("伊予大津");
 
-    const fetcher = async (): Promise<Response> => geminiEnvelope(normalizationOutput(raw, corrected, [
-      { text: "伊予大洲", kind: "destination", sourceText: "岩大津" },
-    ]));
+    const fetcher = async (): Promise<Response> => geminiEnvelope({
+      normalizedTranscription: corrected,
+      entities: [{ text: "伊予大洲", kind: "destination", sourceText: "岩大津" }],
+    });
     const result = await new GeminiMetadataService("secret", "gemini-test", fetcher)
       .normalize(raw, context.analysis, context.sequences);
 
     expect(result.normalizedTranscription).toBe(corrected);
     expect(result.entities).toEqual([
-      { text: "伊予大洲", kind: "destination", sourceText: "岩大津", segmentId: 0 },
+      { text: "伊予大洲", kind: "destination", sourceText: "岩大津" },
     ]);
     expect(result.normalizationGuard.accepted).toBe(true);
     expect(result.normalizationGuard.unsupportedEntities).toEqual([]);
@@ -548,7 +402,7 @@ describe("two-stage Gemini metadata boundary", () => {
 
   it("does not treat a normalized stop as the recording station", () => {
     const metadata = applyNormalizedEntitiesToMetadata(analysis.metadata, [{
-      text: "伊予大洲", kind: "station", sourceText: "岩大津", segmentId: 0,
+      text: "伊予大洲", kind: "station", sourceText: "岩大津",
     }]);
     expect(metadata).toEqual(analysis.metadata);
   });
@@ -556,9 +410,10 @@ describe("two-stage Gemini metadata boundary", () => {
   it("does not discard useful prose correction for one unsupported entity", async () => {
     const raw = "普通列車、ワンマン、岩大津行きです。電池ブロックまでお下がりください。一両平成です。";
     const corrected = "普通列車、ワンマン、伊予大津行きです。点字ブロックまでお下がりください。一両編成です。";
-    const fetcher = async (): Promise<Response> => geminiEnvelope(normalizationOutput(raw, corrected, [
-      { text: "伊予大津", kind: "destination", sourceText: "岩大津" },
-    ]));
+    const fetcher = async (): Promise<Response> => geminiEnvelope({
+      normalizedTranscription: corrected,
+      entities: [{ text: "伊予大津", kind: "destination", sourceText: "岩大津" }],
+    });
     const result = await new GeminiMetadataService("secret", "gemini-test", fetcher)
       .normalize(raw, analysis, []);
 
