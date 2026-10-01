@@ -3,8 +3,10 @@ import type { LineCandidateSeed, StationRepository } from "./candidate-service";
 import {
   extractStationSearchText,
   normalizeStationName,
+  normalizeKana,
 } from "./normalization";
 import { rankLineEvidence, materializeLineRoutes } from "./line-routes";
+import { stringSimilarity } from "./similarity";
 import {
   comparePathCost,
   enumerateSegmentPaths,
@@ -101,42 +103,57 @@ export class StaticRailwayRepository implements StationRepository {
     surfaceLimit: number,
     phoneticLimit: number,
   ): Promise<{ surface: Station[][]; phonetic: Station[][] }> {
-    const surface: Station[][] = [],
-      phonetic: Station[][] = [];
+    const surface: Station[][] = [];
+    const phonetic: Station[][] = [];
+
     for (let index = 0; index < surfaceTexts.length; index++) {
-      const text = extractStationSearchText(surfaceTexts[index]!);
+      const rawText = surfaceTexts[index]!;
+      const text = extractStationSearchText(rawText);
+
       const exact =
-        this.indexes.byName.get(normalizeStationName(surfaceTexts[index]!)) ??
+        this.indexes.byName.get(normalizeStationName(rawText)) ??
         this.indexes.byLocalizedName.get(
-          normalizeLocalizedStationName(surfaceTexts[index]!),
+          normalizeLocalizedStationName(rawText),
         ) ??
         [];
-      if (exact.length) {
-        surface.push(exact.slice(0, surfaceLimit));
-        phonetic.push([]);
-        continue;
-      }
+
       const pool = new Map(this.containing(text, "name").map((s) => [s.id, s]));
-      for (let start = 0; start < text.length; start++)
+
+      for (const station of exact) {
+        pool.set(station.id, station);
+      }
+
+      for (let start = 0; start < text.length; start++) {
         for (
           let end = start + 1;
           end <= Math.min(text.length, start + 32);
           end++
-        )
-          for (const s of this.indexes.byAdjacent.get(text.slice(start, end)) ??
-            [])
-            pool.set(s.id, s);
-      for (const name of [context.previousStation, context.nextStation])
-        if (name)
-          for (const s of this.indexes.byAdjacent.get(name) ?? [])
-            pool.set(s.id, s);
+        ) {
+          for (const station of this.indexes.byAdjacent.get(
+            text.slice(start, end),
+          ) ?? []) {
+            pool.set(station.id, station);
+          }
+        }
+      }
+
+      for (const name of [context.previousStation, context.nextStation]) {
+        if (!name) continue;
+
+        for (const station of this.indexes.byAdjacent.get(name) ?? []) {
+          pool.set(station.id, station);
+        }
+      }
+
       const candidates = [...pool.values()]
         .filter((station) => {
           const name = this.indexes.byId.get(station.id)!.normalizedName;
+
           return (
             text &&
             (text.includes(name) ||
               name.includes(text) ||
+              exact.some((exactStation) => exactStation.id === station.id) ||
               (station.prevStation && text.includes(station.prevStation)) ||
               (station.nextStation && text.includes(station.nextStation)) ||
               (context.lineName &&
@@ -177,39 +194,45 @@ export class StaticRailwayRepository implements StationRepository {
             a.id - b.id,
         )
         .slice(0, surfaceLimit);
+
       surface.push(candidates);
+
       const hint = phoneticHints[index];
-      if (!hint || candidates.length) {
+      if (!hint) {
         phonetic.push([]);
         continue;
       }
-      const reading = extractStationSearchText(hint);
-      phonetic.push(
-        this.containing(reading, "kana")
-          .filter((station) => {
-            const kana = this.indexes.byId.get(station.id)!.normalizedKana;
-            return (
-              kana &&
-              (reading.includes(kana) ||
-                kana.includes(reading) ||
-                kana.startsWith(reading.slice(0, 2)))
-            );
-          })
-          .sort((a, b) => {
-            const left = this.indexes.byId.get(a.id)!.normalizedKana!,
-              right = this.indexes.byId.get(b.id)!.normalizedKana!;
-            return (
-              Number(reading.includes(right)) -
-                Number(reading.includes(left)) ||
-              Math.abs(left.length - reading.length) -
-                Math.abs(right.length - reading.length) ||
-              a.id - b.id
-            );
-          })
-          .slice(0, phoneticLimit),
-      );
+
+      const reading = normalizeKana(extractStationSearchText(hint));
+
+      const phoneticCandidates = [...this.indexes.byId.values()]
+        .map((station) => {
+          const kana = station.normalizedKana;
+
+          return {
+            station,
+            similarity:
+              kana == null ? 0 : stringSimilarity(reading, normalizeKana(kana)),
+          };
+        })
+        .filter(({ similarity }) => similarity >= 0.6)
+        .sort(
+          (a, b) =>
+            b.similarity - a.similarity ||
+            Math.abs((a.station.normalizedKana?.length ?? 0) - reading.length) -
+              Math.abs(
+                (b.station.normalizedKana?.length ?? 0) - reading.length,
+              ) ||
+            a.station.id - b.station.id,
+        )
+        .slice(0, phoneticLimit)
+        .map(({ station }) => station);
+
+      phonetic.push(phoneticCandidates);
     }
+
     this.rowsReturned += surface.flat().length + phonetic.flat().length;
+
     return {
       surface: surface.map((pool) => pool.map(publicStation)),
       phonetic: phonetic.map((pool) => pool.map(publicStation)),
