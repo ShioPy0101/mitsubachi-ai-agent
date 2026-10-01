@@ -57,7 +57,7 @@ describe("owner-only demo", () => {
       DB: localEnv.DB,
     });
 
-    expect(await response.json()).toEqual({ type: 5 });
+    expect(await response.json()).toEqual({ type: 5, data: { flags: 64 } });
     expect(send).toHaveBeenCalledWith(
       { jobId: expect.any(String) },
       { contentType: "json" },

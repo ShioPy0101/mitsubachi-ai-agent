@@ -117,9 +117,32 @@ describe("DiscordRestClient", () => {
         body: JSON.stringify({
           content: "debug",
           allowed_mentions: { parse: [] },
+          flags: 64,
         }),
       },
     );
+  });
+
+  it("keeps diagnostic file followups ephemeral", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue(new Response("{}", { status: 200 }));
+    const client = new DiscordRestClient(
+      "bot-token",
+      "application-id",
+      fetcher,
+    );
+    await client.sendInteractionFollowup("interaction-token", "debug file", {
+      data: new ArrayBuffer(1),
+      filename: "debug.md",
+      contentType: "text/markdown",
+    });
+    const request = fetcher.mock.calls[0]![1] as RequestInit;
+    const form = request.body as FormData;
+    expect(JSON.parse(String(form.get("payload_json")))).toMatchObject({
+      flags: 64,
+      attachments: [{ id: 0, filename: "debug.md" }],
+    });
   });
 
   it("creates and edits a channel message with Discord components", async () => {
