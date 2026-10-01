@@ -39,9 +39,9 @@ const metadata = {
   departureTime: null,
   arrivalTime: null,
   platform: null,
-  nextStation: null,
+  nextStation: "安雪",
   category: "general_information" as const,
-  summary: "停車駅案内",
+  summary: "次は安雪を含む停車駅案内",
 };
 const mentions = ["篠原", "安雪", "守山"].map((text) => ({
   text,
@@ -109,6 +109,11 @@ describe("fresh local D1 and queue pipeline with fake providers", () => {
               ? { isTransitAnnouncement: true, mentions, ...metadata }
               : {
                   normalizedTranscription: normalized,
+                  metadata: {
+                    ...metadata,
+                    nextStation: "野洲",
+                    summary: "次は野洲を含む停車駅案内",
+                  },
                   normalizedEvents: [
                     {
                       sourceEventId: "missing-debug-id",
@@ -201,14 +206,23 @@ describe("fresh local D1 and queue pipeline with fake providers", () => {
         ),
       ).toEqual(["speech-segment:0", "speech-segment:1"]);
       const clip = await env.DB.prepare(
-        "SELECT raw_transcription,normalized_transcription FROM railway_audio_clips WHERE job_id=?",
+        "SELECT raw_transcription,normalized_transcription,next_station,summary,generated_filename FROM railway_audio_clips WHERE job_id=?",
       )
         .bind(job.id)
         .first();
       expect(clip).toMatchObject({
         raw_transcription: raw,
         normalized_transcription: normalized,
+        next_station: "野洲",
+        summary: "次は野洲を含む停車駅案内",
       });
+      expect(String(clip?.generated_filename)).toContain("次は野洲");
+      expect(String(clip?.generated_filename)).not.toContain("安雪");
+      expect(
+        delivered.some((content) =>
+          content.includes("次は野洲を含む停車駅案内"),
+        ),
+      ).toBe(true);
       expect(delivered.some((content) => content.includes(normalized))).toBe(
         true,
       );

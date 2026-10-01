@@ -164,9 +164,140 @@ describe("raw semantic normalized layers", () => {
 });
 
 import { assembleResult } from "../src/pipeline/result-assembly";
+import { assembleNormalizedMetadata } from "../src/railway/result-metadata";
 import { StationCorrectionEngine } from "../src/stations/correction-engine";
 import { StaticRailwayRepository } from "../src/stations/static-repository";
 import { railwayIndexes } from "../src/stations/static-data";
+describe("metadata derived from the normalized document", () => {
+  const source = "サンダーバード17号、和倉温泉行きです。次は鶴ヶです。";
+  const mention = {
+    id: "mention:26:28",
+    text: "鶴ヶ",
+    start: source.indexOf("鶴ヶ"),
+    end: source.indexOf("鶴ヶ") + 2,
+    role: "stop" as const,
+    sequenceId: 1,
+    phoneticHint: "つるが",
+  };
+  const draft: AnnouncementAnalysis = {
+    isTransitAnnouncement: true,
+    mentions: [mention],
+    metadata: {
+      ...metadata,
+      trainName: "サンダーバード",
+      trainNumber: "17号",
+      trainType: "特急",
+      destination: "和倉温泉",
+      departureTime: "11:10",
+      platform: "0番乗り場",
+      nextStation: "鶴ヶ",
+      summary: "鶴ヶに停車する特急",
+    },
+  };
+  it("uses Gemini #2 metadata for the filename and summary even when entities are absent", async () => {
+    const finalText = source.replace("鶴ヶ", "敦賀");
+    const finalMetadata = {
+      ...draft.metadata,
+      nextStation: "敦賀",
+      summary: "敦賀に停車する特急",
+    };
+    const normalized = await new GeminiMetadataService(
+      "key",
+      "test",
+      async () =>
+        envelope({
+          normalizedTranscription: finalText,
+          metadata: finalMetadata,
+          entities: [],
+        }),
+    ).normalize(source, draft, []);
+    const correction = await new StationCorrectionEngine(
+      () => new StaticRailwayRepository(railwayIndexes),
+    ).run({ transcription: source, mentions: draft.mentions, context: {} });
+    const result = assembleResult(draft, correction, normalized, "source.mp3");
+    expect(result.filename).toBe(
+      "サンダーバード_17号_特急_和倉温泉行き_11時10分発_0番乗り場_次は敦賀.mp3",
+    );
+    expect(result.metadata.summary).toBe("敦賀に停車する特急");
+    expect(normalized.normalizedTranscription).toBe(finalText);
+    expect(draft.metadata.nextStation).toBe("鶴ヶ");
+    expect(draft.metadata.summary).toBe("鶴ヶに停車する特急");
+  });
+  it("maps an older response without IDs into matching nextStation and summary fields", () => {
+    const result = assembleNormalizedMetadata(
+      draft,
+      undefined,
+      [{ kind: "station", sourceText: "鶴ヶ", text: "敦賀" }],
+      null,
+    );
+    expect(result.nextStation).toBe("敦賀");
+    expect(result.summary).toBe("敦賀に停車する特急");
+  });
+  it("does not apply unrelated entities or invalid occurrence IDs to draft metadata", () => {
+    const result = assembleNormalizedMetadata(
+      draft,
+      undefined,
+      [
+        {
+          kind: "train_name",
+          sourceMentionId: mention.id,
+          sourceText: "鶴ヶ",
+          text: "東京",
+        },
+        {
+          kind: "station",
+          sourceMentionId: "missing",
+          sourceText: "鶴ヶ",
+          text: "東京",
+        },
+      ],
+      null,
+    );
+    expect(result.nextStation).toBe("鶴ヶ");
+    expect(result.summary).toBe(draft.metadata.summary);
+  });
+  it("honours explicit nulls in final metadata instead of restoring old values", () => {
+    const result = assembleNormalizedMetadata(
+      draft,
+      { nextStation: null, summary: null, trainNumber: null },
+      [
+        {
+          kind: "station",
+          sourceMentionId: mention.id,
+          sourceText: "鶴ヶ",
+          text: "敦賀",
+        },
+      ],
+      null,
+    );
+    expect(result.nextStation).toBeNull();
+    expect(result.summary).toBeNull();
+    expect(result.trainNumber).toBeNull();
+  });
+  it("keeps successful prose when auxiliary metadata is malformed", async () => {
+    const finalText = source.replace("鶴ヶ", "敦賀");
+    const normalized = await new GeminiMetadataService(
+      "key",
+      "test",
+      async () =>
+        envelope({
+          normalizedTranscription: finalText,
+          metadata: { nextStation: 42 },
+          entities: [],
+        }),
+    ).normalize(source, draft, []);
+    expect(normalized.normalizedTranscription).toBe(finalText);
+    expect(normalized.normalizationObservation.outcome).toBe("generated");
+  });
+  it("asks for final metadata and a summary based on the corrected document", () => {
+    expect(buildGeminiNormalizationPrompt(source, draft, [])).toContain(
+      "入力のmetadataは補正前の下書き",
+    );
+    expect(buildGeminiNormalizationPrompt(source, draft, [])).toContain(
+      "summaryも補正後の名称",
+    );
+  });
+});
 it("maps metadata by stable occurrence ID rather than exact entity sourceText", async () => {
   const mention = {
     id: "mention:0:2",
