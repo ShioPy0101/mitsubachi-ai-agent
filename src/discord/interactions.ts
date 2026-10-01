@@ -97,9 +97,11 @@ export function parsePlatformCommand(
   };
 }
 
-export const deferredResponse = (): Response => Response.json({ type: 5 });
+export const deferredResponse = (): Response =>
+  Response.json({ type: 5, data: { flags: EPHEMERAL_MESSAGE_FLAG } });
 
 export const ephemeralErrorResponse = (content: string): Response =>
-  Response.json({ type: 4, data: { content, flags: 64 } });
+  Response.json({ type: 4, data: { content, flags: EPHEMERAL_MESSAGE_FLAG } });
 
 export const ephemeralMessageResponse = ephemeralErrorResponse;
+import { EPHEMERAL_MESSAGE_FLAG } from "./message-flags";
