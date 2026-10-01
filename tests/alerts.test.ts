@@ -6,7 +6,9 @@ import {
 } from "../src/jobs/station-observability";
 import type { StationSequenceMetrics } from "../src/stations/candidate-service";
 
-const metrics = (overrides: Partial<StationSequenceMetrics> = {}): StationSequenceMetrics => ({
+const metrics = (
+  overrides: Partial<StationSequenceMetrics> = {},
+): StationSequenceMetrics => ({
   mentions: 7,
   surfaceCandidateCount: 12,
   phoneticCandidateCount: 2,
@@ -88,15 +90,20 @@ describe("audio job alerts", () => {
     expect(detail).toContain("最遅 #5 61ms/D1 3");
     expect(stationCandidatePerformanceWarning(normal, 80)).toBeNull();
 
-    const slow = [{ id: 6, metrics: metrics({
-      totalMs: 12_000,
-      d1QueryCount: 18,
-      alignmentComparisonCount: 150_000,
-      graphSearchCount: 1,
-      fallbackExecuted: true,
-    }) }];
+    const slow = [
+      {
+        id: 6,
+        metrics: metrics({
+          totalMs: 12_000,
+          d1QueryCount: 18,
+          alignmentComparisonCount: 150_000,
+          graphSearchCount: 1,
+          fallbackExecuted: true,
+        }),
+      },
+    ];
     expect(stationCandidatePerformanceWarning(slow, 12_500)).toContain(
-      "sequence=6 total=12000ms mentions=7 D1=18 graph=1 fallback=true hypotheses=2 alignment=150000",
+      "sequence=6 total=12000ms mentions=7 D1=18 rowsRead=unavailable candidate=5ms line=8ms graphMs=0ms graph=1 fallback=true hypotheses=2 alignment=150000",
     );
   });
 });

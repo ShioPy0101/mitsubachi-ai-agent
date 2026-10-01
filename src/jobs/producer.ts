@@ -1,12 +1,18 @@
-import type { AudioJob, AudioJobMessage, DemoAudioJobMessage, NewAudioJob } from "./types";
+import type { AudioJob, AudioJobMessage, NewAudioJob } from "./types";
 
 export interface JobStore {
-  create(input: NewAudioJob, now: string): Promise<{ job: AudioJob; created: boolean }>;
+  create(
+    input: NewAudioJob,
+    now: string,
+  ): Promise<{ job: AudioJob; created: boolean }>;
   removeAfterEnqueueFailure(id: string): Promise<void>;
 }
 
 export interface JobQueue {
-  send(message: AudioJobMessage, options: { contentType: "json" }): Promise<unknown>;
+  send(
+    message: AudioJobMessage,
+    options: { contentType: "json" },
+  ): Promise<unknown>;
 }
 
 export class JobProducer {
@@ -15,7 +21,10 @@ export class JobProducer {
     private readonly queue: JobQueue,
   ) {}
 
-  async createAndEnqueue(input: NewAudioJob, now: string): Promise<{ job: AudioJob; created: boolean }> {
+  async createAndEnqueue(
+    input: NewAudioJob,
+    now: string,
+  ): Promise<{ job: AudioJob; created: boolean }> {
     const result = await this.jobs.create(input, now);
     if (!result.created) return result;
     try {
@@ -25,13 +34,5 @@ export class JobProducer {
       throw error;
     }
     return result;
-  }
-}
-
-export class DemoJobProducer {
-  constructor(private readonly queue: JobQueue) {}
-
-  async enqueue(message: DemoAudioJobMessage): Promise<void> {
-    await this.queue.send(message, { contentType: "json" });
   }
 }
