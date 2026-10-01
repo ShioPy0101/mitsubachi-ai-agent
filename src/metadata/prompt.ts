@@ -11,10 +11,16 @@ export type StopSequenceContext = {
   routeHypotheses: readonly RoutePathCandidate[];
 };
 
+export type NormalizationInputSegment = {
+  segmentId: number;
+  text: string;
+};
+
 export function buildGeminiNormalizationPrompt(
   transcription: string,
   analysis: AnnouncementAnalysis,
   sequences: readonly StopSequenceContext[],
+  segments: readonly NormalizationInputSegment[] = [{ segmentId: 0, text: transcription }],
 ): string {
   const structure = {
     mentions: analysis.mentions,
@@ -78,13 +84,22 @@ export function buildGeminiNormalizationPrompt(
     }),
   };
 
-  return `あなたは公共交通案内の文字起こし補正器です。
+  return `あなたは公共交通案内のsegment単位文字起こし補正器です。
 
-Gemini #1が抽出した意味構造と、アプリが役割別sequenceごとに検索した駅・経路候補を参考に、normalizedTranscriptionを生成してください。
-文章全体について、音声認識由来の文法的な崩れ、重複、不自然な助詞、語尾、文の切れ方、時刻表現、句読点は、原意を変えない範囲で自然な駅放送へ補正して構いません。
-各言語を元の言語のまま、放送順を維持してください。知識による情報の追加は禁止です。
+Gemini #1が抽出した意味構造と、アプリが役割別sequenceごとに検索した駅・経路候補を参考に、入力segmentsを1件ずつ正規化してください。
+入力には日本語・英語など複数言語の鉄道放送が混在します。同じ案内内容が別言語で繰り返されていても、それぞれ独立した発話として保持してください。
+翻訳して一方へ統合せず、要約や重複排除をせず、元言語のまま正規化してください。
+各segmentについて、音声認識由来の文法的な崩れ、不自然な助詞、語尾、文の切れ方、時刻表現、句読点は、原意を変えない範囲で補正して構いません。知識による情報の追加は禁止です。
 
 厳守事項:
+- 入力segmentと出力segmentをsegmentIdで厳密に1:1対応させ、全件を必ず返す
+- segmentを並べ替えない、結合しない、分割しない、削除しない
+- 内容の重複、別言語での同内容、冗長さ、放送としての自然さを理由にsegmentを削除しない
+- sourceTextは入力segmentのtextを一字も変えずコピーする
+- normalizedTextは元言語を維持する。英語を日本語へ翻訳するなど、別言語へ変換しない
+- 復元不能なsegmentはnormalizedText=null、quality=unintelligibleとし、sourceTextは必ず保持する
+- qualityはnormal、corrected、uncertain、unintelligibleのいずれか
+- languageは可能ならja、en等を返し、判断不能ならnullにする
 - 駅候補・経路仮説は補正を支持する「証拠」であり、採用必須の制約や答えではない
 - 高スコアの経路仮説でも、音声認識結果と矛盾する場合は無理に採用しない
 - 経路情報だけを根拠に駅名を新規追加しない
@@ -104,19 +119,19 @@ Gemini #1が抽出した意味構造と、アプリが役割別sequenceごとに
 - routeSupported=falseの候補や候補外の駅名で、崩れた駅名列を組み立てない
 - exact matchでも、同じsequenceの経路順と矛盾する場合は絶対的な正解として扱わない
 - 長距離で接続可能なだけの経路、長大な迂回経路、乗換の多い経路を補正根拠にしない
-- 候補が不十分、役割が不明、または確信が持てない箇所は元のtranscriptionを維持する
+- 候補が不十分、役割が不明、または確信が持てない箇所は対応する入力segmentの表記を維持する
 - 判断できない固有名詞は元の表記を維持する
-- normalizedTranscriptionは空にしない
-- entitiesには、normalizedTranscriptionに出現する駅名・路線名・列車名・列車種別・行先・その他の固有名詞を出現順で漏れなく返す
-- entities.textはnormalizedTranscriptionに実在する連続部分にする
-- normalizedTranscriptionで補正した固有名詞とentities.textは必ず同じ正式表記にする
-- 元のtranscription内の文字列を補正した固有名詞はsourceTextに元文字列を返し、元文字列がない場合だけnullにする
-- 同じ言語の同一案内が連続して完全に繰り返される場合だけ1回へまとめてよい。異なる言語や内容差のある繰り返しは残す
+- entitiesには、各segment由来の駅名・路線名・列車名・列車種別・行先・その他の固有名詞をsegment順・出現順で漏れなく返す
+- entities.sourceTextは対応する入力segmentに実在する連続部分にする
+- entities.textは正規化後の名称にする。英語segmentのTsurugaを駅候補から敦賀と十分に同定できる場合も、normalizedTextは英語のまま保ち、entityだけtext=敦賀、sourceText=Tsurugaとしてよい
+- entities.segmentIdは、そのentityが由来する入力segmentIdにする
+- normalizedText内で固有名詞を補正した場合、その表記と対応するentities.textを一致させる
+- 入力segment内の文字列を補正した固有名詞はsourceTextに元文字列を返し、元文字列がない場合だけnullにする
 
 局所的で確実な補正例:
 - 「鶴ヶ方面」→「敦賀方面」
 - 「黄色い展示ブロック」→「黄色い点字ブロック」
 
 入力:
-${JSON.stringify({ transcription, structure })}`;
+${JSON.stringify({ segments, structure })}`;
 }

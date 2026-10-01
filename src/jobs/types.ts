@@ -1,3 +1,5 @@
+import type { TranscriptionSegment } from "../transcription/service";
+
 export const jobStatuses = [
   "pending",
   "queued",
@@ -48,6 +50,7 @@ export type AudioJob = {
   status: JobStatus;
   errorMessage: string | null;
   transcriptionText: string | null;
+  transcriptionSegments: TranscriptionSegment[] | null;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;

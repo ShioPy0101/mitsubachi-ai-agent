@@ -12,15 +12,12 @@ export const whisperModel = "@cf/openai/whisper-large-v3-turbo" as const;
 export const whisperSettings = {
   task: "transcribe",
   vad_filter: true,
+
   initial_prompt: railwayAnnouncementPrompt,
 } as const;
 
 export interface WhisperAiRunner {
-  run(
-    model: "@cf/openai/whisper-large-v3-turbo",
-    input: Ai_Cf_Openai_Whisper_Large_V3_Turbo_Input,
-    options?: { signal?: AbortSignal },
-  ): Promise<unknown>;
+  run(model: "@cf/openai/whisper-large-v3-turbo", input: Ai_Cf_Openai_Whisper_Large_V3_Turbo_Input, options?: { signal?: AbortSignal }): Promise<unknown>;
 }
 
 function encodeBase64(buffer: ArrayBuffer): string {
@@ -39,8 +36,9 @@ function normalizedContentType(contentType: string | null): string {
 
 export function isMp3TranscriptionInput(input: TranscriptionInput): boolean {
   const type = normalizedContentType(input.contentType);
-  return ["audio/mpeg", "audio/mp3", "audio/x-mp3", "audio/x-mpeg", "audio/mpeg3", "audio/x-mpeg-3"].includes(type)
-    || input.filename.toLowerCase().endsWith(".mp3");
+  return (
+    ["audio/mpeg", "audio/mp3", "audio/x-mp3", "audio/x-mpeg", "audio/mpeg3", "audio/x-mpeg-3"].includes(type) || input.filename.toLowerCase().endsWith(".mp3")
+  );
 }
 
 function errorMessage(error: unknown): string {
@@ -48,9 +46,7 @@ function errorMessage(error: unknown): string {
 }
 
 export function isWorkersAiAudioDecodeError(error: unknown): boolean {
-  const code = typeof error === "object" && error !== null && "code" in error
-    ? String((error as { code?: unknown }).code)
-    : "";
+  const code = typeof error === "object" && error !== null && "code" in error ? String((error as { code?: unknown }).code) : "";
   const message = errorMessage(error).toLowerCase();
   return code === "3030" || message.includes("3030") || message.includes("failed to decode audio file");
 }
@@ -58,8 +54,8 @@ export function isWorkersAiAudioDecodeError(error: unknown): boolean {
 export class WhisperAudioDecodeError extends Error {
   constructor(initialError: unknown, rebuiltError: unknown) {
     super(
-      "MP3の原本とフレーム再構成後の両方をWhisperがデコードできませんでした。"
-      + ` original=${errorMessage(initialError)}; rebuilt=${errorMessage(rebuiltError)}`,
+      "MP3の原本とフレーム再構成後の両方をWhisperがデコードできませんでした。" +
+        ` original=${errorMessage(initialError)}; rebuilt=${errorMessage(rebuiltError)}`,
     );
     this.name = "WhisperAudioDecodeError";
   }
@@ -78,10 +74,14 @@ export class CloudflareWhisperTranscriptionService implements TranscriptionServi
   ) {}
 
   private async run(audio: ArrayBuffer, signal?: AbortSignal): Promise<TranscriptionResult> {
-    const output = await this.ai.run(whisperModel, {
-      audio: encodeBase64(audio),
-      ...whisperSettings,
-    }, { ...(signal === undefined ? {} : { signal }) });
+    const output = await this.ai.run(
+      whisperModel,
+      {
+        audio: encodeBase64(audio),
+        ...whisperSettings,
+      },
+      { ...(signal === undefined ? {} : { signal }) },
+    );
     const parsed = WorkersAiWhisperResponseSchema.parse(output);
     return {
       language: parsed.transcription_info?.language ?? null,
