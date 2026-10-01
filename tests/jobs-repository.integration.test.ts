@@ -40,6 +40,7 @@ describe("D1 audio job timeout handling", () => {
   it("finds only active jobs whose effective start is older than the cutoff", async () => {
     await insertJob("stale-running", "transcribing", "2026-09-30T07:00:00.000Z", "2026-09-30T07:10:00.000Z");
     await insertJob("fresh-running", "transcribing", "2026-09-30T07:00:00.000Z", "2026-09-30T07:50:00.000Z");
+    await insertJob("fresh-space-format", "transcribing", "2026-09-30 07:00:00", "2026-09-30 07:50:00");
     await insertJob("stale-complete", "completed", "2026-09-30T07:00:00.000Z", "2026-09-30T07:10:00.000Z");
 
     const stale = await new JobsRepository(env.DB).findStaleActive("2026-09-30T07:45:00.000Z");
@@ -51,10 +52,14 @@ describe("D1 audio job timeout handling", () => {
     const repository = new JobsRepository(env.DB);
     await insertJob("stale", "transcribing", "2026-09-30T07:00:00.000Z", "2026-09-30T07:10:00.000Z");
 
-    await expect(repository.failIfActive("stale", "processing_timeout", "2026-09-30T08:00:00.000Z"))
+    await expect(repository.failIfStaleActive(
+      "stale", "2026-09-30T07:45:00.000Z", "processing_timeout", "2026-09-30T08:00:00.000Z",
+    ))
       .resolves.toBe(true);
     await expect(repository.isActive("stale")).resolves.toBe(false);
-    await expect(repository.failIfActive("stale", "processing_timeout", "2026-09-30T08:01:00.000Z"))
+    await expect(repository.failIfStaleActive(
+      "stale", "2026-09-30T07:45:00.000Z", "processing_timeout", "2026-09-30T08:01:00.000Z",
+    ))
       .resolves.toBe(false);
     await repository.updateStatus("stale", "completed");
 
@@ -62,6 +67,20 @@ describe("D1 audio job timeout handling", () => {
       status: "failed",
       errorMessage: "processing_timeout",
       completedAt: "2026-09-30T08:00:00.000Z",
+    });
+  });
+
+  it("rechecks the cutoff atomically before changing an active job", async () => {
+    const repository = new JobsRepository(env.DB);
+    await insertJob("fresh", "metadata_extracting", "2026-09-30T07:49:00.000Z", "2026-09-30T07:50:00.000Z");
+
+    await expect(repository.failIfStaleActive(
+      "fresh", "2026-09-30T07:45:00.000Z", "processing_timeout", "2026-09-30T08:00:00.000Z",
+    )).resolves.toBe(false);
+    await expect(repository.findById("fresh")).resolves.toMatchObject({
+      status: "metadata_extracting",
+      errorMessage: null,
+      completedAt: null,
     });
   });
 });
