@@ -50,12 +50,12 @@ describe("owner-only demo", () => {
     });
     expect(send).toHaveBeenCalledOnce();
     expect(
-      (
-        await new JobsRepository(localEnv.DB).findByInteractionId(
-          demoCommand.interactionId,
-        )
-      )?.status,
-    ).toBe("queued");
+      await localEnv.DB.prepare(
+        "SELECT status FROM audio_jobs WHERE interaction_id = ?",
+      )
+        .bind(demoCommand.interactionId)
+        .first(),
+    ).toEqual({ status: "queued" });
   });
   it("rejects an unconfigured user before enqueueing any processing", async () => {
     const send = vi.fn();
