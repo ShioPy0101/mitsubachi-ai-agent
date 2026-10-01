@@ -17,6 +17,7 @@ export type SequenceRole = (typeof sequenceRoles)[number];
 
 export type StationMention = {
   text: string;
+  reading?: string | null;
   start: number | null;
   end: number | null;
   role: StationMentionRole;

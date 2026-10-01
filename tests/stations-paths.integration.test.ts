@@ -1,7 +1,11 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
 import { D1StationsRepository } from "../src/db/stations-repository";
-import { StationCandidateService } from "../src/stations/candidate-service";
+import {
+  StationCandidateService,
+  updateStationMentionBindings,
+} from "../src/stations/candidate-service";
+import type { Station } from "../src/stations/types";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv {
@@ -29,13 +33,19 @@ const schema = [
   )`,
 ];
 
-async function station(id: number, name: string, line: string, prefecture = "テスト県"): Promise<void> {
+async function station(
+  id: number,
+  name: string,
+  line: string,
+  prefecture = "テスト県",
+  kana = name,
+): Promise<void> {
   await env.DB.prepare(`
     INSERT INTO stations (
       id, name, kana, kana_source, operator_name, line_name, prefecture,
       prev_station, next_station, longitude, latitude, postal, normalized_name, normalized_kana
     ) VALUES (?, ?, ?, NULL, 'テスト鉄道', ?, ?, NULL, NULL, ?, ?, ?, ?, ?)
-  `).bind(id, name, name, line, prefecture, id, id, `${id}`, name, name).run();
+  `).bind(id, name, kana, line, prefecture, id, id, `${id}`, name, kana).run();
 }
 
 async function segment(lineId: string, stationIds: readonly number[]): Promise<void> {
@@ -246,6 +256,98 @@ describe("D1 ordered station paths", () => {
       .toBeGreaterThan(
         diagnostics.mentionCandidates[6]?.find(({ station: value }) => value.name === "半田")?.finalScore ?? 0,
       );
+  });
+
+  it("keeps a sufficiently resolved raw mention bound across later sequences", async () => {
+    await Promise.all([
+      station(1, "河和口", "名鉄河和線", "愛知県"),
+      station(2, "富貴", "名鉄河和線", "愛知県"),
+      station(3, "知多武豊", "名鉄河和線", "愛知県"),
+      station(4, "上ゲ", "名鉄河和線", "愛知県"),
+      station(5, "青山", "名鉄河和線", "愛知県"),
+      station(6, "成岩", "名鉄河和線", "愛知県"),
+      station(7, "知多半田", "名鉄河和線", "愛知県"),
+      station(20, "松江", "一畑電車北松江線", "島根県"),
+      station(21, "雲州平田", "一畑電車北松江線", "島根県"),
+      station(22, "出雲市", "一畑電車北松江線", "島根県"),
+    ]);
+    await segment("meitetsu-kowa", [1, 2, 3, 4, 5, 6, 7]);
+    await segment("ichibata", [20, 21, 22]);
+    const service = new StationCandidateService(new D1StationsRepository(env.DB));
+    const bindings = new Map<string, Station>();
+
+    const first = await service.analyzeMentions([
+      "神話口", "福岐", "千田竹豊", "上", "青山", "奈良", "千田半田",
+    ]);
+    updateStationMentionBindings(bindings, first);
+    expect(bindings.get("千田半田")?.name).toBe("知多半田");
+
+    const later = await service.analyzeMentions(
+      ["松江", "千田半田", "出雲市"],
+      {},
+      { bindings },
+    );
+    expect(later.mentionCandidates[1]?.[0]).toMatchObject({
+      station: { name: "知多半田" },
+      bound: true,
+      matchStrength: "hard",
+    });
+    expect(later.mentionCandidates[1]?.[0]?.station.name).not.toBe("雲州平田");
+  });
+
+  it("uses an inferred reading only as route-supported candidate rescue", async () => {
+    await Promise.all([
+      station(1, "篠原", "JR琵琶湖線", "滋賀県", "しのはら"),
+      station(2, "野洲", "JR琵琶湖線", "滋賀県", "やす"),
+      station(3, "守山", "JR琵琶湖線", "滋賀県", "もりやま"),
+    ]);
+    await segment("biwako", [1, 2, 3]);
+
+    const diagnostics = await new StationCandidateService(new D1StationsRepository(env.DB)).analyzeMentions(
+      ["篠原", "安雪", "守山"],
+      {},
+      { mentionReadings: [null, "やすゆき", null] },
+    );
+
+    expect(diagnostics.mentionCandidates[1]?.[0]).toMatchObject({
+      station: { name: "野洲" },
+      routeHypothesisIds: [0],
+      bound: false,
+    });
+    expect(diagnostics.mentionCandidates[1]?.[0]?.phoneticSimilarity).toBe(1);
+    expect(diagnostics.mentionCandidates[1]?.[0]?.nameSimilarity).toBeLessThan(0.5);
+
+    const unrelatedEnding = await new StationCandidateService(new D1StationsRepository(env.DB)).analyzeMentions(
+      ["篠原", "安雪", "守山"],
+      {},
+      { mentionReadings: [null, "やすのり", null] },
+    );
+    expect(unrelatedEnding.mentionCandidates[1]?.[0]?.station.name).toBe("野洲");
+    expect(unrelatedEnding.mentionCandidates[1]?.[0]?.routeHypothesisIds).toEqual([0]);
+  });
+
+  it("does not bind a phonetic-only station when the matched route contradicts it", async () => {
+    await Promise.all([
+      station(1, "始点", "案内線", "テスト県", "してん"),
+      station(2, "中間", "案内線", "テスト県", "ちゅうかん"),
+      station(3, "終点", "案内線", "テスト県", "しゅうてん"),
+      station(20, "野洲", "別路線", "滋賀県", "やす"),
+    ]);
+    await segment("guide", [1, 2, 3]);
+    await segment("unrelated-yasu", [20]);
+    const diagnostics = await new StationCandidateService(new D1StationsRepository(env.DB)).analyzeMentions(
+      ["始点", "安雪", "終点"],
+      {},
+      { mentionReadings: [null, "やすゆき", null] },
+    );
+    const yasu = diagnostics.mentionCandidates[1]?.find(({ station: value }) => value.name === "野洲");
+    const bindings = new Map<string, Station>();
+    updateStationMentionBindings(bindings, diagnostics);
+
+    expect(yasu).toMatchObject({ routeHypothesisIds: [], bound: false });
+    expect(yasu?.phoneticSimilarity).toBe(1);
+    expect(yasu?.finalScore).toBeLessThan(0.2);
+    expect(bindings.has("安雪")).toBe(false);
   });
 
   it("uses a direction sequence and destination context to rank 久保川 → 窪川", async () => {

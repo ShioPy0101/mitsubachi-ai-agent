@@ -94,6 +94,8 @@ function routeSupportedSequence(
         station: stations[index]!,
         nameSimilarity: raw === stations[index]!.name ? 1 : 0.45,
         kanaSimilarity: raw === stations[index]!.name ? 1 : 0.45,
+        phoneticSimilarity: 0,
+        bound: false,
         lexicalScore: raw === stations[index]!.name ? 1 : 0.45,
         matchStrength: raw === stations[index]!.name ? "hard" : "soft",
         routeHypothesisIds: [0],

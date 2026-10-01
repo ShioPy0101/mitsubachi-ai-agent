@@ -30,6 +30,8 @@ export interface StationRepository {
 export type SequenceSearchOptions = {
   sequenceRole?: SequenceRole;
   destinationContext?: boolean;
+  mentionReadings?: readonly (string | null)[];
+  bindings?: ReadonlyMap<string, Station>;
 };
 
 export type StationCandidateDiagnostics = {
@@ -110,21 +112,36 @@ function mentionIndex(station: Station, transcription: string): number {
   return Math.min(nameIndex, kanaIndex);
 }
 
-function lexicalSimilarities(mention: string, station: Station): {
+function lexicalSimilarities(mention: string, station: Station, inferredReading?: string | null): {
   nameSimilarity: number;
   kanaSimilarity: number;
+  phoneticSimilarity: number;
   lexicalSimilarity: number;
 } {
   const nameSimilarity = stationNameSimilarity(mention, station.name);
   const kanaSimilarity = stationKanaSimilarity(mention, station.kana);
-  return { nameSimilarity, kanaSimilarity, lexicalSimilarity: Math.max(nameSimilarity, kanaSimilarity) };
+  const phoneticSimilarity = inferredReading == null ? 0 : stationKanaSimilarity(inferredReading, station.kana);
+  return {
+    nameSimilarity,
+    kanaSimilarity,
+    phoneticSimilarity,
+    // An inferred reading can rescue a candidate, but cannot become as strong as
+    // direct surface or kana evidence by itself.
+    lexicalSimilarity: Math.max(nameSimilarity, kanaSimilarity, phoneticSimilarity * 0.5),
+  };
+}
+
+export function stationMentionBindingKey(rawMention: string): string {
+  return normalizeStationName(rawMention);
 }
 
 function alignMentionsToRoute(
   mentionTexts: readonly string[],
+  mentionReadings: readonly (string | null)[],
   route: RoutePathCandidate,
   source: "anchor" | "sequence_fallback",
   hardAnchorNamesByMention: readonly ReadonlySet<string>[],
+  boundNamesByMention: readonly (string | null)[],
   maximumStationGap = 4,
 ): RoutePathCandidate | null {
   if (mentionTexts.length < 2 || route.stations.length < mentionTexts.length) return null;
@@ -133,10 +150,19 @@ function alignMentionsToRoute(
     Math.max(maximumStationGap, Math.ceil(route.stations.length / mentionTexts.length) * 2),
   );
   const alignmentValue = (mentionIndex: number, station: Station): number => {
-    const lexical = lexicalSimilarities(mentionTexts[mentionIndex] ?? "", station).lexicalSimilarity;
+    const similarities = lexicalSimilarities(
+      mentionTexts[mentionIndex] ?? "",
+      station,
+      mentionReadings[mentionIndex],
+    );
+    const lexical = similarities.nameSimilarity * 0.75
+      + similarities.kanaSimilarity * 0.35
+      + similarities.phoneticSimilarity * 0.15;
     const hardNames = hardAnchorNamesByMention[mentionIndex] ?? new Set<string>();
-    if (hardNames.size === 0) return lexical * 0.75;
-    return lexical * 0.75 + (hardNames.has(station.name) ? 0.5 : -0.35);
+    const boundName = boundNamesByMention[mentionIndex];
+    if (boundName !== null && boundName !== undefined) return station.name === boundName ? lexical + 1 : lexical - 2;
+    if (hardNames.size === 0) return lexical;
+    return lexical + (hardNames.has(station.name) ? 0.5 : -0.35);
   };
   type Alignment = { value: number; indexes: number[] };
   let previous = route.stations.map((item, routeIndex): Alignment => {
@@ -172,9 +198,13 @@ function alignMentionsToRoute(
       mentionText: mentionTexts[mentionIndex] ?? "",
       station,
       routeIndex,
-      ...lexicalSimilarities(mentionTexts[mentionIndex] ?? "", station),
+      ...lexicalSimilarities(mentionTexts[mentionIndex] ?? "", station, mentionReadings[mentionIndex]),
     };
   });
+  if (mentionMatches.some((match) => {
+    const boundName = boundNamesByMention[match.mentionIndex];
+    return boundName !== null && boundName !== undefined && match.station.name !== boundName;
+  })) return null;
   const lexicalValues = mentionMatches.map(({ lexicalSimilarity }) => lexicalSimilarity);
   const hardAnchorMatches = mentionMatches.filter((match) => {
     const hardNames = hardAnchorNamesByMention[match.mentionIndex] ?? new Set<string>();
@@ -260,21 +290,36 @@ export class StationCandidateService {
     options: SequenceSearchOptions = {},
   ): Promise<StationCandidateDiagnostics> {
     const searchText = extractStationSearchText(transcription);
+    const mentionReadings = (mentionTexts ?? []).map((_, index) => options.mentionReadings?.[index] ?? null);
+    const boundStations = (mentionTexts ?? []).map((mention) =>
+      options.bindings?.get(stationMentionBindingKey(mention)) ?? null);
+    const boundNamesByMention = boundStations.map((station) => station?.name ?? null);
     const pools = await Promise.all([
       this.repository.findCandidatePool(searchText, context, 100),
-      ...(mentionTexts ?? []).map((mention) =>
-        this.repository.findCandidatePool(extractStationSearchText(mention), context, 40)),
+      ...(mentionTexts ?? []).flatMap((mention, index) => [
+        this.repository.findCandidatePool(extractStationSearchText(mention), context, 40),
+        ...(mentionReadings[index] === null
+          ? []
+          : [this.repository.findCandidatePool(extractStationSearchText(mentionReadings[index]!), context, 20)]),
+      ]),
     ]);
-    const pool = [...new Map(pools.flat().map((station) => [station.id, station])).values()];
+    const pool = [...new Map([
+      ...pools.flat(),
+      ...boundStations.filter((station): station is Station => station !== null),
+    ].map((station) => [station.id, station])).values()];
     const eligiblePool = pool.filter((station) => isEligibleStationMention(station, transcription));
     const initial = eligiblePool
       .map((station) => scoreStation(station, transcription, context));
-    const hardAnchorNamesByMention = (mentionTexts ?? []).map((mention) => new Set(pool
-      .filter((station) => {
-        const similarities = lexicalSimilarities(mention, station);
-        return similarities.nameSimilarity === 1 || similarities.kanaSimilarity === 1;
-      })
-      .map(({ name }) => name)));
+    const hardAnchorNamesByMention = (mentionTexts ?? []).map((mention, index) => {
+      const boundName = boundNamesByMention[index];
+      if (boundName !== null && boundName !== undefined) return new Set([boundName]);
+      return new Set(pool
+        .filter((station) => {
+          const similarities = lexicalSimilarities(mention, station);
+          return similarities.nameSimilarity === 1 || similarities.kanaSimilarity === 1;
+        })
+        .map(({ name }) => name));
+    });
     const anchorNames = mentionTexts === null
       ? [...new Map(
         initial
@@ -294,9 +339,11 @@ export class StationCandidateService {
       : anchorRouteCandidates
         .map((route) => alignMentionsToRoute(
           mentionTexts,
+          mentionReadings,
           route,
           "anchor",
           hardAnchorNamesByMention,
+          boundNamesByMention,
           options.sequenceRole === "direction" ? 16 : 4,
         ))
         .filter((route): route is RoutePathCandidate => route !== null);
@@ -310,8 +357,8 @@ export class StationCandidateService {
       && (options.destinationContext === true || alignedAnchorRoutes.length === 0 || alignedAnchorRoutes[0]!.score < 0.65);
     let fallbackRoutes: RoutePathCandidate[] = [];
     if (sequenceFallbackAttempted && mentionTexts !== null && this.repository.findLocalRouteCandidates !== undefined) {
-      const perMentionSeeds = mentionTexts.flatMap((mention) => pool
-        .map((station) => ({ station, ...lexicalSimilarities(mention, station) }))
+      const perMentionSeeds = mentionTexts.flatMap((mention, mentionIndex) => pool
+        .map((station) => ({ station, ...lexicalSimilarities(mention, station, mentionReadings[mentionIndex]) }))
         .filter(({ lexicalSimilarity }) => lexicalSimilarity >= 0.5)
         .sort((left, right) => right.lexicalSimilarity - left.lexicalSimilarity)
         .slice(0, 3)
@@ -330,9 +377,11 @@ export class StationCandidateService {
       fallbackRoutes = localRoutes
         .map((route) => alignMentionsToRoute(
           mentionTexts,
+          mentionReadings,
           route,
           "sequence_fallback",
           hardAnchorNamesByMention,
+          boundNamesByMention,
           maximumStationGap,
         ))
         .filter((route): route is RoutePathCandidate => route !== null);
@@ -379,11 +428,16 @@ export class StationCandidateService {
     for (const match of routeById.values()) {
       if (isEligibleStationMention(match.station, transcription)) combined.set(match.station.id, match.station);
     }
+    for (const station of boundStations) if (station !== null) combined.set(station.id, station);
+    const boundStationNames = new Set(boundNamesByMention.filter((name): name is string => name !== null));
     const candidates = [...combined.values()]
       .map((station) => scoreStation(station, transcription, context))
       .map((candidate): StationCandidate => {
         const route = routeById.get(candidate.station.id);
         if (route === undefined) {
+          if (boundStationNames.has(candidate.station.name)) {
+            return { ...candidate, score: Math.max(candidate.score, 0.9) };
+          }
           const exactButRouteInconsistent = routeCandidates.length > 0
             && (candidate.nameSimilarity === 1 || candidate.kanaSimilarity === 1);
           return exactButRouteInconsistent ? { ...candidate, score: candidate.score * 0.6 } : candidate;
@@ -424,25 +478,35 @@ export class StationCandidateService {
       const stations = new Map(pool.map((station) => [station.id, station]));
       for (const { match } of routeMatches) stations.set(match.station.id, match.station);
       return [...stations.values()].map((station): MentionStationCandidate => {
-        const { nameSimilarity, kanaSimilarity, lexicalSimilarity } = lexicalSimilarities(mentionText, station);
+        const { nameSimilarity, kanaSimilarity, phoneticSimilarity, lexicalSimilarity } = lexicalSimilarities(
+          mentionText,
+          station,
+          mentionReadings[mentionIndex],
+        );
+        const bound = boundNamesByMention[mentionIndex] === station.name;
         const supportingRoutes = routeMatches.filter(({ match }) => match.station.id === station.id);
         const bestRouteScore = supportingRoutes.reduce<number | null>(
           (best, { route }) => best === null || route.score > best ? route.score : best,
           null,
         );
-        const conflictsWithMatchedRoute = routeCandidates.length > 0 && supportingRoutes.length === 0;
-        const hardMatch = nameSimilarity === 1 || kanaSimilarity === 1 || lexicalSimilarity >= 0.85;
-        const lexicalBase = Math.min(0.7, nameSimilarity * 0.35 + kanaSimilarity * 0.35);
-        const finalScore = Math.min(1,
-          lexicalBase * (conflictsWithMatchedRoute ? 0.25 : 1)
-            + (bestRouteScore ?? 0) * 0.4,
+        const conflictsWithMatchedRoute = !bound && routeCandidates.length > 0 && supportingRoutes.length === 0;
+        const hardMatch = bound || nameSimilarity === 1 || kanaSimilarity === 1
+          || Math.max(nameSimilarity, kanaSimilarity) >= 0.85;
+        const lexicalBase = Math.min(
+          0.85,
+          nameSimilarity * 0.35 + kanaSimilarity * 0.35 + phoneticSimilarity * 0.15,
         );
+        const evidenceScore = lexicalBase * (conflictsWithMatchedRoute ? 0.25 : 1)
+          + (bestRouteScore ?? 0) * 0.4;
+        const finalScore = bound ? Math.max(0.95, evidenceScore) : Math.min(1, evidenceScore);
         return {
           mentionIndex,
           mentionText,
           station,
           nameSimilarity,
           kanaSimilarity,
+          phoneticSimilarity,
+          bound,
           lexicalScore: lexicalSimilarity,
           matchStrength: hardMatch ? "hard" : "soft",
           routeHypothesisIds: supportingRoutes.map(({ routeHypothesisId }) => routeHypothesisId),
@@ -468,5 +532,26 @@ export class StationCandidateService {
       routeCandidates,
       candidates,
     };
+  }
+}
+
+export function updateStationMentionBindings(
+  bindings: Map<string, Station>,
+  diagnostics: StationCandidateDiagnostics,
+): void {
+  for (const candidates of diagnostics.mentionCandidates) {
+    const top = candidates[0];
+    if (top === undefined) continue;
+    const key = stationMentionBindingKey(top.mentionText);
+    if (bindings.has(key)) continue;
+    const runnerUpScore = candidates[1]?.finalScore ?? 0;
+    const hasMargin = top.finalScore - runnerUpScore >= 0.08;
+    const routeEvidence = top.bestRouteScore !== null
+      && top.bestRouteScore >= 0.6
+      && top.finalScore >= 0.42
+      && top.lexicalScore >= 0.2;
+    const strongSurfaceEvidence = Math.max(top.nameSimilarity, top.kanaSimilarity) >= 0.85
+      && top.finalScore >= 0.6;
+    if (hasMargin && (routeEvidence || strongSurfaceEvidence)) bindings.set(key, top.station);
   }
 }

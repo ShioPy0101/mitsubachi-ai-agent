@@ -48,6 +48,7 @@ export type MentionRouteMatch = {
   routeIndex: number;
   nameSimilarity: number;
   kanaSimilarity: number;
+  phoneticSimilarity: number;
   lexicalSimilarity: number;
 };
 
@@ -59,6 +60,8 @@ export type MentionStationCandidate = {
   station: Station;
   nameSimilarity: number;
   kanaSimilarity: number;
+  phoneticSimilarity: number;
+  bound: boolean;
   lexicalScore: number;
   matchStrength: StationMatchStrength;
   routeHypothesisIds: number[];
