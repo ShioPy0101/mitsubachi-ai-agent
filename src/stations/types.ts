@@ -35,7 +35,7 @@ export type RoutePathCandidate = {
   transferCount: number;
   pathLength: number;
   score: number;
-  source?: "anchor" | "sequence_fallback";
+  source?: "line_fast_path" | "graph_fallback";
   mentionMatches?: MentionRouteMatch[];
   exactAnchorCoverage?: number;
   hardAnchorViolations?: number;
@@ -48,6 +48,7 @@ export type MentionRouteMatch = {
   routeIndex: number;
   nameSimilarity: number;
   kanaSimilarity: number;
+  phoneticSimilarity: number;
   lexicalSimilarity: number;
 };
 
@@ -59,6 +60,8 @@ export type MentionStationCandidate = {
   station: Station;
   nameSimilarity: number;
   kanaSimilarity: number;
+  phoneticSimilarity: number;
+  bound: boolean;
   lexicalScore: number;
   matchStrength: StationMatchStrength;
   routeHypothesisIds: number[];

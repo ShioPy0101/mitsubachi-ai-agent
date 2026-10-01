@@ -143,18 +143,24 @@ export class JobsRepository {
     const rows = await this.db.prepare(`
       ${selectJobSql}
       WHERE j.status IN ('pending', 'queued', 'transcribing', 'metadata_extracting')
-        AND COALESCE(j.started_at, j.created_at) <= ?
+        AND unixepoch(COALESCE(j.started_at, j.created_at)) <= unixepoch(?)
       ORDER BY j.created_at
     `).bind(cutoff).all();
     return rows.results.map(toJob);
   }
 
-  async failIfActive(id: string, errorMessage: string, completedAt: string): Promise<boolean> {
+  async failIfStaleActive(
+    id: string,
+    cutoff: string,
+    errorMessage: string,
+    completedAt: string,
+  ): Promise<boolean> {
     const result = await this.db.prepare(`
       UPDATE audio_jobs
       SET status = 'failed', error_message = ?, completed_at = ?
       WHERE id = ? AND status IN ('pending', 'queued', 'transcribing', 'metadata_extracting')
-    `).bind(errorMessage, completedAt, id).run();
+        AND unixepoch(COALESCE(started_at, created_at)) <= unixepoch(?)
+    `).bind(errorMessage, completedAt, id, cutoff).run();
     return result.meta.changes === 1;
   }
 

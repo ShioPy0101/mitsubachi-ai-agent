@@ -11,6 +11,7 @@ const stageLabels: Record<string, string> = {
   transcription_checkpoint: "文字起こし中間保存",
   gemini_analysis: "Gemini #1 放送構造解析",
   gemini_normalization: "Gemini #2 文字起こし補正",
+  station_candidates_sequences: "駅・経路候補一括探索",
   clip_save: "解析結果保存",
   attachment_download_for_result: "結果用音声ファイル取得",
   result_notification: "Discord結果送信",
@@ -80,6 +81,7 @@ export function formatJobMonitorMessage(record: JobMonitorRecord): string {
     `${record.state === "failed" ? "失敗フェーズ" : record.state === "stopped" ? "最後のフェーズ" : "現在のフェーズ"}:`,
     `\`${record.currentStage}\` — ${stageLabel(record.currentStage)}`, "",
     ...(record.stageDetail === null ? [] : [`進行:\n${record.stageDetail}`, ""]),
+    ...(record.observations === "" ? [] : [`観測:\n\`\`\`text\n${record.observations}\n\`\`\``, ""]),
     `開始:\n${formatJapanTime(record.startedAt)}`, "",
     `フェーズ開始から:\n${stageElapsedSeconds.toFixed(1)}秒`, "",
     `現在フェーズのタイムアウト:\n${stageTimeoutDisplay}`, "",
@@ -163,6 +165,12 @@ export class JobMonitor {
   async stageProgress(jobId: string, detail: string): Promise<void> {
     if (this.channelId === null) return;
     await this.repository.updateStageDetail(jobId, detail, new Date().toISOString());
+    await this.renderById(jobId);
+  }
+
+  async observation(jobId: string, detail: string): Promise<void> {
+    if (this.channelId === null) return;
+    await this.repository.appendObservation(jobId, detail, new Date().toISOString());
     await this.renderById(jobId);
   }
 

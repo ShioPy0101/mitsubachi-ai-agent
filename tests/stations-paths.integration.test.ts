@@ -1,7 +1,13 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { D1StationsRepository } from "../src/db/stations-repository";
-import { StationCandidateService } from "../src/stations/candidate-service";
+import {
+  createD1StationsJobCache,
+  D1StationsRepository,
+} from "../src/db/stations-repository";
+import {
+  reconcileStationMentionCandidates,
+  StationCandidateService,
+} from "../src/stations/candidate-service";
 
 declare module "cloudflare:test" {
   interface ProvidedEnv {
@@ -29,13 +35,19 @@ const schema = [
   )`,
 ];
 
-async function station(id: number, name: string, line: string, prefecture = "テスト県"): Promise<void> {
+async function station(
+  id: number,
+  name: string,
+  line: string,
+  prefecture = "テスト県",
+  kana = name,
+): Promise<void> {
   await env.DB.prepare(`
     INSERT INTO stations (
       id, name, kana, kana_source, operator_name, line_name, prefecture,
       prev_station, next_station, longitude, latitude, postal, normalized_name, normalized_kana
     ) VALUES (?, ?, ?, NULL, 'テスト鉄道', ?, ?, NULL, NULL, ?, ?, ?, ?, ?)
-  `).bind(id, name, name, line, prefecture, id, id, `${id}`, name, name).run();
+  `).bind(id, name, kana, line, prefecture, id, id, `${id}`, name, kana).run();
 }
 
 async function segment(lineId: string, stationIds: readonly number[]): Promise<void> {
@@ -222,11 +234,11 @@ describe("D1 ordered station paths", () => {
       .analyzeMentions(mentions);
 
     expect(diagnostics.anchorNames).toEqual(["青山", "奈良", "半田"]);
-    expect(diagnostics.anchorSearchStatus).toBe("inconsistent_anchors");
-    expect(diagnostics.sequenceFallbackAttempted).toBe(true);
-    expect(diagnostics.fallbackSearchStatus).toBe("matched");
+    expect(diagnostics.anchorSearchStatus).toBe("matched");
+    expect(diagnostics.sequenceFallbackAttempted).toBe(false);
+    expect(diagnostics.fallbackSearchStatus).toBe("not_attempted");
     expect(diagnostics.routeSearchStatus).toBe("matched");
-    expect(diagnostics.routeCandidates[0]?.source).toBe("sequence_fallback");
+    expect(diagnostics.routeCandidates[0]?.source).toBe("line_fast_path");
     expect(names(diagnostics.routeCandidates[0]!)).toEqual([
       "河和口", "富貴", "知多武豊", "上ゲ", "青山", "成岩", "知多半田",
     ]);
@@ -248,6 +260,149 @@ describe("D1 ordered station paths", () => {
       );
   });
 
+  it("keeps a sufficiently resolved raw mention bound across later sequences", async () => {
+    await Promise.all([
+      station(1, "河和口", "名鉄河和線", "愛知県"),
+      station(2, "富貴", "名鉄河和線", "愛知県"),
+      station(3, "知多武豊", "名鉄河和線", "愛知県"),
+      station(4, "上ゲ", "名鉄河和線", "愛知県"),
+      station(5, "青山", "名鉄河和線", "愛知県"),
+      station(6, "成岩", "名鉄河和線", "愛知県"),
+      station(7, "知多半田", "名鉄河和線", "愛知県"),
+      station(20, "松江", "一畑電車北松江線", "島根県"),
+      station(21, "雲州平田", "一畑電車北松江線", "島根県"),
+      station(22, "出雲市", "一畑電車北松江線", "島根県"),
+    ]);
+    await segment("meitetsu-kowa", [1, 2, 3, 4, 5, 6, 7]);
+    await segment("ichibata", [20, 21, 22]);
+    const service = new StationCandidateService(new D1StationsRepository(env.DB));
+    const first = await service.analyzeMentions([
+      "神話口", "福岐", "千田竹豊", "上", "青山", "奈良", "千田半田",
+    ]);
+    const later = await service.analyzeMentions(["松江", "千田半田", "出雲市"]);
+    const bindings = reconcileStationMentionCandidates([first, later]);
+    expect(bindings.get("千田半田")?.name).toBe("知多半田");
+    expect(later.mentionCandidates[1]?.[0]).toMatchObject({
+      station: { name: "知多半田" },
+      bound: true,
+      matchStrength: "hard",
+    });
+    expect(later.mentionCandidates[1]?.[0]?.station.name).not.toBe("雲州平田");
+  });
+
+  it("uses an inferred reading only as route-supported candidate rescue", async () => {
+    await Promise.all([
+      station(1, "篠原", "JR琵琶湖線", "滋賀県", "しのはら"),
+      station(2, "野洲", "JR琵琶湖線", "滋賀県", "やす"),
+      station(3, "守山", "JR琵琶湖線", "滋賀県", "もりやま"),
+    ]);
+    await segment("biwako", [1, 2, 3]);
+
+    const diagnostics = await new StationCandidateService(new D1StationsRepository(env.DB)).analyzeMentions(
+      ["篠原", "安雪", "守山"],
+      {},
+      { phoneticHints: [null, "やすゆき", null] },
+    );
+
+    expect(diagnostics.mentionCandidates[1]?.[0]).toMatchObject({
+      station: { name: "野洲" },
+      routeHypothesisIds: [0],
+      bound: false,
+    });
+    expect(diagnostics.mentionCandidates[1]?.[0]?.phoneticSimilarity).toBe(1);
+    expect(diagnostics.mentionCandidates[1]?.[0]?.nameSimilarity).toBeLessThan(0.5);
+
+    const unrelatedEnding = await new StationCandidateService(new D1StationsRepository(env.DB)).analyzeMentions(
+      ["篠原", "安雪", "守山"],
+      {},
+      { phoneticHints: [null, "やすのり", null] },
+    );
+    expect(unrelatedEnding.mentionCandidates[1]?.[0]?.station.name).toBe("野洲");
+    expect(unrelatedEnding.mentionCandidates[1]?.[0]?.routeHypothesisIds).toEqual([0]);
+  });
+
+  it("does not bind a phonetic-only station when the matched route contradicts it", async () => {
+    await Promise.all([
+      station(1, "始点", "案内線", "テスト県", "してん"),
+      station(2, "中間", "案内線", "テスト県", "ちゅうかん"),
+      station(3, "終点", "案内線", "テスト県", "しゅうてん"),
+      station(20, "野洲", "別路線", "滋賀県", "やす"),
+    ]);
+    await segment("guide", [1, 2, 3]);
+    await segment("unrelated-yasu", [20]);
+    const diagnostics = await new StationCandidateService(new D1StationsRepository(env.DB)).analyzeMentions(
+      ["始点", "安雪", "終点"],
+      {},
+      { phoneticHints: [null, "やすゆき", null] },
+    );
+    const yasu = diagnostics.mentionCandidates[1]?.find(({ station: value }) => value.name === "野洲");
+    const bindings = reconcileStationMentionCandidates([diagnostics]);
+
+    expect(yasu).toMatchObject({ routeHypothesisIds: [], bound: false });
+    expect(yasu?.phoneticSimilarity).toBe(1);
+    expect(yasu?.finalScore).toBeLessThan(0.2);
+    expect(bindings.has("安雪")).toBe(false);
+  });
+
+  it("bounds candidates, hypotheses and D1 queries for a 20-mention sequence", async () => {
+    const stationIds = Array.from({ length: 20 }, (_, index) => index + 1);
+    const suffixes = [..."甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉"];
+    await Promise.all(stationIds.map((id, index) =>
+      station(id, `連続${suffixes[index]}`, "長大線", "テスト県", `れんぞく${index}`)));
+    await segment("long-line", stationIds);
+
+    const diagnostics = await new StationCandidateService(new D1StationsRepository(env.DB)).analyzeMentions(
+      stationIds.map((_id, index) => `連続${suffixes[index]}`),
+    );
+
+    expect(diagnostics.mentionCandidates).toHaveLength(20);
+    expect(diagnostics.mentionCandidates.every((candidates) => candidates.length <= 5)).toBe(true);
+    expect(diagnostics.routeCandidates.length).toBeLessThanOrEqual(5);
+    expect(diagnostics.metrics).toMatchObject({
+      mentions: 20,
+      graphSearchCount: 0,
+      fallbackExecuted: false,
+      d1QueryCount: 3,
+    });
+    expect(diagnostics.metrics.uniqueCandidateCount).toBeLessThanOrEqual(20 * 5);
+    expect(diagnostics.metrics.routeHypothesesGenerated).toBeLessThanOrEqual(4);
+  });
+
+  it("reuses identical line metadata lookups through the job-local cache", async () => {
+    await Promise.all([
+      station(1, "始点", "本線"),
+      station(2, "中間", "本線"),
+      station(3, "終点", "本線"),
+    ]);
+    await segment("main", [1, 2, 3]);
+    const cache = createD1StationsJobCache();
+
+    const first = await new StationCandidateService(new D1StationsRepository(env.DB, cache))
+      .analyzeMentions(["始点", "中間", "終点"]);
+    const second = await new StationCandidateService(new D1StationsRepository(env.DB, cache))
+      .analyzeMentions(["始点", "中間", "終点"]);
+
+    expect(first.metrics.d1QueryCount).toBe(3);
+    expect(second.metrics.d1QueryCount).toBe(1);
+    expect(names(second.routeCandidates[0]!)).toEqual(["始点", "中間", "終点"]);
+  });
+
+  it("caps graph fallback seeds and executes graph search only once", async () => {
+    const stationIds = Array.from({ length: 10 }, (_, index) => index + 1);
+    const suffixes = [..."甲乙丙丁戊己庚辛壬癸"];
+    await Promise.all(stationIds.map((id, index) => station(id, `孤立${suffixes[index]}`, `孤立線${id}`)));
+    await Promise.all(stationIds.map((id) => segment(`isolated-${id}`, [id])));
+
+    const diagnostics = await new StationCandidateService(new D1StationsRepository(env.DB)).analyzeMentions(
+      stationIds.map((_id, index) => `孤立${suffixes[index]}`),
+    );
+
+    expect(diagnostics.metrics.graphSearchCount).toBe(1);
+    expect(diagnostics.metrics.fallbackSeedCount).toBeLessThanOrEqual(4);
+    expect(diagnostics.metrics.routeHypothesesGenerated).toBeLessThanOrEqual(4);
+    expect(diagnostics.routeCandidates.length).toBeLessThanOrEqual(5);
+  });
+
   it("uses a direction sequence and destination context to rank 久保川 → 窪川", async () => {
     const routeNames = [
       "伊野", "枝川", "朝倉", "佐川", "斗賀野", "須崎",
@@ -262,7 +417,8 @@ describe("D1 ordered station paths", () => {
       { sequenceRole: "direction", destinationContext: true },
     );
 
-    expect(diagnostics.sequenceFallbackAttempted).toBe(true);
+    expect(diagnostics.sequenceFallbackAttempted).toBe(false);
+    expect(diagnostics.metrics.graphSearchCount).toBe(0);
     expect(diagnostics.routeSearchStatus).toBe("matched");
     expect(diagnostics.routeCandidates[0]?.mentionMatches?.map(({ station: value }) => value.name))
       .toEqual(["伊野", "佐川", "須崎", "窪川"]);

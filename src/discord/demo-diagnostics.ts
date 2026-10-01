@@ -1,7 +1,7 @@
 import type { GeminiAnalysisExtraction, GeminiDiagnostics } from "../metadata/gemini";
 import type { SequenceRole } from "../metadata/service";
 import type { RailwayAnnouncementMetadata } from "../railway/types";
-import type { StationCandidateDiagnostics } from "../stations/candidate-service";
+import { STATION_SEQUENCE_LIMITS, type StationCandidateDiagnostics } from "../stations/candidate-service";
 import { STATION_MATCH_WEIGHTS, type StationResolution } from "../stations/types";
 import type { TranscriptionResult } from "../transcription/service";
 
@@ -76,11 +76,14 @@ function routeSummary(diagnostics: StationCandidateDiagnostics): unknown {
     extractedSearchText: diagnostics.searchText,
     context: diagnostics.context,
     algorithmLimits: {
-      candidatePool: 100,
-      perMentionCandidatePool: 40,
+      surfaceCandidatesPerMention: STATION_SEQUENCE_LIMITS.surfaceCandidatesPerMention,
+      phoneticCandidatesPerMention: STATION_SEQUENCE_LIMITS.phoneticCandidatesPerMention,
+      uniqueCandidatesPerMention: STATION_SEQUENCE_LIMITS.uniqueCandidatesPerMention,
       anchors: 12,
-      routeCandidates: 5,
-      localFallbackRoutes: 30,
+      lineHypotheses: STATION_SEQUENCE_LIMITS.lineHypotheses,
+      routeHypotheses: STATION_SEQUENCE_LIMITS.routeHypotheses,
+      fallbackSeeds: STATION_SEQUENCE_LIMITS.fallbackSeeds,
+      fallbackRoutes: STATION_SEQUENCE_LIMITS.fallbackRoutes,
       maximumStationGap: { stops: 4, direction: 16 },
       minimumSequenceLexicalCoverage: 0.5,
       minimumSequenceScore: 0.43,
@@ -95,6 +98,7 @@ function routeSummary(diagnostics: StationCandidateDiagnostics): unknown {
     routeSearchStatus: diagnostics.routeSearchStatus,
     sequenceFallbackAttempted: diagnostics.sequenceFallbackAttempted,
     fallbackSearchStatus: diagnostics.fallbackSearchStatus,
+    metrics: diagnostics.metrics,
     mentionCandidates: diagnostics.mentionCandidates,
     searchedRouteCandidates: diagnostics.routeCandidates.map((route, rank) => ({
       rank,

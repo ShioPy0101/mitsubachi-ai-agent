@@ -25,6 +25,7 @@ export type ParsedTransitAnnouncement = z.output<typeof TransitAnnouncementSchem
 
 export const StationMentionSchema = z.object({
   text: z.string().min(1),
+  phoneticHint: z.string().trim().min(1).nullable().optional().default(null),
   start: z.number().int().nonnegative().nullable(),
   end: z.number().int().nonnegative().nullable(),
   role: z.enum(stationMentionRoles),
@@ -178,9 +179,10 @@ export const geminiAnalysisJsonSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["text", "start", "end", "role", "sequenceId"],
+        required: ["text", "phoneticHint", "start", "end", "role", "sequenceId"],
         properties: {
           text: { type: "string", minLength: 1 },
+          phoneticHint: { type: ["string", "null"], minLength: 1 },
           start: { type: ["integer", "null"], minimum: 0 },
           end: { type: ["integer", "null"], minimum: 0 },
           role: { type: "string", enum: [...stationMentionRoles] },

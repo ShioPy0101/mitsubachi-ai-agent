@@ -33,6 +33,8 @@ export function buildGeminiNormalizationPrompt(
             kana: candidate.station.kana,
             lineName: candidate.station.lineName,
             lexicalScore: Number(candidate.lexicalScore.toFixed(3)),
+            phoneticSimilarity: Number(candidate.phoneticSimilarity.toFixed(3)),
+            globallyReconciled: candidate.bound,
             matchStrength: candidate.matchStrength,
             routeHypothesisIds: candidate.routeHypothesisIds,
             bestRouteScore: candidate.bestRouteScore === null ? null : Number(candidate.bestRouteScore.toFixed(3)),
@@ -97,6 +99,8 @@ Gemini #1が抽出した意味構造と、アプリが役割別sequenceごとに
 - direction sequenceは停車駅列とは断定せず、方向を示す経路証拠としてのみ扱う
 - directionのcontextMentionsにdestinationがある場合、同じ経路方向を支持するか評価してよい
 - 各補正では、そのsequenceに対応するmentionCandidatesとrouteHypothesesだけを参照する
+- globallyReconciled=trueは全sequence探索後に十分な根拠で選ばれた同一rawMentionの共通解を示し、明確な矛盾がない限り同じ駅名を使う
+- phoneticSimilarityは弱い補助証拠であり、それだけで駅名を変更しない。表記類似または経路・駅順の整合も要求する
 - routeSupported=falseの候補や候補外の駅名で、崩れた駅名列を組み立てない
 - exact matchでも、同じsequenceの経路順と矛盾する場合は絶対的な正解として扱わない
 - 長距離で接続可能なだけの経路、長大な迂回経路、乗換の多い経路を補正根拠にしない
