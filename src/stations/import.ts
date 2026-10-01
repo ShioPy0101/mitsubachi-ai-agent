@@ -1,5 +1,3 @@
-import { normalizeKana, normalizeStationName } from "./normalization";
-
 export type StationImportRow = {
   name: string;
   kana: string | null;
@@ -54,7 +52,8 @@ function parseCsvRecords(csv: string): string[][] {
   return records;
 }
 
-const nullable = (value: string | undefined): string | null => (value === undefined || value === "" ? null : value);
+const nullable = (value: string | undefined): string | null =>
+  value === undefined || value === "" ? null : value;
 const numeric = (value: string | undefined): number | null => {
   if (value === undefined || value === "") return null;
   const parsed = Number(value);
@@ -64,11 +63,25 @@ const numeric = (value: string | undefined): number | null => {
 export function parseStationsCsv(csv: string): StationImportRow[] {
   const records = parseCsvRecords(csv.replace(/^\uFEFF/u, ""));
   const [header, ...rows] = records;
-  const expected = ["name", "kana", "kana_source", "operator_name", "line_name", "prefecture", "prev_station", "next_station", "longitude", "latitude", "postal"];
-  if (header === undefined || header.join(",") !== expected.join(",")) throw new Error("Unexpected stations.csv header");
+  const expected = [
+    "name",
+    "kana",
+    "kana_source",
+    "operator_name",
+    "line_name",
+    "prefecture",
+    "prev_station",
+    "next_station",
+    "longitude",
+    "latitude",
+    "postal",
+  ];
+  if (header === undefined || header.join(",") !== expected.join(","))
+    throw new Error("Unexpected stations.csv header");
   return rows.map((row, index) => {
     const name = row[0];
-    if (name === undefined || name.length === 0) throw new Error(`Missing station name at CSV row ${index + 2}`);
+    if (name === undefined || name.length === 0)
+      throw new Error(`Missing station name at CSV row ${index + 2}`);
     return {
       name,
       kana: nullable(row[1]),
@@ -85,14 +98,13 @@ export function parseStationsCsv(csv: string): StationImportRow[] {
   });
 }
 
-const sqlString = (value: string | null): string => (value === null ? "NULL" : `'${value.replaceAll("'", "''")}'`);
-const sqlNumber = (value: number | null): string => (value === null ? "NULL" : String(value));
-
 function edgeKey(left: string, right: string): string {
   return [left, right].sort((a, b) => a.localeCompare(b, "ja")).join("\u0000");
 }
 
-export function buildStationLinePositions(rows: readonly StationImportRow[]): StationLinePosition[] {
+export function buildStationLinePositions(
+  rows: readonly StationImportRow[],
+): StationLinePosition[] {
   const groups = new Map<string, StationImportRow[]>();
   for (const row of rows) {
     if (row.lineName === null) continue;
@@ -103,9 +115,13 @@ export function buildStationLinePositions(rows: readonly StationImportRow[]): St
   }
 
   const positions: StationLinePosition[] = [];
-  for (const [groupKey, group] of [...groups].sort(([left], [right]) => left.localeCompare(right))) {
+  for (const [groupKey, group] of [...groups].sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
     const byName = new Map(group.map((row) => [row.name, row]));
-    const neighbors = new Map(group.map((row) => [row.name, new Set<string>()]));
+    const neighbors = new Map(
+      group.map((row) => [row.name, new Set<string>()]),
+    );
     for (const row of group) {
       for (const neighborName of [row.prevStation, row.nextStation]) {
         if (neighborName === null || !byName.has(neighborName)) continue;
@@ -121,7 +137,9 @@ export function buildStationLinePositions(rows: readonly StationImportRow[]): St
       .sort((left, right) => left.localeCompare(right, "ja"));
 
     for (const boundary of boundaries) {
-      const adjacent = [...(neighbors.get(boundary) ?? [])].sort((left, right) => left.localeCompare(right, "ja"));
+      const adjacent = [...(neighbors.get(boundary) ?? [])].sort(
+        (left, right) => left.localeCompare(right, "ja"),
+      );
       if (adjacent.length === 0) segments.push([boundary]);
       for (const firstNeighbor of adjacent) {
         if (visitedEdges.has(edgeKey(boundary, firstNeighbor))) continue;
@@ -135,7 +153,8 @@ export function buildStationLinePositions(rows: readonly StationImportRow[]): St
           const next = [...(neighbors.get(current) ?? [])]
             .filter((name) => name !== previous)
             .sort((left, right) => left.localeCompare(right, "ja"))[0];
-          if (next === undefined || visitedEdges.has(edgeKey(current, next))) break;
+          if (next === undefined || visitedEdges.has(edgeKey(current, next)))
+            break;
           previous = current;
           current = next;
           visitedEdges.add(edgeKey(previous, current));
@@ -145,7 +164,9 @@ export function buildStationLinePositions(rows: readonly StationImportRow[]): St
     }
 
     // A component with no boundary is a loop. Break it at a deterministic station.
-    for (const start of [...byName.keys()].sort((left, right) => left.localeCompare(right, "ja"))) {
+    for (const start of [...byName.keys()].sort((left, right) =>
+      left.localeCompare(right, "ja"),
+    )) {
       const firstNeighbor = [...(neighbors.get(start) ?? [])]
         .filter((name) => !visitedEdges.has(edgeKey(start, name)))
         .sort((left, right) => left.localeCompare(right, "ja"))[0];
@@ -157,7 +178,10 @@ export function buildStationLinePositions(rows: readonly StationImportRow[]): St
       while (current !== start) {
         segment.push(current);
         const next = [...(neighbors.get(current) ?? [])]
-          .filter((name) => name !== previous && !visitedEdges.has(edgeKey(current, name)))
+          .filter(
+            (name) =>
+              name !== previous && !visitedEdges.has(edgeKey(current, name)),
+          )
           .sort((left, right) => left.localeCompare(right, "ja"))[0];
         if (next === undefined) break;
         previous = current;
@@ -167,8 +191,32 @@ export function buildStationLinePositions(rows: readonly StationImportRow[]): St
       segments.push(segment);
     }
 
+    // Split closed branch paths at the repeated boundary, retaining the closing
+    // edge as a separate ordered path. D1's unique station/seq keys cannot store
+    // the same station twice in one segment.
+    for (let i = 0; i < segments.length; i++) {
+      const path = segments[i]!;
+      if (path.length > 2 && path[0] === path.at(-1))
+        segments[i] = path.slice(0, -1);
+    }
+    const coveredEdges = new Set(
+      segments.flatMap((path) =>
+        path.slice(1).map((name, i) => edgeKey(path[i]!, name)),
+      ),
+    );
+    for (const [name, adjacent] of neighbors)
+      for (const neighbor of adjacent) {
+        const key = edgeKey(name, neighbor);
+        if (!coveredEdges.has(key)) {
+          segments.push([name, neighbor]);
+          coveredEdges.add(key);
+        }
+      }
+
     segments
-      .sort((left, right) => left.join("\u0000").localeCompare(right.join("\u0000"), "ja"))
+      .sort((left, right) =>
+        left.join("\u0000").localeCompare(right.join("\u0000"), "ja"),
+      )
       .forEach((segment, segmentIndex) => {
         const lineId = `${groupKey}#${segmentIndex}:${segment[0] ?? ""}`;
         segment.forEach((name, seq) => {
@@ -178,52 +226,4 @@ export function buildStationLinePositions(rows: readonly StationImportRow[]): St
       });
   }
   return positions;
-}
-
-export function generateStationsSql(rows: readonly StationImportRow[]): string {
-  const statements = rows.map((row) => {
-    const normalizedKana = row.kana === null ? null : normalizeKana(row.kana);
-    const values = [
-      sqlString(row.name), sqlString(row.kana), sqlString(row.kanaSource), sqlString(row.operatorName),
-      sqlString(row.lineName), sqlString(row.prefecture), sqlString(row.prevStation), sqlString(row.nextStation),
-      sqlNumber(row.longitude), sqlNumber(row.latitude), sqlString(row.postal),
-      sqlString(normalizeStationName(row.name)), sqlString(normalizedKana),
-    ].join(", ");
-    return `INSERT INTO stations (name, kana, kana_source, operator_name, line_name, prefecture, prev_station, next_station, longitude, latitude, postal, normalized_name, normalized_kana) VALUES (${values}) ON CONFLICT DO UPDATE SET kana=excluded.kana, kana_source=excluded.kana_source, prefecture=excluded.prefecture, prev_station=excluded.prev_station, next_station=excluded.next_station, longitude=excluded.longitude, latitude=excluded.latitude, postal=excluded.postal, normalized_name=excluded.normalized_name, normalized_kana=excluded.normalized_kana;`;
-  });
-  const positions = buildStationLinePositions(rows).map(({ lineId, station, seq }) =>
-    `INSERT INTO station_line_positions (line_id, station_id, seq) SELECT ${sqlString(lineId)}, id, ${seq} FROM stations WHERE name=${sqlString(station.name)} AND line_name IS ${sqlString(station.lineName)} AND operator_name IS ${sqlString(station.operatorName)} ON CONFLICT(line_id, station_id) DO UPDATE SET seq=excluded.seq;`);
-  const rebuildConnections = [
-    `INSERT OR IGNORE INTO route_segment_connections (from_segment_id, to_segment_id, from_station_id, to_station_id, from_seq, to_seq, transfer_cost)
-SELECT from_position.line_id, to_position.line_id, from_position.station_id, to_position.station_id,
-       from_position.seq, to_position.seq, 0
-FROM station_line_positions from_position
-INNER JOIN station_line_positions to_position
-  ON to_position.station_id = from_position.station_id
- AND to_position.line_id <> from_position.line_id;`,
-    `INSERT OR IGNORE INTO route_segment_connections (from_segment_id, to_segment_id, from_station_id, to_station_id, from_seq, to_seq, transfer_cost)
-SELECT from_position.line_id, to_position.line_id, from_station.id, to_station.id,
-       from_position.seq, to_position.seq, 1
-FROM station_line_positions from_position
-INNER JOIN stations from_station ON from_station.id = from_position.station_id
-INNER JOIN stations to_station ON to_station.id <> from_station.id AND to_station.name = from_station.name
-INNER JOIN station_line_positions to_position
-  ON to_position.station_id = to_station.id
- AND to_position.line_id <> from_position.line_id
-WHERE (from_station.postal IS NOT NULL AND from_station.postal = to_station.postal)
-   OR (from_station.latitude IS NOT NULL AND to_station.latitude IS NOT NULL
-       AND from_station.longitude IS NOT NULL AND to_station.longitude IS NOT NULL
-       AND abs(from_station.latitude - to_station.latitude) <= 0.01
-       AND abs(from_station.longitude - to_station.longitude) <= 0.01);`,
-  ];
-  // `wrangler d1 execute --remote --file` wraps bulk uploads itself. Explicit
-  // transactions are rejected by the remote execution API.
-  return [
-    "DELETE FROM route_segment_connections;",
-    "DELETE FROM station_line_positions;",
-    ...statements,
-    ...positions,
-    ...rebuildConnections,
-    "",
-  ].join("\n");
 }

@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "source": "data/stations.csv",
+  "sourceSha256": "ba36d1a336b74b330565fca86bb31462ea58f44166536a0f1837278414af0fec",
+  "stationIds": "static snapshot-local IDs; never use as D1 foreign keys",
+  "stations": 10390,
+  "paths": 643,
+  "connections": 4574
+}

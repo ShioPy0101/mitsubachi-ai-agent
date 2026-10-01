@@ -1,6 +1,7 @@
 export type Station = {
   id: number;
   name: string;
+  englishName?: string;
   kana: string | null;
   kanaSource: string | null;
   operatorName: string | null;
@@ -62,6 +63,7 @@ export type MentionStationCandidate = {
   kanaSimilarity: number;
   phoneticSimilarity: number;
   bound: boolean;
+  correctionEligible?: boolean;
   lexicalScore: number;
   matchStrength: StationMatchStrength;
   routeHypothesisIds: number[];
