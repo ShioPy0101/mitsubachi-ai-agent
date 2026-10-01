@@ -36,7 +36,8 @@ export class GeminiRequestTimeoutError extends Error {
 }
 
 export function isRetryableGeminiError(error: unknown): boolean {
-  return !(error instanceof GeminiApiError) || error.status === 429 || error.status >= 500;
+  if (error instanceof GeminiApiError) return error.status === 429 || error.status >= 500;
+  return error instanceof GeminiRequestTimeoutError || error instanceof TypeError;
 }
 
 export type HttpFetcher = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;

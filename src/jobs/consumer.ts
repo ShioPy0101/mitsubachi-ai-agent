@@ -24,6 +24,7 @@ import type { TranscriptionResult } from "../transcription/service";
 import {
   CloudflareWhisperTranscriptionService,
   isMp3TranscriptionInput,
+  WhisperAudioDecodeError,
   whisperModel,
   whisperSettings,
 } from "../transcription/workers-ai";
@@ -58,6 +59,13 @@ const AudioJobMessageSchema = z.union([DemoAudioJobMessageSchema, PersistedAudio
 const terminalStatuses = new Set(["completed", "partial", "failed"]);
 const errorStages = new WeakMap<object, string>();
 const jobMonitorRefreshIntervalMs = 10_000;
+const maximumQueueAttempts = 5;
+const maximumGeminiAttempts = 3;
+const noPipelineRetryStages = new Set([
+  "transcription_checkpoint",
+  "result_notification",
+  "completion_status",
+]);
 
 type ProcessingJobs = Pick<JobsRepository,
   "updateStatus" | "isActive" | "discardTranscription" | "saveTranscription" | "clearEphemeral"
@@ -133,6 +141,15 @@ export async function runStage<T>(
 
 function errorStage(error: unknown, fallback: string): string {
   return typeof error === "object" && error !== null ? errorStages.get(error) ?? fallback : fallback;
+}
+
+export function shouldRetryAudioJob(error: unknown, attempt: number): boolean {
+  if (attempt >= maximumQueueAttempts) return false;
+  if (error instanceof AttachmentUnavailableError
+    || error instanceof AudioJobProcessingTimeoutError
+    || error instanceof JobCancellationRequestedError
+    || error instanceof WhisperAudioDecodeError) return false;
+  return !noPipelineRetryStages.has(errorStage(error, "processing"));
 }
 
 async function sendAlert(
@@ -498,21 +515,22 @@ async function processJob(
   await jobs.updateStatus(job.id, "metadata_extracting");
   const gemini = new GeminiMetadataService(env.GEMINI_API_KEY, env.GEMINI_MODEL);
   const runGeminiStage = async <T>(stage: string, operation: () => Promise<T>): Promise<T> => {
-    const maximumGeminiAttempts = showDemoProgress ? 3 : 1;
     let geminiAttempt = 1;
     while (true) {
       try {
         return await runJobStage(stage, operation);
       } catch (error) {
-        if (!showDemoProgress || !isRetryableGeminiError(error) || geminiAttempt >= maximumGeminiAttempts) throw error;
+        if (!isRetryableGeminiError(error) || geminiAttempt >= maximumGeminiAttempts) throw error;
         const details = errorDetails(error);
-        await updateProgress(
-          job,
-          `${stage}で一時エラーが発生しました（${details.errorName}: ${details.errorMessage.slice(0, 300)}）。同じ文字起こしのままこの段階だけ再試行します（${geminiAttempt + 1}/${maximumGeminiAttempts}）…`,
-          callbacks,
-          discord,
-          true,
-        );
+        if (showDemoProgress) {
+          await updateProgress(
+            job,
+            `${stage}で一時エラーが発生しました（${details.errorName}: ${details.errorMessage.slice(0, 300)}）。同じ文字起こしのままこの段階だけ再試行します（${geminiAttempt + 1}/${maximumGeminiAttempts}）…`,
+            callbacks,
+            discord,
+            true,
+          );
+        }
         await new Promise((resolve) => setTimeout(resolve, geminiAttempt * 1_000));
         geminiAttempt += 1;
       }
@@ -540,13 +558,11 @@ async function processJob(
       await jobs.clearEphemeral(job.id);
       return "failed";
     }
-    if (isRetryableGeminiError(error)) throw error;
     console.warn("audio_job_metadata_rejected", { jobId: job.id, ...errorDetails(error) });
     if (alertsEnabled) {
       await sendAlert(env, discord, job.id, errorStage(error, fallbackStage), error, attempt);
     }
-    await jobs.discardTranscription(job.id);
-    await jobs.updateStatus(job.id, "failed", "metadata_extraction_failed");
+    await jobs.updateStatus(job.id, "partial", "metadata_extraction_failed");
     await notify(job, formatFailure("processing_failed"), callbacks, discord);
     await jobs.clearEphemeral(job.id);
     return "failed";
@@ -709,9 +725,13 @@ async function processJob(
       resultFile,
     ));
   if (!delivered) throw new Error("Discord result notification failed");
-  await runJobStage("ephemeral_cleanup", () => jobs.clearEphemeral(job.id));
-  await monitor?.assertNotCancelled(job.id, "ephemeral_cleanup");
-  await jobs.updateStatus(job.id, "completed");
+  try {
+    await runJobStage("ephemeral_cleanup", () => jobs.clearEphemeral(job.id));
+  } catch (error) {
+    console.error("audio_job_ephemeral_cleanup_failed", { jobId: job.id, ...errorDetails(error) });
+    if (alertsEnabled) await sendAlert(env, discord, job.id, "ephemeral_cleanup", error, attempt);
+  }
+  await runJobStage("completion_status", () => jobs.updateStatus(job.id, "completed"));
   return "completed";
 }
 
@@ -874,12 +894,19 @@ export async function consumeAudioJobs(batch: MessageBatch<AudioJobMessage>, env
         await sendAlert(env, discord, job.id, errorStage(error, "processing"), error, message.attempts);
       }
       if (error instanceof AttachmentUnavailableError) {
+        const stage = errorStage(error, "attachment_download");
+        const resultAttachmentFailed = stage === "attachment_download_for_result";
         console.error("audio_job_attachment_terminal", {
           jobId: job.id, queueMessageId: message.id, attempt: message.attempts, ...details,
         });
-        await jobs.updateStatus(job.id, "failed", "attachment_unavailable");
-        await monitor.transition(job.id, "failed", errorStage(error, "attachment_download"), error);
-        await notify(job, formatFailure("attachment_unavailable"), callbacks, discord);
+        await jobs.updateStatus(job.id, resultAttachmentFailed ? "partial" : "failed", "attachment_unavailable");
+        await monitor.transition(job.id, "failed", stage, error);
+        await notify(
+          job,
+          formatFailure(resultAttachmentFailed ? "processing_failed" : "attachment_unavailable"),
+          callbacks,
+          discord,
+        );
         await jobs.clearEphemeral(job.id);
         console.info("audio_job_message_acked", { jobId: job.id, queueMessageId: message.id, attempt: message.attempts });
         message.ack();
@@ -893,7 +920,7 @@ export async function consumeAudioJobs(batch: MessageBatch<AudioJobMessage>, env
         await jobs.clearEphemeral(job.id);
         console.info("audio_job_message_acked", { jobId: job.id, queueMessageId: message.id, attempt: message.attempts });
         message.ack();
-      } else if (message.attempts < 5) {
+      } else if (shouldRetryAudioJob(error, message.attempts)) {
         const delaySeconds = Math.min(300, 2 ** message.attempts * 5);
         console.error("audio_job_message_retried", {
           jobId: job.id, queueMessageId: message.id, attempt: message.attempts, delaySeconds, ...details,
@@ -902,7 +929,7 @@ export async function consumeAudioJobs(batch: MessageBatch<AudioJobMessage>, env
         await monitor.transition(job.id, "retrying", errorStage(error, "processing"), error);
         await updateProgress(
           job,
-          `処理中に一時的なエラーが発生しました。再試行を待っています（次回 ${message.attempts + 1}/5）…`,
+          `処理中に一時的なエラーが発生しました。再試行を待っています（次回 ${message.attempts + 1}/${maximumQueueAttempts}）…`,
           callbacks,
           discord,
         );
@@ -911,7 +938,9 @@ export async function consumeAudioJobs(batch: MessageBatch<AudioJobMessage>, env
         console.error("audio_job_processing_terminal", {
           jobId: job.id, queueMessageId: message.id, attempt: message.attempts, ...details,
         });
-        await jobs.updateStatus(job.id, "failed", "processing_failed");
+        const latestJob = await jobs.findById(job.id);
+        const terminalStatus = latestJob !== null && latestJob.transcriptionText !== null ? "partial" : "failed";
+        await jobs.updateStatus(job.id, terminalStatus, "processing_failed");
         await monitor.transition(job.id, "failed", errorStage(error, "processing"), error);
         await notify(job, formatFailure("processing_failed"), callbacks, discord);
         await jobs.clearEphemeral(job.id);

@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { DemoJobProducer, JobProducer, type JobQueue, type JobStore } from "../src/jobs/producer";
 import { staleAudioJobCutoff, staleAudioJobTimeoutMs } from "../src/jobs/staleness";
 import { whisperProcessingTimeoutMs } from "../src/jobs/processing-timeout";
+import { runStage, shouldRetryAudioJob } from "../src/jobs/consumer";
+import { WhisperAudioDecodeError } from "../src/transcription/workers-ai";
 import type { AudioJob, NewAudioJob } from "../src/jobs/types";
 
 const input: NewAudioJob = {
@@ -81,5 +83,36 @@ describe("audio job processing deadline", () => {
     expect(whisperProcessingTimeoutMs(240)).toBe(720_000);
     expect(whisperProcessingTimeoutMs(600)).toBe(840_000);
     expect(whisperProcessingTimeoutMs(null)).toBe(10 * 60 * 1000);
+  });
+});
+
+describe("audio job retry boundary", () => {
+  it("retries a transient processing stage before the queue limit", async () => {
+    const error = new Error("temporary D1 failure");
+    await expect(runStage("job-id", "station_candidates_sequence_1", async () => {
+      throw error;
+    })).rejects.toBe(error);
+
+    expect(shouldRetryAudioJob(error, 1)).toBe(true);
+    expect(shouldRetryAudioJob(error, 5)).toBe(false);
+  });
+
+  it.each(["transcription_checkpoint", "result_notification", "completion_status"])(
+    "does not restart the pipeline after %s fails",
+    async (stage) => {
+      const error = new Error(`${stage} failed`);
+      await expect(runStage("job-id", stage, async () => {
+        throw error;
+      })).rejects.toBe(error);
+
+      expect(shouldRetryAudioJob(error, 1)).toBe(false);
+    },
+  );
+
+  it("does not retry an explicit MP3 decode failure", () => {
+    expect(shouldRetryAudioJob(
+      new WhisperAudioDecodeError(new Error("original"), new Error("rebuilt")),
+      1,
+    )).toBe(false);
   });
 });

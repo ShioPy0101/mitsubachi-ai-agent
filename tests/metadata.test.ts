@@ -7,6 +7,7 @@ import {
   checkNormalization,
   isRetryableGeminiError,
 } from "../src/metadata/gemini";
+import { z } from "zod";
 import { buildGeminiAnalysisPrompt } from "../src/metadata/analysis-prompt";
 import { buildGeminiNormalizationPrompt, type StopSequenceContext } from "../src/metadata/prompt";
 import {
@@ -493,5 +494,8 @@ describe("two-stage Gemini metadata boundary", () => {
     expect(isRetryableGeminiError(new GeminiRequestTimeoutError(60_000))).toBe(true);
     expect(isRetryableGeminiError(new GeminiApiError(404, "model unavailable"))).toBe(false);
     expect(isRetryableGeminiError(new GeminiApiError(400, "invalid schema"))).toBe(false);
+    expect(isRetryableGeminiError(new SyntaxError("invalid JSON"))).toBe(false);
+    expect(isRetryableGeminiError(new z.ZodError([]))).toBe(false);
+    expect(isRetryableGeminiError(new Error("application failure"))).toBe(false);
   });
 });
