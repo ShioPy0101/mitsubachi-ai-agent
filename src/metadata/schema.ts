@@ -1,3 +1,4 @@
+import { announcementEventKinds } from "../railway/semantic";
 import { z } from "zod";
 import { announcementCategories } from "../railway/types";
 import { stationMentionRoles } from "./service";
@@ -21,7 +22,9 @@ export const TransitAnnouncementSchema = z.object({
   summary: z.string().max(30).nullable(),
 });
 
-export type ParsedTransitAnnouncement = z.output<typeof TransitAnnouncementSchema>;
+export type ParsedTransitAnnouncement = z.output<
+  typeof TransitAnnouncementSchema
+>;
 
 export const StationMentionSchema = z.object({
   text: z.string().min(1),
@@ -32,17 +35,95 @@ export const StationMentionSchema = z.object({
   sequenceId: z.number().int().positive().nullable(),
 });
 
-export const GeminiAnalysisSchema = TransitAnnouncementSchema.omit({ normalizedTranscription: true }).extend({
+const SemanticEventSchema = z.object({
+  kind: z.enum(announcementEventKinds),
+  sourceStart: z.number().int().nonnegative(),
+  sourceEnd: z.number().int().nonnegative(),
+  language: z.enum(["ja", "en", "unknown"]),
+  trainType: z.string().nullable(),
+  destination: z.string().nullable(),
+  line: z.string().nullable(),
+  platform: z.string().nullable(),
+  formation: z.string().nullable(),
+  seatInformation: z.string().nullable(),
+  transferInformation: z.string().nullable(),
+  delayInformation: z.string().nullable(),
+  confidence: z.number().min(0).max(1),
+  equivalentEventGroupId: z.string().nullable(),
+});
+const semanticEventJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "kind",
+    "sourceStart",
+    "sourceEnd",
+    "language",
+    "trainType",
+    "destination",
+    "line",
+    "platform",
+    "formation",
+    "seatInformation",
+    "transferInformation",
+    "delayInformation",
+    "confidence",
+    "equivalentEventGroupId",
+  ],
+  properties: {
+    kind: { type: "string", enum: [...announcementEventKinds] },
+    sourceStart: { type: "integer", minimum: 0 },
+    sourceEnd: { type: "integer", minimum: 0 },
+    language: { type: "string", enum: ["ja", "en", "unknown"] },
+    ...Object.fromEntries(
+      [
+        "trainType",
+        "destination",
+        "line",
+        "platform",
+        "formation",
+        "seatInformation",
+        "transferInformation",
+        "delayInformation",
+        "equivalentEventGroupId",
+      ].map((key) => [key, { type: ["string", "null"] }]),
+    ),
+    confidence: { type: "number", minimum: 0, maximum: 1 },
+  },
+};
+export const GeminiAnalysisSchema = TransitAnnouncementSchema.omit({
+  normalizedTranscription: true,
+}).extend({
   mentions: z.array(StationMentionSchema),
+  events: z.array(SemanticEventSchema).optional().default([]),
 });
 
 export const GeminiNormalizationSchema = z.object({
   normalizedTranscription: z.string().trim().min(1),
-  entities: z.array(z.object({
-    text: z.string().trim().min(1),
-    kind: z.enum(["station", "line", "train_name", "train_type", "destination", "other_proper_noun"]),
-    sourceText: z.string().trim().min(1).nullable(),
-  })),
+  normalizedEvents: z
+    .array(
+      z.object({
+        sourceEventId: z.string(),
+        language: z.enum(["ja", "en", "unknown"]),
+        text: z.string().min(1),
+      }),
+    )
+    .optional(),
+  entities: z.array(
+    z.object({
+      text: z.string().trim().min(1),
+      kind: z.enum([
+        "station",
+        "line",
+        "train_name",
+        "train_type",
+        "destination",
+        "other_proper_noun",
+      ]),
+      sourceText: z.string().trim().min(1).nullable(),
+      sourceMentionId: z.string().optional(),
+    }),
+  ),
 });
 export const GeminiResponseSchema = z
   .object({
@@ -159,6 +240,7 @@ export const geminiAnalysisJsonSchema = {
   required: [
     "isTransitAnnouncement",
     "mentions",
+    "events",
     "station",
     "line",
     "trainType",
@@ -174,12 +256,20 @@ export const geminiAnalysisJsonSchema = {
   ],
   properties: {
     ...metadataProperties,
+    events: { type: "array", items: semanticEventJsonSchema },
     mentions: {
       type: "array",
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["text", "phoneticHint", "start", "end", "role", "sequenceId"],
+        required: [
+          "text",
+          "phoneticHint",
+          "start",
+          "end",
+          "role",
+          "sequenceId",
+        ],
         properties: {
           text: { type: "string", minLength: 1 },
           phoneticHint: { type: ["string", "null"], minLength: 1 },
@@ -196,22 +286,43 @@ export const geminiAnalysisJsonSchema = {
 export const geminiNormalizationJsonSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["normalizedTranscription", "entities"],
+  required: ["normalizedTranscription", "normalizedEvents", "entities"],
   properties: {
     normalizedTranscription: { type: "string", minLength: 1 },
+    normalizedEvents: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["sourceEventId", "language", "text"],
+        properties: {
+          sourceEventId: { type: "string" },
+          language: { type: "string", enum: ["ja", "en", "unknown"] },
+          text: { type: "string", minLength: 1 },
+        },
+      },
+    },
     entities: {
       type: "array",
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["text", "kind", "sourceText"],
+        required: ["text", "kind", "sourceText", "sourceMentionId"],
         properties: {
           text: { type: "string", minLength: 1 },
           kind: {
             type: "string",
-            enum: ["station", "line", "train_name", "train_type", "destination", "other_proper_noun"],
+            enum: [
+              "station",
+              "line",
+              "train_name",
+              "train_type",
+              "destination",
+              "other_proper_noun",
+            ],
           },
           sourceText: { type: ["string", "null"], minLength: 1 },
+          sourceMentionId: { type: "string" },
         },
       },
     },
