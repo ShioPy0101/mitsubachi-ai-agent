@@ -33,15 +33,27 @@ export function generateRailwayFilename(
   maxLength = 180,
 ): string {
   const extensionCandidate = originalFilename.split(".").pop()?.toLowerCase();
-  const extension = extensionCandidate !== undefined && /^[a-z0-9]{2,5}$/u.test(extensionCandidate) ? extensionCandidate : "mp3";
+  const extension =
+    extensionCandidate !== undefined &&
+    /^[a-z0-9]{2,5}$/u.test(extensionCandidate)
+      ? extensionCandidate
+      : "mp3";
   const formatTime = (time: string, suffix: string): string => {
     const [hour, minute] = time.split(":");
     return `${Number(hour)}時${minute}分${suffix}`;
   };
-  const departure = metadata.departureTime === null ? null : formatTime(metadata.departureTime, "発");
-  const arrival = metadata.arrivalTime === null ? null : formatTime(metadata.arrivalTime, "着");
-  const destination = metadata.destination === null ? null : `${metadata.destination}行き`;
-  const nextStation = metadata.nextStation === null ? null : `次は${metadata.nextStation}`;
+  const departure =
+    metadata.departureTime === null
+      ? null
+      : formatTime(metadata.departureTime, "発");
+  const arrival =
+    metadata.arrivalTime === null
+      ? null
+      : formatTime(metadata.arrivalTime, "着");
+  const destination =
+    metadata.destination === null ? null : `${metadata.destination}行き`;
+  const nextStation =
+    metadata.nextStation === null ? null : `次は${metadata.nextStation}`;
   const parts = [
     metadata.line,
     metadata.trainName,
@@ -55,7 +67,8 @@ export function generateRailwayFilename(
   ]
     .filter((part): part is string => part !== null && part.length > 0)
     .map((part) => sanitizeFilenamePart(part));
-  const body = parts.length === 0 ? categoryNames[metadata.category] : parts.join("_");
+  const body =
+    parts.length === 0 ? categoryNames[metadata.category] : parts.join("_");
   const suffixLength = extension.length + 1;
   return `${sanitizeFilenamePart(body, Math.max(1, maxLength - suffixLength))}.${extension}`;
 }

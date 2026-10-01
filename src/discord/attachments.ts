@@ -17,10 +17,15 @@ const allowedContentTypes = new Set([
 ]);
 const allowedExtensions = new Set(["mp3", "wav", "m4a", "aac", "flac", "ogg"]);
 
-export function isSupportedAudioAttachment(attachment: DiscordAttachment): boolean {
+export function isSupportedAudioAttachment(
+  attachment: DiscordAttachment,
+): boolean {
   const extension = attachment.filename.split(".").pop()?.toLowerCase();
-  const extensionAllowed = extension !== undefined && allowedExtensions.has(extension);
-  const contentType = attachment.contentType?.split(";", 1)[0]?.trim().toLowerCase() ?? null;
-  const contentTypeAllowed = contentType === null || allowedContentTypes.has(contentType);
+  const extensionAllowed =
+    extension !== undefined && allowedExtensions.has(extension);
+  const contentType =
+    attachment.contentType?.split(";", 1)[0]?.trim().toLowerCase() ?? null;
+  const contentTypeAllowed =
+    contentType === null || allowedContentTypes.has(contentType);
   return extensionAllowed && contentTypeAllowed;
 }

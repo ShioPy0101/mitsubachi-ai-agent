@@ -19,7 +19,12 @@ describe("Discord messages", () => {
       summary: "列車接近",
     };
 
-    expect(formatAnalysisResult(metadata, "列車がまいります", "001_各駅停車大船行き.wav"))
-      .toContain("ファイル名:\n```text\n001_各駅停車大船行き.wav\n```");
+    expect(
+      formatAnalysisResult(
+        metadata,
+        "列車がまいります",
+        "001_各駅停車大船行き.wav",
+      ),
+    ).toContain("ファイル名:\n```text\n001_各駅停車大船行き.wav\n```");
   });
 });

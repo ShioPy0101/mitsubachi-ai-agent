@@ -23,7 +23,9 @@
     "eval:normalize": "node --env-file-if-exists=.dev.vars --import tsx scripts/eval-external-ai.ts normalize",
     "eval:full": "node --env-file-if-exists=.dev.vars --import tsx scripts/eval-external-ai.ts full",
     "eval:accuracy": "node --import tsx scripts/eval-accuracy.ts",
-    "benchmark:static": "node --import tsx scripts/benchmark-static.ts"
+    "benchmark:static": "node --import tsx scripts/benchmark-static.ts",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "codec-parser": "^2.5.0",
@@ -33,8 +35,9 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.8.69",
     "@types/node": "^24.5.2",
-    "typescript": "^5.9.2",
+    "prettier": "^3.9.9",
     "tsx": "^4.20.6",
+    "typescript": "^5.9.2",
     "vitest": "^3.2.4",
     "wrangler": "^4.40.2"
   },
