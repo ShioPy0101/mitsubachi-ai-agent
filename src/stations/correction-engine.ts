@@ -1,3 +1,4 @@
+import { multilingualSupport } from "./multilingual-evidence";
 import { mergeMentionCandidates } from "./candidate-evidence";
 import type { SequenceRole, StationMention } from "../metadata/service";
 import {
@@ -110,6 +111,59 @@ export class StationCorrectionEngine {
         return { id, role, mentions, contextMentions, stationSearch };
       },
     );
+    const supportPlans = sequenceSearches.map((sequence) =>
+      multilingualSupport(sequence, sequenceSearches),
+    );
+    await mapConcurrent(sequenceSearches, 3, async (sequence) => {
+      const support = supportPlans[sequenceSearches.indexOf(sequence)];
+      if (!support) return;
+      signal?.throwIfAborted();
+      const oldMetrics = sequence.stationSearch.metrics;
+      const searchMentions = [
+        ...sequence.mentions,
+        ...sequence.contextMentions,
+      ];
+      const updated = await new StationCandidateService(
+        this.repositoryFactory(),
+      ).analyzeMentions(
+        searchMentions.map((m) => m.text),
+        input.context,
+        {
+          sequenceRole: sequence.role,
+          phoneticHints: searchMentions.map((m) => m.phoneticHint ?? null),
+          supportingStations: support.stations,
+        },
+      );
+      // Additive work must remain visible rather than replacing initial costs.
+      for (const key of [
+        "d1QueryCount",
+        "candidateRowsReturned",
+        "d1RowsRead",
+        "candidateGenerationMs",
+        "lineLookupMs",
+        "lineRouteLoadingMs",
+        "hypothesisGenerationMs",
+        "graphSearchMs",
+        "alignmentMs",
+        "totalMs",
+        "alignmentComparisonCount",
+        "graphSearchCount",
+        "cacheHits",
+        "cacheMisses",
+      ] as const) {
+        updated.metrics[key] =
+          (updated.metrics[key] ?? 0) + (oldMetrics[key] ?? 0);
+      }
+      updated.mentionCandidates.forEach((candidates, index) => {
+        const evidence = support.evidence[index];
+        if (!evidence) return;
+        for (const candidate of candidates)
+          if (candidate.station.id === evidence.stationId)
+            candidate.crossLanguageEvidence = [evidence];
+      });
+      sequence.stationSearch = updated;
+      signal?.throwIfAborted();
+    });
     const reconciliationStartedAt = Date.now();
     const bindings = reconcileStationMentionCandidates(
       sequenceSearches.map(({ stationSearch }) => stationSearch),

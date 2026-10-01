@@ -19,8 +19,11 @@ import type {
   StationContext,
   RoutePathCandidate,
   RoutePathStation,
+  PhysicalRoute,
+  LineTransition,
 } from "./types";
 import type { RailwayIndexes } from "./static-indexes";
+import { normalizeLocalizedStationName } from "./language";
 
 export type StaticRailwayJobCache = {
   positions: Map<string, PositionedStation[]>;
@@ -104,6 +107,9 @@ export class StaticRailwayRepository implements StationRepository {
       const text = extractStationSearchText(surfaceTexts[index]!);
       const exact =
         this.indexes.byName.get(normalizeStationName(surfaceTexts[index]!)) ??
+        this.indexes.byLocalizedName.get(
+          normalizeLocalizedStationName(surfaceTexts[index]!),
+        ) ??
         [];
       if (exact.length) {
         surface.push(exact.slice(0, surfaceLimit));
@@ -250,7 +256,30 @@ export class StaticRailwayRepository implements StationRepository {
           return [lineId, full] as const;
         }),
       );
-      return materializeLineRoutes(lines, positions);
+      return materializeLineRoutes(lines, positions).map((route, index) => {
+        const path = this.indexes.pathsById.get(
+          lines[Math.floor(index / 2)]!.lineId,
+        )!;
+        const direction =
+          index % 2 === 0 ? ("forward" as const) : ("reverse" as const);
+        return {
+          ...route,
+          direction,
+          physicalStations: route.stations,
+          physicalRoute: {
+            segments: [
+              {
+                lineId: path.lineId,
+                pathId: path.pathId,
+                stationIds: route.stations.map((s) => s.station.id),
+                direction,
+              },
+            ],
+          },
+          lineTransitions: [],
+          directionReversals: 0,
+        };
+      });
     });
     this.cache.lineRoutes.set(key, load);
     return load;
@@ -303,7 +332,11 @@ export class StaticRailwayRepository implements StationRepository {
   private async expandPath(
     path: SegmentPath,
     endpointContextStations: number,
-  ): Promise<RoutePathStation[]> {
+  ): Promise<{
+    stations: RoutePathStation[];
+    physicalRoute: PhysicalRoute;
+    lineTransitions: LineTransition[];
+  }> {
     const segments = path.segments.map((segment) => ({ ...segment }));
     const first = segments[0];
     const last = segments.at(-1);
@@ -316,13 +349,39 @@ export class StaticRailwayRepository implements StationRepository {
       last.toSeq += direction * endpointContextStations;
     }
     const stations: Station[] = [];
+    const physicalSegments: PhysicalRoute["segments"][number][] = [];
+    const lineTransitions: LineTransition[] = [];
     for (const segment of segments) {
-      for (const positioned of await this.expandSegment(segment)) {
-        if (stations.at(-1)?.name !== positioned.station.name)
+      const values = await this.expandSegment(segment);
+      const path = this.indexes.pathsById.get(segment.lineId)!;
+      const previous = physicalSegments.at(-1);
+      if (previous && values[0])
+        lineTransitions.push({
+          fromLineId: previous.lineId,
+          toLineId: path.lineId,
+          atStationId: previous.stationIds.at(-1)!,
+          toStationId: values[0].station.id,
+        });
+      physicalSegments.push({
+        lineId: path.lineId,
+        pathId: path.pathId,
+        stationIds: values.map((v) => v.station.id),
+        direction: segment.toSeq >= segment.fromSeq ? "forward" : "reverse",
+      });
+      for (const positioned of values) {
+        // Only station identity deduplicates the shared connection endpoint.
+        if (stations.at(-1)?.id !== positioned.station.id)
           stations.push(positioned.station);
       }
     }
-    return stations.map((station, routeIndex) => ({ station, routeIndex }));
+    return {
+      stations: stations.map((station, routeIndex) => ({
+        station,
+        routeIndex,
+      })),
+      physicalRoute: { segments: physicalSegments },
+      lineTransitions,
+    };
   }
 
   async findRouteCandidates(
@@ -369,6 +428,7 @@ export class StaticRailwayRepository implements StationRepository {
     ];
     const graph = this.indexes.graph;
     const segmentPaths: SegmentPath[] = [];
+    const endpointPriority = new Map<SegmentPath, number>();
     for (const [startIndex, goalIndex] of uniquePairs) {
       const startName = anchorNames[startIndex];
       const goalName = anchorNames[goalIndex];
@@ -379,34 +439,85 @@ export class StaticRailwayRepository implements StationRepository {
       const goals = occurrences.filter(
         ({ station }) => station.name === goalName,
       );
-      segmentPaths.push(
-        ...enumerateSegmentPaths(starts, goals, graph, maxCandidates * 2),
+      const found = enumerateSegmentPaths(
+        starts,
+        goals,
+        graph,
+        maxCandidates * 2,
       );
+      for (const path of found)
+        endpointPriority.set(
+          path,
+          startIndex === 0 && goalIndex === anchorNames.length - 1 ? 0 : 1,
+        );
+      segmentPaths.push(...found);
     }
     if (segmentPaths.length === 0) return [];
     const boundedSegmentPaths = segmentPaths
-      .sort(comparePathCost)
+      .sort(
+        (a, b) =>
+          endpointPriority.get(a)! - endpointPriority.get(b)! ||
+          comparePathCost(a, b),
+      )
       .slice(0, maxCandidates * MAX_ROUTE_EXPANSION_FACTOR);
     const expanded: Array<{
       stations: RoutePathStation[];
       transferCount: number;
+      physicalRoute: PhysicalRoute;
+      lineTransitions: LineTransition[];
     }> = [];
     const stationSignatures = new Set<string>();
     for (const path of boundedSegmentPaths) {
-      const stations = await this.expandPath(path, endpointContextStations);
+      const physical = await this.expandPath(path, endpointContextStations);
+      const stations = physical.stations;
       const signature = stations.map(({ station }) => station.id).join(",");
       if (stations.length === 0 || stationSignatures.has(signature)) continue;
       stationSignatures.add(signature);
-      expanded.push({ stations, transferCount: path.transferCount });
+      expanded.push({ ...physical, transferCount: path.transferCount });
     }
     const shortestLength = Math.min(
-      ...expanded.map(({ stations }) => stations.length),
+      ...expanded
+        .filter(({ stations }) =>
+          anchorNames.every((name) =>
+            stations.some((s) => s.station.name === name),
+          ),
+        )
+        .map(({ stations }) => stations.length),
     );
     return expanded
-      .map(({ stations, transferCount }): RoutePathCandidate => ({
-        stations,
-        ...scoreRoute(stations, anchorNames, transferCount, shortestLength),
-      }))
+      .map(
+        ({
+          stations,
+          transferCount,
+          physicalRoute,
+          lineTransitions,
+        }): RoutePathCandidate => {
+          const visited = new Set<number>();
+          let repeated = 0;
+          for (const { station } of stations) {
+            if (visited.has(station.id)) repeated++;
+            visited.add(station.id);
+          }
+          const scoring = scoreRoute(
+            stations,
+            anchorNames,
+            transferCount,
+            Number.isFinite(shortestLength) ? shortestLength : stations.length,
+          );
+          return {
+            stations,
+            physicalStations: stations,
+            physicalRoute,
+            lineTransitions,
+            direction: physicalRoute.segments[0]?.direction ?? "forward",
+            // Path-local seq directions cannot be compared across unrelated lines.
+            // A physical station revisit detects genuine backtracking instead.
+            directionReversals: repeated,
+            ...scoring,
+            score: Math.max(0, scoring.score - repeated * 0.15),
+          };
+        },
+      )
       .sort(
         (left, right) =>
           right.score - left.score ||

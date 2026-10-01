@@ -5,6 +5,10 @@ import type {
 } from "./static-schema";
 import { indexRouteGraph } from "./route-algorithms";
 import type { LineMembership } from "./line-routes";
+import {
+  stationNameInLanguage,
+  normalizeLocalizedStationName,
+} from "./language";
 const add = <K, V>(map: Map<K, V[]>, key: K, value: V) => {
   const values = map.get(key) ?? [];
   values.push(value);
@@ -14,6 +18,7 @@ export function buildRailwayIndexes(data: RailwayStaticData) {
   const byId = new Map<number, StaticStation>(),
     byName = new Map<string, StaticStation[]>(),
     byKana = new Map<string, StaticStation[]>();
+  const byLocalizedName = new Map<string, StaticStation[]>();
   const nameGrams = new Map<string, StaticStation[]>(),
     kanaGrams = new Map<string, StaticStation[]>(),
     byAdjacent = new Map<string, StaticStation[]>();
@@ -23,6 +28,11 @@ export function buildRailwayIndexes(data: RailwayStaticData) {
   for (const station of data.stations) {
     byId.set(station.id, station);
     add(byName, station.normalizedName, station);
+    for (const language of ["en", "zh", "ko"] as const) {
+      const name = stationNameInLanguage(station, language);
+      if (name)
+        add(byLocalizedName, normalizeLocalizedStationName(name), station);
+    }
     if (station.normalizedKana) add(byKana, station.normalizedKana, station);
     for (const [text, map] of [
       [station.normalizedName, nameGrams],
@@ -54,6 +64,7 @@ export function buildRailwayIndexes(data: RailwayStaticData) {
     byId,
     byName,
     byKana,
+    byLocalizedName,
     nameGrams,
     kanaGrams,
     byAdjacent,

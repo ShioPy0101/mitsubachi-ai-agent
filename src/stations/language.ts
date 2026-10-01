@@ -158,3 +158,52 @@ export function englishStationReading(text: string): string | null {
   }
   return result;
 }
+
+// Local spelling aliases are lookup evidence, never instructions to translate
+// announcements. They refer to the existing static master, not new station IDs.
+const simplifiedKanji: Record<string, string> = {
+  賀: "贺",
+  沢: "泽",
+  倉: "仓",
+  東: "东",
+  広: "广",
+  島: "岛",
+  門: "门",
+  岡: "冈",
+  浜: "滨",
+  湯: "汤",
+  駅: "站",
+};
+const koreanAliases: Record<string, string> = {
+  京都: "교토",
+  敦賀: "쓰루가",
+  福井: "후쿠이",
+  芦原温泉: "아와라온천",
+  加賀温泉: "가가온천",
+  金沢: "가나자와",
+};
+export function stationNameInLanguage(
+  station: Station,
+  language: import("../railway/semantic").AnnouncementLanguage,
+): string | null {
+  if (language === "en") return stationEnglishName(station);
+  if (language === "zh")
+    return [...station.name].map((c) => simplifiedKanji[c] ?? c).join("");
+  if (language === "ko") return koreanAliases[station.name] ?? null;
+  return language === "ja" ? station.name : null;
+}
+export function normalizeLocalizedStationName(name: string): string {
+  return name.normalize("NFKC").toLowerCase().replace(/[\s-]/g, "");
+}
+export function localizedStationSimilarity(
+  mention: string,
+  station: Station,
+): string | null {
+  return /^[a-z\s-]+$/i.test(mention)
+    ? stationEnglishName(station)
+    : /\p{Script=Hangul}/u.test(mention)
+      ? stationNameInLanguage(station, "ko")
+      : /[贺泽仓东广岛门冈滨汤]/u.test(mention)
+        ? stationNameInLanguage(station, "zh")
+        : null;
+}
