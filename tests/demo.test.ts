@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { env as localEnv } from "cloudflare:test";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 import { handleDemoCommand } from "../src/routes/interactions";
-import { consumeAudioJobs } from "../src/jobs/consumer";
 import type { AudioJobMessage } from "../src/jobs/types";
 
 const demoCommand = {
@@ -20,6 +20,12 @@ const demoCommand = {
   },
 };
 
+beforeEach(async () => {
+  await localEnv.DB
+    .exec(`CREATE TABLE IF NOT EXISTS audio_jobs (id TEXT PRIMARY KEY, guild_id TEXT, channel_id TEXT, user_id TEXT, interaction_id TEXT UNIQUE, attachment_id TEXT, original_filename TEXT, content_type TEXT, size_bytes INTEGER, duration_secs REAL, status TEXT, error_message TEXT, transcription_text TEXT, created_at TEXT, started_at TEXT, completed_at TEXT, processing_started_at TEXT, deadline_at TEXT, stage TEXT, stage_started_at TEXT, failure_code TEXT, pipeline_checkpoint TEXT, presentation_mode TEXT);
+  CREATE TABLE IF NOT EXISTS ephemeral_attachment_references (job_id TEXT PRIMARY KEY, attachment_id TEXT, url TEXT, expires_at TEXT, created_at TEXT);
+  CREATE TABLE IF NOT EXISTS interaction_callback_secrets (interaction_id TEXT PRIMARY KEY, job_id TEXT UNIQUE, token TEXT, expires_at TEXT, created_at TEXT);`);
+});
 afterEach(() => vi.unstubAllGlobals());
 
 describe("owner-only demo", () => {
@@ -31,6 +37,7 @@ describe("owner-only demo", () => {
         AUDIO_JOBS: { send } as unknown as Queue<AudioJobMessage>,
         DISCORD_CONTROL_USER_IDS: '["owner"]',
         MAX_AUDIO_BYTES: "26214400",
+        DB: localEnv.DB,
       },
     );
 
@@ -47,177 +54,48 @@ describe("owner-only demo", () => {
       AUDIO_JOBS: { send },
       DISCORD_CONTROL_USER_IDS: '["owner"]',
       MAX_AUDIO_BYTES: "3",
+      DB: localEnv.DB,
     });
 
     expect(await response.json()).toEqual({ type: 5 });
-    expect(send).toHaveBeenCalledWith({
-      kind: "demo",
-      interactionId: "interaction",
-      interactionToken: "callback-token",
-      userId: "owner",
-      attachment: demoCommand.attachment,
-    }, { contentType: "json" });
+    expect(send).toHaveBeenCalledWith(
+      { jobId: expect.any(String) },
+      { contentType: "json" },
+    );
+    const job = await localEnv.DB.prepare(
+      "SELECT presentation_mode FROM audio_jobs WHERE interaction_id = ?",
+    )
+      .bind(demoCommand.interactionId)
+      .first();
+    expect(job).toEqual({ presentation_mode: "demo" });
 
     const oversizedSend = vi.fn();
-    const oversized = await handleDemoCommand({
-      ...demoCommand,
-      attachment: { ...demoCommand.attachment, size: 4 },
-    }, {
-      AUDIO_JOBS: { send: oversizedSend },
-      DISCORD_CONTROL_USER_IDS: '["owner"]',
-      MAX_AUDIO_BYTES: "3",
-    });
+    const oversized = await handleDemoCommand(
+      {
+        ...demoCommand,
+        attachment: { ...demoCommand.attachment, size: 4 },
+      },
+      {
+        AUDIO_JOBS: { send: oversizedSend },
+        DISCORD_CONTROL_USER_IDS: '["owner"]',
+        MAX_AUDIO_BYTES: "3",
+        DB: localEnv.DB,
+      },
+    );
     expect(await oversized.json()).toMatchObject({ type: 4 });
     expect(oversizedSend).not.toHaveBeenCalled();
   });
 
-  it("runs the shared async analysis without issuing a D1 write", async () => {
-    const sql: string[] = [];
-    const discordContents: string[] = [];
-    const discordFilenames: string[] = [];
-    let geminiRequests = 0;
-    const db = {
-      prepare(statement: string) {
-        sql.push(statement);
-        if (/\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP)\b/iu.test(statement)) {
-          throw new Error(`unexpected D1 write: ${statement}`);
-        }
-        const query = {
-          bind: () => query,
-          all: async () => ({ results: [] }),
-          first: async () => null,
-        };
-        return query;
-      },
-    };
-    const ai = {
-      run: vi.fn().mockResolvedValue({
-        transcription_info: { language: "ja" },
-        text: "次はテスト駅です",
-        segments: [],
-      }),
-    };
-    const geminiAnalysisOutput = {
-      isTransitAnnouncement: true,
-      mentions: [{ text: "テスト駅", start: 2, end: 6, role: "stop", sequenceId: 1 }],
-      station: null,
-      line: "テスト線",
-      trainType: null,
-      trainName: null,
-      trainNumber: null,
-      destination: null,
-      departureTime: null,
-      arrivalTime: null,
-      platform: null,
-      nextStation: "テスト駅",
-      category: "general_information",
-      summary: "次駅案内",
-    };
-    const fetcher = vi.fn(async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-      const url = String(input);
-      if (url === demoCommand.attachment.url) {
-        return new Response(new Uint8Array([1, 2, 3]), {
-          headers: { "content-length": "3", "content-type": "audio/ogg" },
-        });
-      }
-      if (url.includes("generativelanguage.googleapis.com")) {
-        geminiRequests += 1;
-        if (geminiRequests === 1) return new Response("temporary Gemini failure", { status: 503 });
-        const output = geminiRequests === 2
-          ? geminiAnalysisOutput
-          : { normalizedTranscription: "次はテスト駅です", entities: [] };
-        return Response.json({
-          candidates: [{ content: { parts: [{ text: JSON.stringify(output) }] } }],
-        });
-      }
-      if (url.includes("/webhooks/")) {
-        if (typeof init?.body === "string") {
-          const payload = JSON.parse(init.body) as { content?: string };
-          if (payload.content !== undefined) discordContents.push(payload.content);
-        } else if (init?.body instanceof FormData) {
-          const payload = JSON.parse(String(init.body.get("payload_json"))) as { content?: string };
-          if (payload.content !== undefined) discordContents.push(payload.content);
-          const file = init.body.get("files[0]");
-          if (file instanceof File) discordFilenames.push(file.name);
-        }
-        return new Response(null, { status: 204 });
-      }
-      throw new Error(`unexpected fetch: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetcher);
-
-    const ack = vi.fn();
-    const retry = vi.fn();
-    const message = {
-      id: "queue-message",
-      timestamp: new Date(),
-      attempts: 1,
-      body: {
-        kind: "demo",
-        interactionId: demoCommand.interactionId,
-        interactionToken: demoCommand.interactionToken,
-        userId: demoCommand.userId,
-        attachment: demoCommand.attachment,
-      },
-      ack,
-      retry,
-    };
-    const batch = { queue: "audio", messages: [message], ackAll: vi.fn(), retryAll: vi.fn() };
-    const env = {
-      DB: db,
-      AI: ai,
-      DISCORD_BOT_TOKEN: "bot-token",
-      DISCORD_APPLICATION_ID: "application",
-      GEMINI_API_KEY: "gemini-key",
-      GEMINI_MODEL: "gemini-model",
-      MAX_AUDIO_BYTES: "26214400",
-    };
-
-    await consumeAudioJobs(
-      batch as unknown as MessageBatch<AudioJobMessage>,
-      env as unknown as Env,
-    );
-
-    expect(ack).toHaveBeenCalledOnce();
-    expect(retry).not.toHaveBeenCalled();
-    expect(ai.run).toHaveBeenCalledOnce();
-    expect(geminiRequests).toBe(3);
-    expect(sql.length).toBeGreaterThan(0);
-    expect(sql.every((statement) => !/\b(?:INSERT|UPDATE|DELETE|REPLACE|CREATE|ALTER|DROP)\b/iu.test(statement)))
-      .toBe(true);
-    expect(fetcher.mock.calls.some(([url]) => String(url).includes("/webhooks/"))).toBe(true);
-    expect(discordContents).toContain("🔧 音声ファイルを取得しています…");
-    expect(discordContents).toContain("🔧 音声をWhisperへ送信し、文字起こししています…");
-    expect(discordContents).toContain(
-      "🔧 Whisperの文字起こしが完了しました（言語: ja、セグメント: 0件）。以降は同じ文字起こしを利用し、Whisperを再実行しません。",
-    );
-    expect(discordContents).toContain("🔧 Gemini #1で放送構造と明示metadataを解析しています…");
-    expect(discordContents.indexOf(
-      "🔧 Whisperの文字起こしが完了しました（言語: ja、セグメント: 0件）。以降は同じ文字起こしを利用し、Whisperを再実行しません。",
-    )).toBeLessThan(discordContents.indexOf("🔧 Gemini #1で放送構造と明示metadataを解析しています…"));
-    expect(discordContents.some((content) =>
-      content.includes("同じ文字起こしのままこの段階だけ再試行します（2/3）"))).toBe(true);
-    expect(discordContents).toContain("🔧 Gemini #1が完了しました（交通案内判定: true、駅mention: 1件）。");
-    expect(discordContents).toContain("🔧 Gemini #2で構造とsequence候補に制約された文字起こしを生成しています…");
-    expect(discordContents.some((content) => content.startsWith("解析完了\n"))).toBe(true);
-    expect(discordFilenames).toContain("platform-ai-agent-demo-debug.md");
-    const resultCall = fetcher.mock.calls.find(([, init]) => {
-      if (!(init?.body instanceof FormData)) return false;
-      const payload = JSON.parse(String(init.body.get("payload_json"))) as { content?: string };
-      return payload.content?.startsWith("解析完了\n") ?? false;
-    });
-    expect(String(resultCall?.[0])).toContain("/messages/@original");
-    expect((resultCall?.[1]?.body as FormData).get("files[0]")).toBeInstanceOf(File);
-    const diagnostics = discordContents.filter((content) => content.startsWith("**")).join("\n");
-    expect(discordContents.filter((content) => content.startsWith("**"))).toHaveLength(5);
-    expect(diagnostics).toContain("Whisper");
-    expect(diagnostics).toContain("次はテスト駅です");
-    expect(diagnostics).toContain("sequence別の駅・経路探索");
-    expect(diagnostics).toContain("[REDACTED]");
-    expect(diagnostics).toContain("Gemini #1 構造解析");
-    expect(diagnostics).toContain("Gemini #2 raw response");
-    expect(diagnostics).toContain("最終判定");
-    expect(discordContents.filter((content) => content.startsWith("**"))
-      .every((content) => content.length <= 2_000 && content.includes("```"))).toBe(true);
+  it("rejects the removed alpha command", async () => {
+    const { parsePlatformCommand } =
+      await import("../src/discord/interactions");
+    expect(
+      parsePlatformCommand({
+        id: "i",
+        token: "t",
+        type: 2,
+        data: { name: "platform-ai-agent-alpha" },
+      }).ok,
+    ).toBe(false);
   });
 });

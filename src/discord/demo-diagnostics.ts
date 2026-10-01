@@ -1,11 +1,35 @@
-import type { GeminiAnalysisExtraction, GeminiDiagnostics } from "../metadata/gemini";
+import type { ExecutionContext } from "../pipeline/modes";
+import type {
+  GeminiAnalysisExtraction,
+  GeminiDiagnostics,
+} from "../metadata/gemini";
 import type { SequenceRole } from "../metadata/service";
+import type { JobTimingMetrics } from "../pipeline/timing";
 import type { RailwayAnnouncementMetadata } from "../railway/types";
-import { STATION_SEQUENCE_LIMITS, type StationCandidateDiagnostics } from "../stations/candidate-service";
-import { STATION_MATCH_WEIGHTS, type StationResolution } from "../stations/types";
+import {
+  STATION_SEQUENCE_LIMITS,
+  type StationCandidateDiagnostics,
+} from "../stations/candidate-service";
+import type {
+  StationCorrectionFunnel,
+  UnresolvedCorrectionReason,
+} from "../stations/correction-engine";
+import {
+  STATION_MATCH_WEIGHTS,
+  type StationResolution,
+} from "../stations/types";
 import type { TranscriptionResult } from "../transcription/service";
 
 export type DemoDiagnostics = {
+  executionContext?: ExecutionContext;
+  jobTiming?: JobTimingMetrics;
+  correctionFunnel?: StationCorrectionFunnel;
+  unresolvedMentions?: {
+    mentionId: string;
+    reason: UnresolvedCorrectionReason;
+  }[];
+  injectionDiagnostic?: boolean;
+  missedMentionSurfaces?: string[];
   audioInput: {
     filename: string;
     contentType: string | null;
@@ -37,18 +61,28 @@ export type DemoDiagnostics = {
 const messageLimit = 2_000;
 
 function fenceFor(value: string): string {
-  const longest = Math.max(0, ...Array.from(value.matchAll(/`+/gu), (match) => match[0].length));
+  const longest = Math.max(
+    0,
+    ...Array.from(value.matchAll(/`+/gu), (match) => match[0].length),
+  );
   return "`".repeat(Math.max(3, longest + 1));
 }
 
-function codeMessages(title: string, language: string, value: string): string[] {
+function codeMessages(
+  title: string,
+  language: string,
+  value: string,
+): string[] {
   const fence = fenceFor(value);
   const parts: string[] = [];
   let offset = 0;
   while (offset < value.length || parts.length === 0) {
     const provisionalHeader = `**${title}** (999/999)\n${fence}${language}\n`;
     const footer = `\n${fence}`;
-    const size = Math.max(1, messageLimit - provisionalHeader.length - footer.length);
+    const size = Math.max(
+      1,
+      messageLimit - provisionalHeader.length - footer.length,
+    );
     parts.push(value.slice(offset, offset + size));
     offset += size;
   }
@@ -63,7 +97,9 @@ function json(value: unknown): string {
 }
 
 function clipped(value: string, maximumLength: number): string {
-  return value.length <= maximumLength ? value : `${value.slice(0, maximumLength)}\n…（完全版は添付ファイルを参照）`;
+  return value.length <= maximumLength
+    ? value
+    : `${value.slice(0, maximumLength)}\n…（完全版は添付ファイルを参照）`;
 }
 
 function fenced(language: string, value: string): string {
@@ -76,9 +112,12 @@ function routeSummary(diagnostics: StationCandidateDiagnostics): unknown {
     extractedSearchText: diagnostics.searchText,
     context: diagnostics.context,
     algorithmLimits: {
-      surfaceCandidatesPerMention: STATION_SEQUENCE_LIMITS.surfaceCandidatesPerMention,
-      phoneticCandidatesPerMention: STATION_SEQUENCE_LIMITS.phoneticCandidatesPerMention,
-      uniqueCandidatesPerMention: STATION_SEQUENCE_LIMITS.uniqueCandidatesPerMention,
+      surfaceCandidatesPerMention:
+        STATION_SEQUENCE_LIMITS.surfaceCandidatesPerMention,
+      phoneticCandidatesPerMention:
+        STATION_SEQUENCE_LIMITS.phoneticCandidatesPerMention,
+      uniqueCandidatesPerMention:
+        STATION_SEQUENCE_LIMITS.uniqueCandidatesPerMention,
       anchors: 12,
       lineHypotheses: STATION_SEQUENCE_LIMITS.lineHypotheses,
       routeHypotheses: STATION_SEQUENCE_LIMITS.routeHypotheses,
@@ -122,53 +161,128 @@ function routeSummary(diagnostics: StationCandidateDiagnostics): unknown {
 export function formatDemoDiagnostics(value: DemoDiagnostics): string[] {
   const messages = [
     ...codeMessages("1. 音声入力", "json", json(value.audioInput)),
-    ...codeMessages("2. Whisperリクエスト設定", "json", json({
-      model: value.whisper.model,
-      ...value.whisper.settings as object,
-      audio: `[base64 omitted: ${value.audioInput.sizeBytes} source bytes]`,
-    })),
-    ...codeMessages("3. Whisper解析結果（言語・セグメント）", "json", json(value.whisper.result)),
-    ...codeMessages("4. Whisper文字起こし（Gemini入力元）", "text", value.transcription),
-    ...codeMessages("5. Gemini #1 リクエスト（秘密値除外）", "json", json(value.gemini.analysis.request)),
-    ...codeMessages("6. Gemini #1 完全なプロンプト", "text", value.gemini.analysis.prompt),
-    ...codeMessages("7. Gemini #1 raw response", "json", json(value.gemini.analysis.response)),
-    ...codeMessages("8. parsed station mentions", "json", json(value.analysis.mentions)),
+    ...codeMessages(
+      "2. Whisperリクエスト設定",
+      "json",
+      json({
+        model: value.whisper.model,
+        ...(value.whisper.settings as object),
+        audio: `[base64 omitted: ${value.audioInput.sizeBytes} source bytes]`,
+      }),
+    ),
+    ...codeMessages(
+      "3. Whisper解析結果（言語・セグメント）",
+      "json",
+      json(value.whisper.result),
+    ),
+    ...codeMessages(
+      "4. Whisper文字起こし（Gemini入力元）",
+      "text",
+      value.transcription,
+    ),
+    ...codeMessages(
+      "5. Gemini #1 リクエスト（秘密値除外）",
+      "json",
+      json(value.gemini.analysis.request),
+    ),
+    ...codeMessages(
+      "6. Gemini #1 完全なプロンプト",
+      "text",
+      value.gemini.analysis.prompt,
+    ),
+    ...codeMessages(
+      "7. Gemini #1 raw response",
+      "json",
+      json(value.gemini.analysis.response),
+    ),
+    ...codeMessages(
+      "8. parsed station mentions",
+      "json",
+      json(value.analysis.mentions),
+    ),
     ...value.sequenceSearches.flatMap((sequence) => [
-      ...codeMessages(`9.${sequence.id}. ${sequence.role} sequence ${sequence.id} 構造`, "json", json({
-        id: sequence.id,
-        role: sequence.role,
-        mentions: sequence.mentions,
-        contextMentions: sequence.contextMentions,
-        search: routeSummary(sequence.stationSearch),
-      })),
-      ...codeMessages(`10.${sequence.id}. ${sequence.role} sequence ${sequence.id} 駅候補`, "json", json(sequence.stationSearch.candidates)),
+      ...codeMessages(
+        `9.${sequence.id}. ${sequence.role} sequence ${sequence.id} 構造`,
+        "json",
+        json({
+          id: sequence.id,
+          role: sequence.role,
+          mentions: sequence.mentions,
+          contextMentions: sequence.contextMentions,
+          search: routeSummary(sequence.stationSearch),
+        }),
+      ),
+      ...codeMessages(
+        `10.${sequence.id}. ${sequence.role} sequence ${sequence.id} 駅候補`,
+        "json",
+        json(sequence.stationSearch.candidates),
+      ),
     ]),
-    ...codeMessages("11. Gemini #2 リクエスト（秘密値除外）", "json", json(value.gemini.normalization.request)),
-    ...codeMessages("12. Gemini #2 完全なプロンプト", "text", value.gemini.normalization.prompt),
-    ...codeMessages("13. Gemini #2 raw response", "json", json(value.gemini.normalization.response)),
-    ...codeMessages("14. 補正後文字起こし", "text", value.normalizedTranscription),
-    ...codeMessages("15. 最終解析結果", "json", json({
-      normalizationGuard: value.gemini.normalizationGuard,
-      isTransitAnnouncement: value.isTransitAnnouncement,
-      metadata: value.metadata,
-      stationResolution: value.resolution,
-      generatedFilename: value.filename,
-    })),
+    ...codeMessages(
+      "11. Gemini #2 リクエスト（秘密値除外）",
+      "json",
+      json(value.gemini.normalization.request),
+    ),
+    ...codeMessages(
+      "12. Gemini #2 完全なプロンプト",
+      "text",
+      value.gemini.normalization.prompt,
+    ),
+    ...codeMessages(
+      "13. Gemini #2 raw response",
+      "json",
+      json(value.gemini.normalization.response),
+    ),
+    ...codeMessages(
+      "14. 補正後文字起こし",
+      "text",
+      value.normalizedTranscription,
+    ),
+    ...codeMessages(
+      "15. 最終解析結果",
+      "json",
+      json({
+        normalizationObservation: value.gemini.normalizationObservation,
+        execution: value.executionContext,
+        jobTiming: value.jobTiming,
+        correctionFunnel: value.correctionFunnel,
+        unresolvedMentions: value.unresolvedMentions,
+        missedMentionSurfaces: value.missedMentionSurfaces,
+        promptInjectionDiagnostic: value.injectionDiagnostic,
+        isTransitAnnouncement: value.isTransitAnnouncement,
+        metadata: value.metadata,
+        stationResolution: value.resolution,
+        generatedFilename: value.filename,
+      }),
+    ),
   ];
   return messages;
 }
 
 export function formatDemoDiagnosticPreviews(value: DemoDiagnostics): string[] {
-  const sequenceSummary = value.sequenceSearches.map((sequence) => {
-    const routes = sequence.stationSearch.routeCandidates.slice(0, 3).map((route) =>
-      `${route.stations.map(({ station }) => station.name).join(" → ")} (score=${route.score.toFixed(3)})`).join("\n");
-    const context = sequence.contextMentions.length === 0
-      ? ""
-      : ` / context=${sequence.contextMentions.map(({ text, role }) => `${text}[${role}]`).join(" → ")}`;
-    return `sequence ${sequence.id} [${sequence.role}]: ${sequence.mentions.map(({ text, role }) => `${text}[${role}]`).join(" → ")}${context}\nstatus=${sequence.stationSearch.routeSearchStatus} / fallback=${sequence.stationSearch.sequenceFallbackAttempted}\n${routes || "経路候補なし"}`;
-  }).join("\n\n") || "経路探索sequenceなし";
-  const analysisRequest = value.gemini.analysis.request as { endpoint?: unknown };
-  const normalizationRequest = value.gemini.normalization.request as { endpoint?: unknown };
+  const sequenceSummary =
+    value.sequenceSearches
+      .map((sequence) => {
+        const routes = sequence.stationSearch.routeCandidates
+          .slice(0, 3)
+          .map(
+            (route) =>
+              `${route.stations.map(({ station }) => station.name).join(" → ")} (score=${route.score.toFixed(3)})`,
+          )
+          .join("\n");
+        const context =
+          sequence.contextMentions.length === 0
+            ? ""
+            : ` / context=${sequence.contextMentions.map(({ text, role }) => `${text}[${role}]`).join(" → ")}`;
+        return `sequence ${sequence.id} [${sequence.role}]: ${sequence.mentions.map(({ text, role }) => `${text}[${role}]`).join(" → ")}${context}\nstatus=${sequence.stationSearch.routeSearchStatus} / fallback=${sequence.stationSearch.sequenceFallbackAttempted}\n${routes || "経路候補なし"}`;
+      })
+      .join("\n\n") || "経路探索sequenceなし";
+  const analysisRequest = (value.gemini.analysis.request ?? {}) as {
+    endpoint?: unknown;
+  };
+  const normalizationRequest = (value.gemini.normalization.request ?? {}) as {
+    endpoint?: unknown;
+  };
 
   return [
     [
@@ -199,13 +313,25 @@ export function formatDemoDiagnosticPreviews(value: DemoDiagnostics): string[] {
     ].join("\n"),
     [
       "**✅ 最終判定**",
-      fenced("json", clipped(json({
-        normalizationGuard: value.gemini.normalizationGuard,
-        normalizedTranscription: value.normalizedTranscription,
-        metadata: value.metadata,
-        stationResolution: value.resolution,
-        generatedFilename: value.filename,
-      }), 1_600)),
+      fenced(
+        "json",
+        clipped(
+          json({
+            normalizationObservation: value.gemini.normalizationObservation,
+            execution: value.executionContext,
+            jobTiming: value.jobTiming,
+            correctionFunnel: value.correctionFunnel,
+            unresolvedMentions: value.unresolvedMentions,
+            missedMentionSurfaces: value.missedMentionSurfaces,
+            promptInjectionDiagnostic: value.injectionDiagnostic,
+            normalizedTranscription: value.normalizedTranscription,
+            metadata: value.metadata,
+            stationResolution: value.resolution,
+            generatedFilename: value.filename,
+          }),
+          1_600,
+        ),
+      ),
     ].join("\n"),
   ];
 }

@@ -13,7 +13,11 @@ export class DiscordRequestTimeoutError extends Error {
 
 export class AttachmentUnavailableError extends Error {
   constructor(
-    readonly reason: "attachment_too_large" | "attachment_unavailable" | "attachment_invalid_content" | "attachment_empty",
+    readonly reason:
+      | "attachment_too_large"
+      | "attachment_unavailable"
+      | "attachment_invalid_content"
+      | "attachment_empty",
     readonly status?: number,
   ) {
     super(status === undefined ? reason : `${reason} (HTTP ${status})`);
@@ -21,8 +25,11 @@ export class AttachmentUnavailableError extends Error {
   }
 }
 
-export type DiscordApiResult = { ok: true } | { ok: false; status: number; responseBody: string };
-export type DiscordMessageResult = { ok: true; messageId: string } | { ok: false; status: number; responseBody: string };
+export type DiscordApiResult =
+  { ok: true } | { ok: false; status: number; responseBody: string };
+export type DiscordMessageResult =
+  | { ok: true; messageId: string }
+  | { ok: false; status: number; responseBody: string };
 
 export type DiscordMessageComponent = {
   type: 1;
@@ -51,10 +58,16 @@ async function apiResult(response: Response): Promise<DiscordApiResult> {
   };
 }
 
-function messagePayload(content: string, file?: DiscordFile): { body: BodyInit; contentTypeHeader?: string } {
+function messagePayload(
+  content: string,
+  file?: DiscordFile,
+): { body: BodyInit; contentTypeHeader?: string } {
   const payload = { content, allowed_mentions: { parse: [] } };
   if (file === undefined) {
-    return { body: JSON.stringify(payload), contentTypeHeader: "application/json" };
+    return {
+      body: JSON.stringify(payload),
+      contentTypeHeader: "application/json",
+    };
   }
   const form = new FormData();
   form.set(
@@ -64,7 +77,12 @@ function messagePayload(content: string, file?: DiscordFile): { body: BodyInit; 
       attachments: [{ id: 0, filename: file.filename }],
     }),
   );
-  form.set("files[0]", new File([file.data], file.filename, { type: file.contentType ?? "application/octet-stream" }));
+  form.set(
+    "files[0]",
+    new File([file.data], file.filename, {
+      type: file.contentType ?? "application/octet-stream",
+    }),
+  );
   return { body: form };
 }
 
@@ -76,10 +94,16 @@ export class DiscordRestClient {
     private readonly timeoutMs = defaultRequestTimeoutMs,
   ) {}
 
-  private async request(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+  private async request(
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> {
     let timeoutId: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_resolve, reject) => {
-      timeoutId = setTimeout(() => reject(new DiscordRequestTimeoutError(this.timeoutMs)), this.timeoutMs);
+      timeoutId = setTimeout(
+        () => reject(new DiscordRequestTimeoutError(this.timeoutMs)),
+        this.timeoutMs,
+      );
     });
     try {
       return await Promise.race([this.fetcher(input, init), timeout]);
@@ -88,26 +112,43 @@ export class DiscordRestClient {
     }
   }
 
-  async downloadTemporaryAttachment(attachment: DiscordAttachment, maximumBytes: number): Promise<ArrayBuffer> {
+  async downloadTemporaryAttachment(
+    attachment: DiscordAttachment,
+    maximumBytes: number,
+    signal?: AbortSignal,
+  ): Promise<ArrayBuffer> {
     if (attachment.size > maximumBytes) {
       throw new AttachmentUnavailableError("attachment_too_large");
     }
 
-    const response = await this.request(attachment.url);
+    signal?.throwIfAborted();
+    const response = await this.request(
+      attachment.url,
+      signal ? { signal } : undefined,
+    );
 
     if (!response.ok) {
-      throw new AttachmentUnavailableError("attachment_unavailable", response.status);
+      throw new AttachmentUnavailableError(
+        "attachment_unavailable",
+        response.status,
+      );
     }
 
     const responseContentType = response.headers.get("content-type");
     const contentLengthHeader = response.headers.get("content-length");
-    const declaredLength = contentLengthHeader === null ? null : Number(contentLengthHeader);
+    const declaredLength =
+      contentLengthHeader === null ? null : Number(contentLengthHeader);
 
-    if (declaredLength !== null && Number.isFinite(declaredLength) && declaredLength > maximumBytes) {
+    if (
+      declaredLength !== null &&
+      Number.isFinite(declaredLength) &&
+      declaredLength > maximumBytes
+    ) {
       throw new AttachmentUnavailableError("attachment_too_large");
     }
 
     const body = await response.arrayBuffer();
+    signal?.throwIfAborted();
 
     if (body.byteLength > maximumBytes) {
       throw new AttachmentUnavailableError("attachment_too_large");
@@ -131,49 +172,89 @@ export class DiscordRestClient {
         .join(" "),
     });
 
-    if (responseContentType?.startsWith("text/") || responseContentType?.includes("application/json")) {
+    if (
+      responseContentType?.startsWith("text/") ||
+      responseContentType?.includes("application/json")
+    ) {
       throw new AttachmentUnavailableError("attachment_invalid_content");
     }
 
     return body;
   }
 
-  async editOriginalResponse(token: string, content: string, file?: DiscordFile): Promise<DiscordApiResult> {
+  async editOriginalResponse(
+    token: string,
+    content: string,
+    file?: DiscordFile,
+  ): Promise<DiscordApiResult> {
     const payload = messagePayload(content, file);
-    const response = await this.request(`https://discord.com/api/v10/webhooks/${this.applicationId}/${token}/messages/@original`, {
-      method: "PATCH",
-      ...(payload.contentTypeHeader === undefined ? {} : { headers: { "Content-Type": payload.contentTypeHeader } }),
-      body: payload.body,
-    });
+    const response = await this.request(
+      `https://discord.com/api/v10/webhooks/${this.applicationId}/${token}/messages/@original`,
+      {
+        method: "PATCH",
+        ...(payload.contentTypeHeader === undefined
+          ? {}
+          : { headers: { "Content-Type": payload.contentTypeHeader } }),
+        body: payload.body,
+      },
+    );
     return apiResult(response);
   }
 
-  async sendInteractionFollowup(token: string, content: string, file?: DiscordFile): Promise<DiscordApiResult> {
+  async sendInteractionFollowup(
+    token: string,
+    content: string,
+    file?: DiscordFile,
+  ): Promise<DiscordApiResult> {
     const payload = messagePayload(content, file);
     for (let attempt = 0; attempt <= maximumRateLimitRetries; attempt += 1) {
-      const response = await this.request(`https://discord.com/api/v10/webhooks/${this.applicationId}/${token}`, {
-        method: "POST",
-        ...(payload.contentTypeHeader === undefined ? {} : { headers: { "Content-Type": payload.contentTypeHeader } }),
-        body: payload.body,
-      });
-      if (response.status !== 429 || attempt === maximumRateLimitRetries) return apiResult(response);
-      const rateLimit = (await response.json().catch(() => null)) as { retry_after?: unknown } | null;
-      const retryAfterSeconds = typeof rateLimit?.retry_after === "number" ? rateLimit.retry_after : 1;
-      await new Promise((resolve) => setTimeout(resolve, Math.min(10_000, Math.max(100, retryAfterSeconds * 1_000))));
+      const response = await this.request(
+        `https://discord.com/api/v10/webhooks/${this.applicationId}/${token}`,
+        {
+          method: "POST",
+          ...(payload.contentTypeHeader === undefined
+            ? {}
+            : { headers: { "Content-Type": payload.contentTypeHeader } }),
+          body: payload.body,
+        },
+      );
+      if (response.status !== 429 || attempt === maximumRateLimitRetries)
+        return apiResult(response);
+      const rateLimit = (await response.json().catch(() => null)) as {
+        retry_after?: unknown;
+      } | null;
+      const retryAfterSeconds =
+        typeof rateLimit?.retry_after === "number" ? rateLimit.retry_after : 1;
+      await new Promise((resolve) =>
+        setTimeout(
+          resolve,
+          Math.min(10_000, Math.max(100, retryAfterSeconds * 1_000)),
+        ),
+      );
     }
     throw new Error("unreachable");
   }
 
-  async sendChannelMessage(channelId: string, content: string, file?: DiscordFile): Promise<DiscordApiResult> {
+  async sendChannelMessage(
+    channelId: string,
+    content: string,
+    file?: DiscordFile,
+  ): Promise<DiscordApiResult> {
     const payload = messagePayload(content, file);
-    const response = await this.request(`https://discord.com/api/v10/channels/${channelId}/messages`, {
-      method: "POST",
-      headers:
-        payload.contentTypeHeader === undefined
-          ? { Authorization: `Bot ${this.botToken}` }
-          : { Authorization: `Bot ${this.botToken}`, "Content-Type": payload.contentTypeHeader },
-      body: payload.body,
-    });
+    const response = await this.request(
+      `https://discord.com/api/v10/channels/${channelId}/messages`,
+      {
+        method: "POST",
+        headers:
+          payload.contentTypeHeader === undefined
+            ? { Authorization: `Bot ${this.botToken}` }
+            : {
+                Authorization: `Bot ${this.botToken}`,
+                "Content-Type": payload.contentTypeHeader,
+              },
+        body: payload.body,
+      },
+    );
     return apiResult(response);
   }
 
@@ -182,17 +263,37 @@ export class DiscordRestClient {
     content: string,
     components: DiscordMessageComponent[] = [],
   ): Promise<DiscordMessageResult> {
-    const response = await this.request(`https://discord.com/api/v10/channels/${channelId}/messages`, {
-      method: "POST",
-      headers: { Authorization: `Bot ${this.botToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ content, components, allowed_mentions: { parse: [] } }),
-    });
+    const response = await this.request(
+      `https://discord.com/api/v10/channels/${channelId}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bot ${this.botToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          content,
+          components,
+          allowed_mentions: { parse: [] },
+        }),
+      },
+    );
     if (!response.ok) {
-      return { ok: false, status: response.status, responseBody: (await response.text()).slice(0, 500) };
+      return {
+        ok: false,
+        status: response.status,
+        responseBody: (await response.text()).slice(0, 500),
+      };
     }
-    const body = await response.json().catch(() => null) as { id?: unknown } | null;
+    const body = (await response.json().catch(() => null)) as {
+      id?: unknown;
+    } | null;
     if (typeof body?.id !== "string") {
-      return { ok: false, status: response.status, responseBody: "Discord response did not contain a message id" };
+      return {
+        ok: false,
+        status: response.status,
+        responseBody: "Discord response did not contain a message id",
+      };
     }
     return { ok: true, messageId: body.id };
   }
@@ -203,11 +304,21 @@ export class DiscordRestClient {
     content: string,
     components: DiscordMessageComponent[] = [],
   ): Promise<DiscordApiResult> {
-    const response = await this.request(`https://discord.com/api/v10/channels/${channelId}/messages/${messageId}`, {
-      method: "PATCH",
-      headers: { Authorization: `Bot ${this.botToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ content, components, allowed_mentions: { parse: [] } }),
-    });
+    const response = await this.request(
+      `https://discord.com/api/v10/channels/${channelId}/messages/${messageId}`,
+      {
+        method: "PATCH",
+        headers: {
+          Authorization: `Bot ${this.botToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          content,
+          components,
+          allowed_mentions: { parse: [] },
+        }),
+      },
+    );
     return apiResult(response);
   }
 }
