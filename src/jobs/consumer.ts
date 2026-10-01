@@ -2,7 +2,7 @@ import { z } from "zod";
 import { CallbackSecretsRepository } from "../db/callback-secrets-repository";
 import { ClipsRepository } from "../db/clips-repository";
 import { JobsRepository } from "../db/jobs-repository";
-import { D1StationsRepository } from "../db/stations-repository";
+import { createD1StationsJobCache, D1StationsRepository } from "../db/stations-repository";
 import { AttachmentUnavailableError, DiscordRestClient, type DiscordFile } from "../discord/rest-client";
 import {
   formatDemoDiagnosticPreviews,
@@ -17,10 +17,9 @@ import {
   isRetryableGeminiError,
 } from "../metadata/gemini";
 import { generateRailwayFilename } from "../railway/filename";
-import { StationCandidateService, updateStationMentionBindings } from "../stations/candidate-service";
+import { reconcileStationMentionCandidates, StationCandidateService } from "../stations/candidate-service";
 import { resolveStation } from "../stations/resolver";
 import { groupStationSequences } from "../stations/stop-sequences";
-import type { Station } from "../stations/types";
 import type { TranscriptionResult } from "../transcription/service";
 import {
   CloudflareWhisperTranscriptionService,
@@ -630,26 +629,63 @@ async function processJob(
     return "failed";
   }
   await updateProgress(job, "役割別sequenceごとに駅候補と局所経路を検索しています…", callbacks, discord, showDemoProgress);
-  const candidateService = new StationCandidateService(new D1StationsRepository(env.DB));
-  const sequenceSearches: DemoDiagnostics["sequenceSearches"] = [];
-  const stationMentionBindings = new Map<string, Station>();
-  for (const { id, role, mentions, contextMentions } of groupStationSequences(analysis.mentions)) {
-    if (role === "unknown") continue;
-    const searchMentions = [...mentions, ...contextMentions];
-    const stationSearch = await runJobStage(`station_candidates_sequence_${id}`, () =>
-      candidateService.analyzeMentions(
+  const sequences = groupStationSequences(analysis.mentions).filter(({ role }) => role !== "unknown");
+  const stationSearchCache = createD1StationsJobCache();
+  const sequenceSearches: DemoDiagnostics["sequenceSearches"] = await runJobStage(
+    "station_candidates_sequences",
+    () => Promise.all(sequences.map(async ({ id, role, mentions, contextMentions }) => {
+      const searchMentions = [...mentions, ...contextMentions];
+      const stationSearch = await new StationCandidateService(
+        new D1StationsRepository(env.DB, stationSearchCache),
+      ).analyzeMentions(
         searchMentions.map(({ text }) => text),
         {},
         {
           sequenceRole: role,
           destinationContext: contextMentions.length > 0,
-          mentionReadings: searchMentions.map(({ reading }) => reading ?? null),
-          bindings: stationMentionBindings,
+          phoneticHints: searchMentions.map(({ phoneticHint }) => phoneticHint ?? null),
         },
-      ));
-    updateStationMentionBindings(stationMentionBindings, stationSearch);
-    sequenceSearches.push({ id, role, mentions, contextMentions, stationSearch });
+      );
+      return { id, role, mentions, contextMentions, stationSearch };
+    })),
+  );
+  const reconciliationStartedAt = Date.now();
+  const stationMentionBindings = reconcileStationMentionCandidates(
+    sequenceSearches.map(({ stationSearch }) => stationSearch),
+  );
+  for (const { id, stationSearch } of sequenceSearches) {
+    const metrics = stationSearch.metrics;
+    console.info("station_candidates_sequence_summary", {
+      jobId: job.id,
+      sequenceId: id,
+      mentions: metrics.mentions,
+      surface_candidate_count: metrics.surfaceCandidateCount,
+      phonetic_candidate_count: metrics.phoneticCandidateCount,
+      unique_candidate_count: metrics.uniqueCandidateCount,
+      line_ids_loaded: metrics.lineIdsLoaded,
+      route_hypotheses_generated: metrics.routeHypothesesGenerated,
+      route_hypotheses_kept: metrics.routeHypothesesKept,
+      graph_search_count: metrics.graphSearchCount,
+      fallback_executed: metrics.fallbackExecuted,
+      fallback_seed_count: metrics.fallbackSeedCount,
+      alignment_route_count: metrics.alignmentRouteCount,
+      alignment_comparison_count: metrics.alignmentComparisonCount,
+      d1_query_count: metrics.d1QueryCount,
+      candidate_generation_ms: metrics.candidateGenerationMs,
+      line_lookup_ms: metrics.lineLookupMs,
+      hypothesis_generation_ms: metrics.hypothesisGenerationMs,
+      graph_search_ms: metrics.graphSearchMs,
+      alignment_ms: metrics.alignmentMs,
+      reconciliation_ms: metrics.reconciliationMs,
+      total_ms: metrics.totalMs,
+    });
   }
+  console.info("station_candidates_reconciliation_summary", {
+    jobId: job.id,
+    sequenceCount: sequenceSearches.length,
+    bindingCount: stationMentionBindings.size,
+    reconciliationMs: Date.now() - reconciliationStartedAt,
+  });
   const candidates = [...new Map(sequenceSearches.flatMap(({ stationSearch }) => stationSearch.candidates)
     .map((candidate) => [candidate.station.id, candidate])).values()];
   if (showDemoProgress) {

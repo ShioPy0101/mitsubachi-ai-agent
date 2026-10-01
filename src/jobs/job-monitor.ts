@@ -11,6 +11,7 @@ const stageLabels: Record<string, string> = {
   transcription_checkpoint: "文字起こし中間保存",
   gemini_analysis: "Gemini #1 放送構造解析",
   gemini_normalization: "Gemini #2 文字起こし補正",
+  station_candidates_sequences: "駅・経路候補一括探索",
   clip_save: "解析結果保存",
   attachment_download_for_result: "結果用音声ファイル取得",
   result_notification: "Discord結果送信",

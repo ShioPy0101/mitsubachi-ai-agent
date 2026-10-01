@@ -1,5 +1,6 @@
 import { z } from "zod";
-import type { StationRepository } from "../stations/candidate-service";
+import type { LineCandidateSeed, StationRepository } from "../stations/candidate-service";
+import { extractStationSearchText } from "../stations/normalization";
 import type { RoutePathCandidate, RoutePathStation, Station, StationContext } from "../stations/types";
 
 const StationRowSchema = z.object({
@@ -9,6 +10,10 @@ const StationRowSchema = z.object({
   latitude: z.number().nullable(), postal: z.string().nullable(),
 });
 const PositionedStationRowSchema = StationRowSchema.extend({ line_id: z.string(), seq: z.number().int() });
+const CandidateStationRowSchema = StationRowSchema.extend({ mention_index: z.number().int().nonnegative() });
+const CandidateLineMembershipRowSchema = z.object({
+  line_id: z.string(), station_id: z.number().int(), seq: z.number().int(),
+});
 const ConnectionRowSchema = z.object({
   from_segment_id: z.string(), to_segment_id: z.string(),
   from_station_id: z.number().int(), to_station_id: z.number().int(),
@@ -17,6 +22,14 @@ const ConnectionRowSchema = z.object({
 
 type PositionedStation = { station: Station; lineId: string; seq: number };
 type SegmentConnection = z.output<typeof ConnectionRowSchema>;
+export type D1StationsJobCache = {
+  lineRoutes: Map<string, Promise<RoutePathCandidate[]>>;
+  connections?: Promise<SegmentConnection[]>;
+};
+
+export function createD1StationsJobCache(): D1StationsJobCache {
+  return { lineRoutes: new Map() };
+}
 type PathSegment = { lineId: string; fromSeq: number; toSeq: number };
 type SegmentPath = { segments: PathSegment[]; transferCount: number; distance: number };
 type SearchState = SegmentPath & { lineId: string; seq: number; visited: Set<string> };
@@ -24,6 +37,7 @@ type SearchState = SegmentPath & { lineId: string; seq: number; visited: Set<str
 const MAX_TRANSFERS = 3;
 const MAX_SEGMENTS = 8;
 const MAX_EXPANDED_STATES = 5_000;
+const MAX_ROUTE_EXPANSION_FACTOR = 4;
 const stationColumns = `station.id, station.name, station.kana, station.kana_source,
   station.operator_name, station.line_name, station.prefecture, station.prev_station,
   station.next_station, station.longitude, station.latitude, station.postal`;
@@ -195,9 +209,17 @@ function scoreRoute(
 }
 
 export class D1StationsRepository implements StationRepository {
-  constructor(private readonly db: D1Database) {}
+  private queryCount = 0;
+
+  constructor(
+    private readonly db: D1Database,
+    private readonly cache: D1StationsJobCache = createD1StationsJobCache(),
+  ) {}
+
+  getQueryCount(): number { return this.queryCount; }
 
   async findCandidatePool(searchText: string, context: StationContext, limit: number): Promise<Station[]> {
+    this.queryCount += 1;
     const prefix = searchText.slice(0, 2);
     const result = await this.db.prepare(`
       SELECT id, name, kana, kana_source, operator_name, line_name, prefecture,
@@ -228,8 +250,199 @@ export class D1StationsRepository implements StationRepository {
     return result.results.map(toStation);
   }
 
+  async findCandidatePools(
+    surfaceTexts: readonly string[],
+    phoneticHints: readonly (string | null)[],
+    context: StationContext,
+    surfaceLimit: number,
+    phoneticLimit: number,
+  ): Promise<{ surface: Station[][]; phonetic: Station[][] }> {
+    const surface = surfaceTexts.map((): Station[] => []);
+    const phonetic = surfaceTexts.map((): Station[] => []);
+    if (surfaceTexts.length === 0) return { surface, phonetic };
+    const values = surfaceTexts.map(() => "(?, ?)").join(", ");
+    this.queryCount += 1;
+    const surfaceRows = await this.db.prepare(`
+      WITH search_terms(mention_index, search_text) AS (VALUES ${values}),
+      search_context(line_name, prefecture, previous_station, next_station) AS (VALUES (?, ?, ?, ?)),
+      ranked AS (
+        SELECT search_terms.mention_index, ${stationColumns},
+          ROW_NUMBER() OVER (
+            PARTITION BY search_terms.mention_index
+            ORDER BY
+              CASE WHEN instr(search_terms.search_text, station.normalized_name) > 0 THEN 0 ELSE 1 END,
+              CASE WHEN station.line_name = search_context.line_name THEN 0 ELSE 1 END,
+              abs(length(station.normalized_name) - length(search_terms.search_text)),
+              station.id
+          ) AS candidate_rank
+        FROM search_terms
+        CROSS JOIN search_context
+        INNER JOIN stations station ON
+          instr(search_terms.search_text, station.normalized_name) > 0
+          OR instr(station.normalized_name, search_terms.search_text) > 0
+          OR (station.prev_station IS NOT NULL AND instr(search_terms.search_text, station.prev_station) > 0)
+          OR (station.next_station IS NOT NULL AND instr(search_terms.search_text, station.next_station) > 0)
+          OR (search_context.line_name IS NOT NULL AND station.line_name = search_context.line_name)
+          OR (search_context.prefecture IS NOT NULL AND station.prefecture = search_context.prefecture)
+          OR (search_context.previous_station IS NOT NULL
+            AND (station.prev_station = search_context.previous_station OR station.next_station = search_context.previous_station))
+          OR (search_context.next_station IS NOT NULL
+            AND (station.prev_station = search_context.next_station OR station.next_station = search_context.next_station))
+      )
+      SELECT * FROM ranked WHERE candidate_rank <= ? ORDER BY mention_index, candidate_rank
+    `).bind(
+      ...surfaceTexts.flatMap((text, index) => [index, extractStationSearchText(text)]),
+      context.lineName ?? null,
+      context.prefecture ?? null,
+      context.previousStation ?? null,
+      context.nextStation ?? null,
+      surfaceLimit,
+    ).all();
+    for (const input of surfaceRows.results) {
+      const row = CandidateStationRowSchema.parse(input);
+      surface[row.mention_index]?.push(toStation(row));
+    }
+
+    const phoneticTerms = phoneticHints.flatMap((hint, index) =>
+      hint === null ? [] : [{ index, text: extractStationSearchText(hint) }]);
+    if (phoneticTerms.length === 0) return { surface, phonetic };
+    const phoneticValues = phoneticTerms.map(() => "(?, ?)").join(", ");
+    this.queryCount += 1;
+    const phoneticRows = await this.db.prepare(`
+      WITH search_terms(mention_index, search_text) AS (VALUES ${phoneticValues}),
+      ranked AS (
+        SELECT search_terms.mention_index, ${stationColumns},
+          ROW_NUMBER() OVER (
+            PARTITION BY search_terms.mention_index
+            ORDER BY
+              CASE WHEN instr(search_terms.search_text, station.normalized_kana) > 0 THEN 0 ELSE 1 END,
+              abs(length(station.normalized_kana) - length(search_terms.search_text)),
+              station.id
+          ) AS candidate_rank
+        FROM search_terms
+        INNER JOIN stations station ON station.normalized_kana IS NOT NULL AND (
+          instr(search_terms.search_text, station.normalized_kana) > 0
+          OR instr(station.normalized_kana, search_terms.search_text) > 0
+          OR station.normalized_kana LIKE substr(search_terms.search_text, 1, 2) || '%'
+        )
+      )
+      SELECT * FROM ranked WHERE candidate_rank <= ? ORDER BY mention_index, candidate_rank
+    `).bind(
+      ...phoneticTerms.flatMap(({ index, text }) => [index, text]),
+      phoneticLimit,
+    ).all();
+    for (const input of phoneticRows.results) {
+      const row = CandidateStationRowSchema.parse(input);
+      phonetic[row.mention_index]?.push(toStation(row));
+    }
+    return { surface, phonetic };
+  }
+
+  async findLineRouteCandidates(
+    candidates: readonly LineCandidateSeed[],
+    maxLines: number,
+  ): Promise<RoutePathCandidate[]> {
+    const stationIds = [...new Set(candidates.map(({ stationId }) => stationId))];
+    if (stationIds.length === 0 || maxLines < 1) return [];
+    const cacheKey = JSON.stringify({ maxLines, candidates });
+    const cached = this.cache.lineRoutes.get(cacheKey);
+    if (cached !== undefined) return cached;
+    const request = this.loadLineRouteCandidates(candidates, stationIds, maxLines);
+    this.cache.lineRoutes.set(cacheKey, request);
+    try {
+      return await request;
+    } catch (error) {
+      this.cache.lineRoutes.delete(cacheKey);
+      throw error;
+    }
+  }
+
+  private async loadLineRouteCandidates(
+    candidates: readonly LineCandidateSeed[],
+    stationIds: readonly number[],
+    maxLines: number,
+  ): Promise<RoutePathCandidate[]> {
+    const stationPlaceholders = stationIds.map(() => "?").join(", ");
+    this.queryCount += 1;
+    const membershipRows = await this.db.prepare(`
+      SELECT line_id, station_id, seq
+      FROM station_line_positions
+      WHERE station_id IN (${stationPlaceholders})
+      ORDER BY line_id, seq
+    `).bind(...stationIds).all();
+    const memberships = membershipRows.results.map((row) => CandidateLineMembershipRowSchema.parse(row));
+    const seedsByStation = new Map<number, LineCandidateSeed[]>();
+    for (const candidate of candidates) {
+      const values = seedsByStation.get(candidate.stationId) ?? [];
+      values.push(candidate);
+      seedsByStation.set(candidate.stationId, values);
+    }
+    const lineEvidence = new Map<string, Array<LineCandidateSeed & { seq: number }>>();
+    for (const membership of memberships) {
+      const values = lineEvidence.get(membership.line_id) ?? [];
+      for (const seed of seedsByStation.get(membership.station_id) ?? []) {
+        values.push({ ...seed, seq: membership.seq });
+      }
+      lineEvidence.set(membership.line_id, values);
+    }
+    const lines = [...lineEvidence]
+      .map(([lineId, evidence]) => {
+        const bestByMention = [...new Map(evidence
+          .sort((left, right) => right.strength - left.strength)
+          .map((item) => [item.mentionIndex, item])).values()]
+          .sort((left, right) => left.mentionIndex - right.mentionIndex);
+        const directions = bestByMention.slice(1).map((item, index) =>
+          Math.sign(item.seq - (bestByMention[index]?.seq ?? item.seq)));
+        const increasing = directions.filter((value) => value >= 0).length;
+        const decreasing = directions.filter((value) => value <= 0).length;
+        const orderConsistency = directions.length === 0 ? 0.5 : Math.max(increasing, decreasing) / directions.length;
+        const coverage = bestByMention.length / Math.max(1, new Set(candidates.map(({ mentionIndex }) => mentionIndex)).size);
+        const meanStrength = bestByMention.reduce((sum, item) => sum + item.strength, 0)
+          / Math.max(1, bestByMention.length);
+        return {
+          lineId,
+          preScore: coverage * 0.5 + meanStrength * 0.35 + orderConsistency * 0.15,
+        };
+      })
+      .sort((left, right) => right.preScore - left.preScore || left.lineId.localeCompare(right.lineId))
+      .slice(0, maxLines);
+    if (lines.length === 0) return [];
+    const linePlaceholders = lines.map(() => "?").join(", ");
+    this.queryCount += 1;
+    const positionedRows = await this.db.prepare(`
+      SELECT ${stationColumns}, position.line_id, position.seq
+      FROM station_line_positions position
+      INNER JOIN stations station ON station.id = position.station_id
+      WHERE position.line_id IN (${linePlaceholders})
+      ORDER BY position.line_id, position.seq
+    `).bind(...lines.map(({ lineId }) => lineId)).all();
+    const byLine = new Map<string, PositionedStation[]>();
+    for (const input of positionedRows.results) {
+      const positioned = toPositionedStation(input);
+      const values = byLine.get(positioned.lineId) ?? [];
+      values.push(positioned);
+      byLine.set(positioned.lineId, values);
+    }
+    return lines.flatMap(({ lineId, preScore }): RoutePathCandidate[] => {
+      const values = byLine.get(lineId) ?? [];
+      if (values.length === 0) return [];
+      const forward = values.map(({ station }, routeIndex) => ({ station, routeIndex }));
+      const reverse = [...values].reverse().map(({ station }, routeIndex) => ({ station, routeIndex }));
+      return [forward, reverse].map((stations) => ({
+        stations,
+        anchorCoverage: preScore,
+        orderConsistency: 1,
+        transferCount: 0,
+        pathLength: stations.length,
+        score: preScore,
+        source: "line_fast_path",
+      }));
+    });
+  }
+
   private async findAnchorOccurrences(anchorNames: readonly string[]): Promise<PositionedStation[]> {
     const placeholders = anchorNames.map(() => "?").join(", ");
+    this.queryCount += 1;
     const result = await this.db.prepare(`
       SELECT ${stationColumns}, position.line_id, position.seq
       FROM station_line_positions position
@@ -241,6 +454,19 @@ export class D1StationsRepository implements StationRepository {
   }
 
   private async findConnections(): Promise<SegmentConnection[]> {
+    if (this.cache.connections !== undefined) return this.cache.connections;
+    const request = this.loadConnections();
+    this.cache.connections = request;
+    try {
+      return await request;
+    } catch (error) {
+      delete this.cache.connections;
+      throw error;
+    }
+  }
+
+  private async loadConnections(): Promise<SegmentConnection[]> {
+    this.queryCount += 1;
     const result = await this.db.prepare(`
       SELECT from_segment_id, to_segment_id, from_station_id, to_station_id,
              from_seq, to_seq, transfer_cost
@@ -254,6 +480,7 @@ export class D1StationsRepository implements StationRepository {
     const lower = Math.min(segment.fromSeq, segment.toSeq);
     const upper = Math.max(segment.fromSeq, segment.toSeq);
     const direction = segment.fromSeq <= segment.toSeq ? "ASC" : "DESC";
+    this.queryCount += 1;
     const result = await this.db.prepare(`
       SELECT ${stationColumns}, position.line_id, position.seq
       FROM station_line_positions position
@@ -303,12 +530,13 @@ export class D1StationsRepository implements StationRepository {
       if (startName === undefined || goalName === undefined) continue;
       const starts = occurrences.filter(({ station }) => station.name === startName);
       const goals = occurrences.filter(({ station }) => station.name === goalName);
-      segmentPaths.push(...enumerateSegmentPaths(starts, goals, connections, maxCandidates * 8));
+      segmentPaths.push(...enumerateSegmentPaths(starts, goals, connections, maxCandidates * 2));
     }
     if (segmentPaths.length === 0) return [];
+    const boundedSegmentPaths = segmentPaths.sort(comparePathCost).slice(0, maxCandidates * MAX_ROUTE_EXPANSION_FACTOR);
     const expanded: Array<{ stations: RoutePathStation[]; transferCount: number }> = [];
     const stationSignatures = new Set<string>();
-    for (const path of segmentPaths) {
+    for (const path of boundedSegmentPaths) {
       const stations = await this.expandPath(path, endpointContextStations);
       const signature = stations.map(({ station }) => station.id).join(",");
       if (stations.length === 0 || stationSignatures.has(signature)) continue;
@@ -329,39 +557,4 @@ export class D1StationsRepository implements StationRepository {
       .slice(0, maxCandidates);
   }
 
-  async findLocalRouteCandidates(
-    seedNames: readonly string[],
-    sequenceLength: number,
-    maxCandidates: number,
-    stationRadius?: number,
-  ): Promise<RoutePathCandidate[]> {
-    if (seedNames.length === 0 || sequenceLength < 2 || maxCandidates < 1) return [];
-    const occurrences = await this.findAnchorOccurrences(seedNames);
-    const radius = Math.max(3, stationRadius ?? sequenceLength + 2);
-    const routes: RoutePathCandidate[] = [];
-    const signatures = new Set<string>();
-    for (const occurrence of occurrences) {
-      for (const direction of [1, -1] as const) {
-        const positioned = await this.expandSegment({
-          lineId: occurrence.lineId,
-          fromSeq: occurrence.seq - radius * direction,
-          toSeq: occurrence.seq + radius * direction,
-        });
-        const stations = positioned.map(({ station }, routeIndex) => ({ station, routeIndex }));
-        const signature = stations.map(({ station }) => station.id).join(",");
-        if (stations.length < sequenceLength || signatures.has(signature)) continue;
-        signatures.add(signature);
-        routes.push({
-          stations,
-          anchorCoverage: 0,
-          orderConsistency: 0,
-          transferCount: 0,
-          pathLength: stations.length,
-          score: 0,
-          source: "sequence_fallback",
-        });
-      }
-    }
-    return routes.slice(0, maxCandidates);
-  }
 }
