@@ -191,7 +191,7 @@ describe("metadata derived from the normalized document", () => {
       departureTime: "11:10",
       platform: "0番乗り場",
       nextStation: "鶴ヶ",
-      summary: "鶴ヶに停車する特急",
+      summary: "11:10発 特急サンダーバード17号・和倉温泉行き。次は鶴ヶ",
     },
   };
   it("uses Gemini #2 metadata for the filename and summary even when entities are absent", async () => {
@@ -199,7 +199,7 @@ describe("metadata derived from the normalized document", () => {
     const finalMetadata = {
       ...draft.metadata,
       nextStation: "敦賀",
-      summary: "敦賀に停車する特急",
+      summary: "11:10発 特急サンダーバード17号・和倉温泉行き。次は敦賀",
     };
     const normalized = await new GeminiMetadataService(
       "key",
@@ -218,10 +218,14 @@ describe("metadata derived from the normalized document", () => {
     expect(result.filename).toBe(
       "サンダーバード_17号_特急_和倉温泉行き_11時10分発_0番乗り場_次は敦賀.mp3",
     );
-    expect(result.metadata.summary).toBe("敦賀に停車する特急");
+    expect(result.metadata.summary).toBe(
+      "11:10発 特急サンダーバード17号・和倉温泉行き。次は敦賀",
+    );
     expect(normalized.normalizedTranscription).toBe(finalText);
     expect(draft.metadata.nextStation).toBe("鶴ヶ");
-    expect(draft.metadata.summary).toBe("鶴ヶに停車する特急");
+    expect(draft.metadata.summary).toBe(
+      "11:10発 特急サンダーバード17号・和倉温泉行き。次は鶴ヶ",
+    );
   });
   it("maps an older response without IDs into matching nextStation and summary fields", () => {
     const result = assembleNormalizedMetadata(
@@ -231,7 +235,9 @@ describe("metadata derived from the normalized document", () => {
       null,
     );
     expect(result.nextStation).toBe("敦賀");
-    expect(result.summary).toBe("敦賀に停車する特急");
+    expect(result.summary).toBe(
+      "11:10発 特急サンダーバード17号・和倉温泉行き。次は敦賀",
+    );
   });
   it("does not apply unrelated entities or invalid occurrence IDs to draft metadata", () => {
     const result = assembleNormalizedMetadata(
