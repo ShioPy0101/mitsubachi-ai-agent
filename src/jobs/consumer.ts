@@ -41,6 +41,11 @@ import {
 } from "./staleness";
 import type { AudioJob, AudioJobMessage, DemoAudioJobMessage } from "./types";
 import { createJobMonitor, JobCancellationRequestedError, type JobMonitor } from "./job-monitor";
+import {
+  formatStationCandidateJobProgress,
+  StationCandidatePerformanceWarning,
+  stationCandidatePerformanceWarning,
+} from "./station-observability";
 
 const PersistedAudioJobMessageSchema = z.object({
   kind: z.literal("persisted").optional(),
@@ -164,13 +169,14 @@ async function sendAlert(
   stage: string,
   error: unknown,
   attempt?: number,
+  severity: "error" | "warning" = "error",
 ): Promise<void> {
   const channelId = env.DISCORD_ALERT_CHANNEL_ID?.trim();
   if (!channelId) return;
   const details = errorDetails(error);
   try {
     const result = await discord.sendChannelMessage(channelId, formatAudioJobAlert({
-      jobId, stage, ...(attempt === undefined ? {} : { attempt }), ...details,
+      jobId, stage, ...(attempt === undefined ? {} : { attempt }), severity, ...details,
     }));
     if (!result.ok) {
       console.error("audio_job_alert_failed", {
@@ -631,6 +637,7 @@ async function processJob(
   await updateProgress(job, "役割別sequenceごとに駅候補と局所経路を検索しています…", callbacks, discord, showDemoProgress);
   const sequences = groupStationSequences(analysis.mentions).filter(({ role }) => role !== "unknown");
   const stationSearchCache = createD1StationsJobCache();
+  const stationSearchStartedAt = Date.now();
   const sequenceSearches: DemoDiagnostics["sequenceSearches"] = await runJobStage(
     "station_candidates_sequences",
     () => Promise.all(sequences.map(async ({ id, role, mentions, contextMentions }) => {
@@ -653,6 +660,7 @@ async function processJob(
   const stationMentionBindings = reconcileStationMentionCandidates(
     sequenceSearches.map(({ stationSearch }) => stationSearch),
   );
+  const stationSearchPhaseMs = Date.now() - stationSearchStartedAt;
   for (const { id, stationSearch } of sequenceSearches) {
     const metrics = stationSearch.metrics;
     console.info("station_candidates_sequence_summary", {
@@ -686,6 +694,26 @@ async function processJob(
     bindingCount: stationMentionBindings.size,
     reconciliationMs: Date.now() - reconciliationStartedAt,
   });
+  const stationObservations = sequenceSearches.map(({ id, stationSearch }) => ({
+    id,
+    metrics: stationSearch.metrics,
+  }));
+  await monitor?.observation(
+    job.id,
+    formatStationCandidateJobProgress(stationObservations, stationSearchPhaseMs),
+  );
+  const performanceWarning = stationCandidatePerformanceWarning(stationObservations, stationSearchPhaseMs);
+  if (alertsEnabled && performanceWarning !== null) {
+    await sendAlert(
+      env,
+      discord,
+      job.id,
+      "station_candidates_sequences",
+      new StationCandidatePerformanceWarning(performanceWarning),
+      attempt,
+      "warning",
+    );
+  }
   const candidates = [...new Map(sequenceSearches.flatMap(({ stationSearch }) => stationSearch.candidates)
     .map((candidate) => [candidate.station.id, candidate])).values()];
   if (showDemoProgress) {

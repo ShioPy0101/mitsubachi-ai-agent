@@ -18,6 +18,7 @@ const monitorSchema = `CREATE TABLE IF NOT EXISTS job_monitor_messages (
   user_id TEXT, filename TEXT NOT NULL, size_bytes INTEGER NOT NULL,
   started_at TEXT NOT NULL, stage_started_at TEXT NOT NULL, stage_timeout_at TEXT, updated_at TEXT NOT NULL,
   cancellation_requested_at TEXT, completed_at TEXT, error_message TEXT
+  , observations TEXT NOT NULL DEFAULT ''
 )`;
 
 function job(id = "job-id"): AudioJob {
@@ -60,10 +61,11 @@ describe("audio job monitor", () => {
     await monitor.start(job(), 1);
     await monitor.stageStarted("job-id", "gemini_analysis", 90_000);
     await monitor.stageProgress("job-id", "2チャンク完了・90.0 / 180.0秒");
+    await monitor.observation("job-id", "駅候補探索: phase 80ms・D1 3");
     await monitor.start(job(), 2);
 
     expect(discord.createChannelMessage).toHaveBeenCalledOnce();
-    expect(discord.editChannelMessage).toHaveBeenCalledTimes(3);
+    expect(discord.editChannelMessage).toHaveBeenCalledTimes(4);
     await expect(repository.find("job-id")).resolves.toMatchObject({
       messageId: "monitor-message", currentStage: "gemini_analysis", queueAttempt: 2,
     });
@@ -73,6 +75,8 @@ describe("audio job monitor", () => {
     expect(lastContent).toContain("フェーズ開始から:");
     expect(lastContent).toContain("現在フェーズのタイムアウト:\n90.0秒");
     expect(lastContent).toContain("2チャンク完了・90.0 / 180.0秒");
+    expect(lastContent).toContain("観測:");
+    expect(lastContent).toContain("駅候補探索: phase 80ms・D1 3");
   });
 
   it("persists stop requests and refuses to start the next stage", async () => {
