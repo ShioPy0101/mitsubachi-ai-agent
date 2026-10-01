@@ -325,30 +325,14 @@ export class GeminiMetadataService {
       output.entities,
       output.normalizedEvents,
     );
-    // Structured events preserve time order and both languages without content rejection.
-    // Missing event text falls back locally to that raw span; generated siblings survive.
-    const normalizedEvents =
-      output.normalizedEvents && analysis.semantic
-        ? analysis.semantic.events.map(
-            (event) =>
-              output.normalizedEvents!.find(
-                (e) => e.sourceEventId === event.id,
-              ) ?? {
-                sourceEventId: event.id,
-                language: event.language,
-                text: transcription.slice(
-                  event.sourceSpan.start,
-                  event.sourceSpan.end,
-                ),
-              },
-          )
-        : output.normalizedEvents;
+    // Events are annotations for diagnostics, never an alternative document.
+    // Missing IDs remain observations; do not splice source slices into model prose.
     return {
-      normalizedTranscription: normalizedEvents?.length
-        ? normalizedEvents.map((e) => e.text).join("\n")
-        : output.normalizedTranscription,
+      normalizedTranscription: output.normalizedTranscription,
       entities: output.entities,
-      ...(normalizedEvents ? { normalizedEvents } : {}),
+      ...(output.normalizedEvents
+        ? { normalizedEvents: output.normalizedEvents }
+        : {}),
       diagnostics: generated.diagnostics,
       normalizationObservation: observation,
     };

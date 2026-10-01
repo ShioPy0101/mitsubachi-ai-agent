@@ -28,6 +28,7 @@ export function buildGeminiNormalizationPrompt(
   const structure = {
     metadata: analysis.metadata,
     semanticEvents: analysis.semantic?.events,
+    sourceSegments: analysis.semantic?.sourceSegments,
     mentions: analysis.mentions,
     sequences: sequences.map((sequence) => {
       const searchMentions = [

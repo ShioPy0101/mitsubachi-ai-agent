@@ -56,9 +56,21 @@ export type RailwayAnnouncementEvent = {
   correctionEvidence: string[];
   equivalentEventGroupId: string | null;
 };
+export type SpeechSourceSegment = {
+  startSec: number;
+  endSec: number;
+  text: string;
+};
+export type AnnouncementSourceSegment = {
+  id: string;
+  text: string;
+  sourceSpan: SourceSpan | null;
+  sourceTimeRange?: { startSec: number; endSec: number };
+};
 export type RailwayAnnouncement = {
   readonly rawTranscription: string;
   events: RailwayAnnouncementEvent[];
+  sourceSegments?: AnnouncementSourceSegment[];
 };
 export type NormalizedAnnouncementEvent = {
   sourceEventId: string;
@@ -105,98 +117,145 @@ function eventKind(text: string): AnnouncementEventKind {
   if (/発車|depart/iu.test(text)) return "DepartureAnnouncement";
   return "OtherAnnouncement";
 }
-// Deterministic source partitions ensure no provider can omit a language or occurrence.
+// Provider event spans are approximate annotations, never source split boundaries.
+function sourceSegmentsFor(
+  raw: string,
+  speech: readonly SpeechSourceSegment[],
+): AnnouncementSourceSegment[] {
+  if (speech.length) {
+    let cursor = 0;
+    return speech.map((segment, index) => {
+      const text = segment.text.trim();
+      const start = text ? raw.indexOf(text, cursor) : -1;
+      const sourceSpan = start < 0 ? null : { start, end: start + text.length };
+      if (sourceSpan) cursor = sourceSpan.end;
+      return {
+        id: `speech-segment:${index}`,
+        text: segment.text,
+        sourceSpan,
+        sourceTimeRange: { startSec: segment.startSec, endSec: segment.endSec },
+      };
+    });
+  }
+  // Saved text-only fixtures have no speech boundaries. Use source punctuation,
+  // independently of model offsets, and keep raw unchanged.
+  const boundaries = [...raw.matchAll(/[。!?！？\n]+|(?<!\d)\.(?=\s|$)/gu)].map(
+    (m) => m.index! + m[0].length,
+  );
+  if (boundaries.at(-1) !== raw.length) boundaries.push(raw.length);
+  let start = 0;
+  return boundaries.flatMap((end) => {
+    const span = { start, end };
+    start = end;
+    return span.start === end
+      ? []
+      : [
+          {
+            id: `text-segment:${span.start}:${end}`,
+            text: raw.slice(span.start, end),
+            sourceSpan: span,
+          },
+        ];
+  });
+}
 export function buildSemanticRepresentation(
   rawTranscription: string,
   mentions: readonly StationMention[],
   proposals: readonly SemanticEventProposal[] = [],
+  speechSegments: readonly SpeechSourceSegment[] = [],
 ): RailwayAnnouncement {
-  const events: RailwayAnnouncementEvent[] = [];
-  const boundaries = [
-    ...rawTranscription.matchAll(/[。!?！？\n]+|(?<!\d)\.(?=\s|$)/gu),
-  ].map((m) => m.index! + m[0].length);
-  if (boundaries.at(-1) !== rawTranscription.length)
-    boundaries.push(rawTranscription.length);
-  const orderedBoundaries = [
-    ...new Set([
-      ...boundaries,
-      ...proposals
-        .flatMap((p) => [p.sourceStart, p.sourceEnd])
-        .filter(
-          (n) => Number.isInteger(n) && n > 0 && n <= rawTranscription.length,
-        ),
-    ]),
-  ].sort((a, b) => a - b);
-  let previousEnd = 0;
-  for (const end of orderedBoundaries) {
-    const start = previousEnd;
-    previousEnd = end;
-    const match = [rawTranscription.slice(start, end)];
-    if (!match[0]) continue;
-    const entities: FactualEntity[] = mentions
-      .filter(
-        (m) =>
-          m.start !== null &&
-          m.end !== null &&
-          m.start >= start &&
-          m.end <= end,
-      )
-      .map((m) => ({
-        id: `entity:${m.id}`,
-        kind: "station",
-        text: m.text,
-        sourceSpan: { start: m.start!, end: m.end! },
-        ...(m.id ? { sourceMentionId: m.id } : {}),
-      }));
-    const proposal = proposals.find(
-      (p) => p.sourceStart <= start && p.sourceEnd >= end,
-    );
-    events.push({
-      id: `event:${start}:${end}`,
-      kind: proposal?.kind ?? eventKind(match[0]),
-      language: announcementLanguage(match[0]),
-      sourceSpan: { start, end },
-      sourceSegmentIds: [`text-segment:${start}:${end}`],
-      sourceOccurrenceCount: 1,
-      entities,
-      confidence: proposal?.confidence ?? 0.5,
-      semanticContext: proposal ?? {},
-      correctionEvidence: [],
-      equivalentEventGroupId: proposal?.equivalentEventGroupId ?? null,
-    });
-  }
-  return { rawTranscription, events };
+  const sourceSegments = sourceSegmentsFor(rawTranscription, speechSegments);
+  const events = sourceSegments.flatMap(
+    (source): RailwayAnnouncementEvent[] => {
+      const span = source.sourceSpan ?? {
+        start: 0,
+        end: rawTranscription.length,
+      };
+      const annotations = source.sourceSpan
+        ? proposals.filter(
+            (p) => p.sourceStart < span.end && p.sourceEnd > span.start,
+          )
+        : [];
+      // Multiple annotations may share one complete speech segment. They do not
+      // create sub-segments or new slices of the original text.
+      return (annotations.length ? annotations : [undefined]).map(
+        (proposal, index) => ({
+          id: `event:${source.id}:${index}`,
+          kind: proposal?.kind ?? eventKind(source.text),
+          language:
+            proposal?.language === undefined || proposal.language === "unknown"
+              ? announcementLanguage(source.text)
+              : proposal.language,
+          sourceSpan: span,
+          sourceSegmentIds: [source.id],
+          sourceOccurrenceCount: 1,
+          ...(source.sourceTimeRange
+            ? { sourceTimeRange: source.sourceTimeRange }
+            : {}),
+          entities: mentions
+            .filter(
+              (m) =>
+                source.sourceSpan &&
+                m.start !== null &&
+                m.end !== null &&
+                m.start >= span.start &&
+                m.end <= span.end,
+            )
+            .map((m) => ({
+              id: `entity:${m.id}`,
+              kind: "station" as const,
+              text: m.text,
+              sourceSpan: { start: m.start!, end: m.end! },
+              ...(m.id ? { sourceMentionId: m.id } : {}),
+            })),
+          confidence: proposal?.confidence ?? 0.5,
+          semanticContext: proposal ?? {},
+          correctionEvidence: [],
+          equivalentEventGroupId: proposal?.equivalentEventGroupId ?? null,
+        }),
+      );
+    },
+  );
+  return { rawTranscription, sourceSegments, events };
 }
 
 export function attachSpeechSegmentProvenance(
   representation: RailwayAnnouncement,
-  segments: readonly { startSec: number; endSec: number; text: string }[],
+  segments: readonly SpeechSourceSegment[],
 ): RailwayAnnouncement {
-  let cursor = 0;
-  const spans = segments.flatMap((segment, index) => {
-    const text = segment.text.trim(),
-      start = representation.rawTranscription.indexOf(text, cursor);
-    if (!text || start < 0) return [];
-    const end = start + text.length;
-    cursor = end;
-    return [{ ...segment, start, end, id: `speech-segment:${index}` }];
-  });
-  return {
-    ...representation,
-    events: representation.events.map((event) => {
-      const sources = spans.filter(
-        (s) => s.start < event.sourceSpan.end && s.end > event.sourceSpan.start,
-      );
-      return sources.length
-        ? {
-            ...event,
-            sourceSegmentIds: sources.map((s) => s.id),
-            sourceTimeRange: {
-              startSec: Math.min(...sources.map((s) => s.startSec)),
-              endSec: Math.max(...sources.map((s) => s.endSec)),
-            },
-          }
-        : event;
-    }),
-  };
+  if (!segments.length) return representation;
+  const proposals = representation.events
+    .map((e) => e.semanticContext)
+    .filter(
+      (p): p is SemanticEventProposal =>
+        typeof p.sourceStart === "number" &&
+        typeof p.sourceEnd === "number" &&
+        p.kind !== undefined,
+    );
+  const uniqueProposals = [
+    ...new Map(
+      proposals.map((p) => [
+        `${p.sourceStart}:${p.sourceEnd}:${p.kind}:${p.language}`,
+        p,
+      ]),
+    ).values(),
+  ];
+  const mentions = representation.events
+    .flatMap((e) => e.entities)
+    .filter((e) => e.kind === "station")
+    .map((e): StationMention => ({
+      id: e.sourceMentionId ?? e.id,
+      text: e.text,
+      start: e.sourceSpan.start,
+      end: e.sourceSpan.end,
+      role: "unknown",
+      sequenceId: null,
+      phoneticHint: null,
+    }));
+  return buildSemanticRepresentation(
+    representation.rawTranscription,
+    mentions,
+    uniqueProposals,
+    segments,
+  );
 }

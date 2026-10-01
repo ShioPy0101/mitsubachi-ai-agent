@@ -99,7 +99,7 @@ export const GeminiAnalysisSchema = TransitAnnouncementSchema.omit({
 });
 
 export const GeminiNormalizationSchema = z.object({
-  normalizedTranscription: z.string().trim().min(1),
+  normalizedTranscription: z.string().refine((text) => text.trim().length > 0),
   normalizedEvents: z
     .array(
       z.object({

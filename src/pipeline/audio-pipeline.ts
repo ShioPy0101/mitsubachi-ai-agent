@@ -238,6 +238,25 @@ export async function processJob(
   audio = speech.audio;
   transcriptionText = speech.transcriptionText!;
   transcriptionResult = speech.transcriptionResult;
+  // Retain provider segment boundaries when downstream stages retry without
+  // running Whisper again. The immutable raw transcription stays separate.
+  await runJobStage(
+    "transcription_provenance",
+    async () => {
+      if (transcriptionResult)
+        await checkpoints.write(
+          "speech",
+          transcriptionText,
+          transcriptionResult,
+        );
+      else
+        transcriptionResult = await checkpoints.read<TranscriptionResult>(
+          "speech",
+          transcriptionText,
+        );
+    },
+    stageTimeouts.transcriptionCheckpoint,
+  );
 
   /* ---------------------------------------------------------------------- */
   /* Metadata extraction                                                    */
@@ -414,7 +433,7 @@ export async function processJob(
   let analysis: Awaited<ReturnType<GeminiMetadataService["analyze"]>>;
 
   try {
-    const analysisKey = `${env.GEMINI_MODEL}:semantic-v2:${transcriptionText}`;
+    const analysisKey = `${env.GEMINI_MODEL}:semantic-v3:${transcriptionText}`;
     const cachedAnalysis = await checkpoints.read<typeof analysis>(
       "analysis",
       analysisKey,
