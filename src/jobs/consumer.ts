@@ -17,9 +17,10 @@ import {
   isRetryableGeminiError,
 } from "../metadata/gemini";
 import { generateRailwayFilename } from "../railway/filename";
-import { StationCandidateService } from "../stations/candidate-service";
+import { StationCandidateService, updateStationMentionBindings } from "../stations/candidate-service";
 import { resolveStation } from "../stations/resolver";
 import { groupStationSequences } from "../stations/stop-sequences";
+import type { Station } from "../stations/types";
 import type { TranscriptionResult } from "../transcription/service";
 import {
   CloudflareWhisperTranscriptionService,
@@ -631,6 +632,7 @@ async function processJob(
   await updateProgress(job, "役割別sequenceごとに駅候補と局所経路を検索しています…", callbacks, discord, showDemoProgress);
   const candidateService = new StationCandidateService(new D1StationsRepository(env.DB));
   const sequenceSearches: DemoDiagnostics["sequenceSearches"] = [];
+  const stationMentionBindings = new Map<string, Station>();
   for (const { id, role, mentions, contextMentions } of groupStationSequences(analysis.mentions)) {
     if (role === "unknown") continue;
     const searchMentions = [...mentions, ...contextMentions];
@@ -638,8 +640,14 @@ async function processJob(
       candidateService.analyzeMentions(
         searchMentions.map(({ text }) => text),
         {},
-        { sequenceRole: role, destinationContext: contextMentions.length > 0 },
+        {
+          sequenceRole: role,
+          destinationContext: contextMentions.length > 0,
+          mentionReadings: searchMentions.map(({ reading }) => reading ?? null),
+          bindings: stationMentionBindings,
+        },
       ));
+    updateStationMentionBindings(stationMentionBindings, stationSearch);
     sequenceSearches.push({ id, role, mentions, contextMentions, stationSearch });
   }
   const candidates = [...new Map(sequenceSearches.flatMap(({ stationSearch }) => stationSearch.candidates)
