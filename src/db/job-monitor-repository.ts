@@ -23,6 +23,7 @@ const JobMonitorRowSchema = z.object({
   cancellation_requested_at: z.string().nullable(),
   completed_at: z.string().nullable(),
   error_message: z.string().nullable(),
+  observations: z.string().default(""),
 });
 
 export type JobMonitorRecord = {
@@ -43,6 +44,7 @@ export type JobMonitorRecord = {
   cancellationRequestedAt: string | null;
   completedAt: string | null;
   errorMessage: string | null;
+  observations: string;
 };
 
 function toRecord(input: unknown): JobMonitorRecord {
@@ -65,6 +67,7 @@ function toRecord(input: unknown): JobMonitorRecord {
     cancellationRequestedAt: row.cancellation_requested_at,
     completedAt: row.completed_at,
     errorMessage: row.error_message,
+    observations: row.observations,
   };
 }
 
@@ -128,6 +131,18 @@ export class JobMonitorRepository {
       UPDATE job_monitor_messages SET stage_detail = ?, updated_at = ?
       WHERE job_id = ? AND state IN ('running', 'cancel_requested')
     `).bind(detail, now, jobId).run();
+  }
+
+  async appendObservation(jobId: string, detail: string, now: string): Promise<void> {
+    await this.db.prepare(`
+      UPDATE job_monitor_messages SET
+        observations = substr(
+          CASE WHEN observations = '' THEN ? ELSE observations || '\n\n' || ? END,
+          -600
+        ),
+        updated_at = ?
+      WHERE job_id = ?
+    `).bind(detail, detail, now, jobId).run();
   }
 
   async requestCancellation(jobId: string, now: string): Promise<JobMonitorRecord | null> {

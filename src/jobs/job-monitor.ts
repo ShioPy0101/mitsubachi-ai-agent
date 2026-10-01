@@ -81,6 +81,7 @@ export function formatJobMonitorMessage(record: JobMonitorRecord): string {
     `${record.state === "failed" ? "失敗フェーズ" : record.state === "stopped" ? "最後のフェーズ" : "現在のフェーズ"}:`,
     `\`${record.currentStage}\` — ${stageLabel(record.currentStage)}`, "",
     ...(record.stageDetail === null ? [] : [`進行:\n${record.stageDetail}`, ""]),
+    ...(record.observations === "" ? [] : [`観測:\n\`\`\`text\n${record.observations}\n\`\`\``, ""]),
     `開始:\n${formatJapanTime(record.startedAt)}`, "",
     `フェーズ開始から:\n${stageElapsedSeconds.toFixed(1)}秒`, "",
     `現在フェーズのタイムアウト:\n${stageTimeoutDisplay}`, "",
@@ -164,6 +165,12 @@ export class JobMonitor {
   async stageProgress(jobId: string, detail: string): Promise<void> {
     if (this.channelId === null) return;
     await this.repository.updateStageDetail(jobId, detail, new Date().toISOString());
+    await this.renderById(jobId);
+  }
+
+  async observation(jobId: string, detail: string): Promise<void> {
+    if (this.channelId === null) return;
+    await this.repository.appendObservation(jobId, detail, new Date().toISOString());
     await this.renderById(jobId);
   }
 

@@ -8,13 +8,14 @@ export type AudioJobAlert = {
   filename?: string;
   stage: string;
   attempt?: number;
+  severity?: "error" | "warning";
   errorName: string;
   errorMessage: string;
 };
 
 export function formatAudioJobAlert(alert: AudioJobAlert): string {
   const header = [
-    "🚨 audio job error",
+    alert.severity === "warning" ? "⚠️ audio job warning" : "🚨 audio job error",
     ...(alert.jobId === undefined ? [] : [`job: ${alert.jobId}`]),
     ...(alert.interactionId === undefined ? [] : [`interaction: ${alert.interactionId}`]),
     ...(alert.guildId === undefined ? [] : [`guild: ${alert.guildId ?? "none"}`]),
