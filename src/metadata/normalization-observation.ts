@@ -1,3 +1,7 @@
+import {
+  announcementLanguagesIn,
+  type AnnouncementLanguage,
+} from "../railway/semantic";
 import { stationEnglishName } from "../stations/language";
 import type { AnnouncementAnalysis } from "./service";
 import type { StopSequenceContext } from "./prompt";
@@ -11,6 +15,9 @@ export type NormalizationObservation = {
   targetsOutsideEvidence: string[];
   unmatchedMentionIds: string[];
   missingSourceEventIds: string[];
+  sourceLanguages: AnnouncementLanguage[];
+  normalizedLanguages: AnnouncementLanguage[];
+  missingLanguages: AnnouncementLanguage[];
   numericChanges: { raw: string[]; normalized: string[] } | null;
 };
 // This module never approves/rejects content or changes the generated text.
@@ -38,7 +45,19 @@ export function observeNormalization(
     [...text.normalize("NFKC").matchAll(/\d+(?:[:.]\d+)?/g)].map((m) => m[0]);
   const originalNumbers = numbers(raw),
     finalNumbers = numbers(normalized);
+  const sourceLanguages = [
+    ...new Set([
+      ...(analysis.semantic?.events.map((e) => e.language) ?? []),
+      ...announcementLanguagesIn(raw),
+    ]),
+  ];
+  const normalizedLanguages = announcementLanguagesIn(normalized);
   return {
+    sourceLanguages,
+    normalizedLanguages,
+    missingLanguages: sourceLanguages.filter(
+      (l) => l !== "unknown" && !normalizedLanguages.includes(l),
+    ),
     outcome: "generated",
     inputCharacters: raw.length,
     outputCharacters: normalized.length,

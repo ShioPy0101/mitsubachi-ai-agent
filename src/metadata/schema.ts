@@ -1,4 +1,7 @@
-import { announcementEventKinds } from "../railway/semantic";
+import {
+  announcementEventKinds,
+  announcementLanguages,
+} from "../railway/semantic";
 import { z } from "zod";
 import { announcementCategories } from "../railway/types";
 import { stationMentionRoles } from "./service";
@@ -28,6 +31,8 @@ export type ParsedTransitAnnouncement = z.output<
 
 export const StationMentionSchema = z.object({
   text: z.string().min(1),
+  language: z.enum(announcementLanguages).optional(),
+  equivalentEventGroupId: z.string().nullable().optional(),
   phoneticHint: z.string().trim().min(1).nullable().optional().default(null),
   start: z.number().int().nonnegative().nullable(),
   end: z.number().int().nonnegative().nullable(),
@@ -39,7 +44,7 @@ const SemanticEventSchema = z.object({
   kind: z.enum(announcementEventKinds),
   sourceStart: z.number().int().nonnegative(),
   sourceEnd: z.number().int().nonnegative(),
-  language: z.enum(["ja", "en", "unknown"]),
+  language: z.enum(announcementLanguages),
   trainType: z.string().nullable(),
   destination: z.string().nullable(),
   line: z.string().nullable(),
@@ -74,7 +79,7 @@ const semanticEventJsonSchema = {
     kind: { type: "string", enum: [...announcementEventKinds] },
     sourceStart: { type: "integer", minimum: 0 },
     sourceEnd: { type: "integer", minimum: 0 },
-    language: { type: "string", enum: ["ja", "en", "unknown"] },
+    language: { type: "string", enum: [...announcementLanguages] },
     ...Object.fromEntries(
       [
         "trainType",
@@ -104,7 +109,7 @@ export const GeminiNormalizationSchema = z.object({
     .array(
       z.object({
         sourceEventId: z.string(),
-        language: z.enum(["ja", "en", "unknown"]),
+        language: z.enum(announcementLanguages),
         text: z.string().min(1),
       }),
     )
@@ -272,6 +277,8 @@ export const geminiAnalysisJsonSchema = {
         ],
         properties: {
           text: { type: "string", minLength: 1 },
+          language: { type: "string", enum: [...announcementLanguages] },
+          equivalentEventGroupId: { type: ["string", "null"] },
           phoneticHint: { type: ["string", "null"], minLength: 1 },
           start: { type: ["integer", "null"], minimum: 0 },
           end: { type: ["integer", "null"], minimum: 0 },
@@ -297,7 +304,7 @@ export const geminiNormalizationJsonSchema = {
         required: ["sourceEventId", "language", "text"],
         properties: {
           sourceEventId: { type: "string" },
-          language: { type: "string", enum: ["ja", "en", "unknown"] },
+          language: { type: "string", enum: [...announcementLanguages] },
           text: { type: "string", minLength: 1 },
         },
       },

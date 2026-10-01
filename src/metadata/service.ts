@@ -24,7 +24,8 @@ export type StationMention = {
   id?: string;
   text: string;
   phoneticHint?: string | null;
-  language?: import("../railway/semantic").AnnouncementLanguage;
+  language?: import("../railway/semantic").AnnouncementLanguage | undefined;
+  equivalentEventGroupId?: string | null | undefined;
   start: number | null;
   end: number | null;
   role: StationMentionRole;
