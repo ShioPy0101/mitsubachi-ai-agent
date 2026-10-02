@@ -1,0 +1,18 @@
+{
+  "corpus": "fixtures/railway",
+  "precision": null,
+  "recall": null,
+  "falseCorrectionRate": null,
+  "unresolvedRate": null,
+  "counts": {
+    "changes": 0,
+    "correctChanges": 0,
+    "needed": 0,
+    "falseChanges": 0,
+    "originallyCorrect": 0,
+    "unresolved": 0,
+    "withCandidates": 0
+  },
+  "labeledMentions": 0,
+  "evaluationStatus": "unmeasured: add human labels.json and captured normalized.json; target 100–300 real-audio cases"
+}
