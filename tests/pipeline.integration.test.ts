@@ -26,7 +26,10 @@ beforeEach(async () => {
   for (const sql of [m1, m2, m3, m4, m5, m6, m7, m8, m9, m10])
     await migrate(sql);
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 const raw = "次は篠原、安雪、守山です。The next stop is Yasu.";
 const normalized = "次は篠原、野洲、守山です。The next stop is Yasu.";
 const metadata = {
@@ -95,6 +98,7 @@ describe("fresh local D1 and queue pipeline with fake providers", () => {
         new Date().toISOString(),
       );
       let geminiCalls = 0;
+      const warnings = vi.spyOn(console, "warn");
       const delivered: string[] = [];
       const fetcher = vi.fn(async (input: unknown, init?: RequestInit) => {
         const url = String(input);
@@ -186,6 +190,15 @@ describe("fresh local D1 and queue pipeline with fake providers", () => {
         expect(retry).toHaveBeenCalledOnce();
         expect(ack).not.toHaveBeenCalled();
         await consume(2);
+        expect(warnings).toHaveBeenCalledWith(
+          "audio_job_redelivered",
+          expect.objectContaining({
+            attempt: 2,
+            previousStage: "gemini_normalization",
+            hasTranscriptionCheckpoint: true,
+            interruptionCause: "unknown",
+          }),
+        );
       }
       expect(ack).toHaveBeenCalledOnce();
       if (scenario !== "demo-retry") expect(retry).not.toHaveBeenCalled();
