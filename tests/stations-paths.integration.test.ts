@@ -1,51 +1,51 @@
-import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { D1StationsRepository } from "../src/db/stations-repository";
-import { StationCandidateService } from "../src/stations/candidate-service";
+import {
+  createStaticRailwayJobCache,
+  StaticRailwayRepository,
+} from "../src/stations/static-repository";
+import { buildRailwayIndexes } from "../src/stations/static-indexes";
+import type { RailwayStaticData } from "../src/stations/static-schema";
+import {
+  reconcileStationMentionCandidates,
+  StationCandidateService,
+} from "../src/stations/candidate-service";
 
-declare module "cloudflare:test" {
-  interface ProvidedEnv {
-    DB: D1Database;
-  }
+let data: RailwayStaticData;
+async function station(
+  id: number,
+  name: string,
+  line: string,
+  prefecture = "テスト県",
+  kana = name,
+): Promise<void> {
+  data.stations.push({
+    id,
+    name,
+    lineName: line,
+    prefecture,
+    kana,
+    kanaSource: null,
+    operatorName: "テスト鉄道",
+    prevStation: null,
+    nextStation: null,
+    longitude: id,
+    latitude: id,
+    postal: `${id}`,
+    normalizedName: name,
+    normalizedKana: kana,
+  });
 }
-
-const schema = [
-  `CREATE TABLE IF NOT EXISTS stations (
-    id INTEGER PRIMARY KEY, name TEXT NOT NULL, kana TEXT, kana_source TEXT,
-    operator_name TEXT, line_name TEXT, prefecture TEXT, prev_station TEXT,
-    next_station TEXT, longitude REAL, latitude REAL, postal TEXT,
-    normalized_name TEXT NOT NULL, normalized_kana TEXT
-  )`,
-  `CREATE TABLE IF NOT EXISTS station_line_positions (
-    line_id TEXT NOT NULL, station_id INTEGER NOT NULL, seq INTEGER NOT NULL,
-    PRIMARY KEY (line_id, station_id), UNIQUE (line_id, seq)
-  )`,
-  `CREATE TABLE IF NOT EXISTS route_segment_connections (
-    from_segment_id TEXT NOT NULL, to_segment_id TEXT NOT NULL,
-    from_station_id INTEGER NOT NULL, to_station_id INTEGER NOT NULL,
-    from_seq INTEGER NOT NULL, to_seq INTEGER NOT NULL,
-    transfer_cost INTEGER NOT NULL,
-    PRIMARY KEY (from_segment_id, to_segment_id, from_station_id, to_station_id)
-  )`,
-];
-
-async function station(id: number, name: string, line: string, prefecture = "テスト県"): Promise<void> {
-  await env.DB.prepare(`
-    INSERT INTO stations (
-      id, name, kana, kana_source, operator_name, line_name, prefecture,
-      prev_station, next_station, longitude, latitude, postal, normalized_name, normalized_kana
-    ) VALUES (?, ?, ?, NULL, 'テスト鉄道', ?, ?, NULL, NULL, ?, ?, ?, ?, ?)
-  `).bind(id, name, name, line, prefecture, id, id, `${id}`, name, name).run();
+async function segment(
+  lineId: string,
+  stationIds: readonly number[],
+): Promise<void> {
+  data.paths.push({
+    pathId: lineId,
+    lineId,
+    stationIds: [...stationIds],
+    circular: false,
+  });
 }
-
-async function segment(lineId: string, stationIds: readonly number[]): Promise<void> {
-  for (const [seq, stationId] of stationIds.entries()) {
-    await env.DB.prepare(
-      "INSERT INTO station_line_positions (line_id, station_id, seq) VALUES (?, ?, ?)",
-    ).bind(lineId, stationId, seq).run();
-  }
-}
-
 async function connect(
   fromSegment: string,
   toSegment: string,
@@ -55,13 +55,18 @@ async function connect(
   toSeq: number,
   transferCost: 0 | 1,
 ): Promise<void> {
-  await env.DB.prepare(`
-    INSERT INTO route_segment_connections (
-      from_segment_id, to_segment_id, from_station_id, to_station_id, from_seq, to_seq, transfer_cost
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).bind(fromSegment, toSegment, fromStationId, toStationId, fromSeq, toSeq, transferCost).run();
+  data.connections.push({
+    from_segment_id: fromSegment,
+    to_segment_id: toSegment,
+    from_station_id: fromStationId,
+    to_station_id: toStationId,
+    from_seq: fromSeq,
+    to_seq: toSeq,
+    transfer_cost: transferCost,
+  });
 }
-
+const repository = (cache = createStaticRailwayJobCache()) =>
+  new StaticRailwayRepository(buildRailwayIndexes(data), cache);
 async function connectBoth(
   leftSegment: string,
   rightSegment: string,
@@ -71,29 +76,47 @@ async function connectBoth(
   rightSeq: number,
   transferCost: 0 | 1,
 ): Promise<void> {
-  await connect(leftSegment, rightSegment, leftStationId, rightStationId, leftSeq, rightSeq, transferCost);
-  await connect(rightSegment, leftSegment, rightStationId, leftStationId, rightSeq, leftSeq, transferCost);
+  await connect(
+    leftSegment,
+    rightSegment,
+    leftStationId,
+    rightStationId,
+    leftSeq,
+    rightSeq,
+    transferCost,
+  );
+  await connect(
+    rightSegment,
+    leftSegment,
+    rightStationId,
+    leftStationId,
+    rightSeq,
+    leftSeq,
+    transferCost,
+  );
 }
 
-const names = (route: { stations: Array<{ station: { name: string } }> }): string[] =>
-  route.stations.map(({ station: value }) => value.name);
+const names = (route: {
+  stations: Array<{ station: { name: string } }>;
+}): string[] => route.stations.map(({ station: value }) => value.name);
 
-describe("D1 ordered station paths", () => {
-  beforeEach(async () => {
-    for (const statement of schema) await env.DB.exec(statement.replaceAll("\n", " "));
-    await env.DB.exec("DELETE FROM route_segment_connections; DELETE FROM station_line_positions; DELETE FROM stations;");
+describe("static ordered station paths", () => {
+  beforeEach(() => {
+    data = { stations: [], paths: [], connections: [] };
   });
 
   it("uses an indexed seq range in both directions and excludes off-path stations", async () => {
     await Promise.all([
-      station(1, "A", "本線"), station(2, "B", "本線"),
-      station(3, "C", "本線"), station(4, "D", "本線"),
+      station(1, "A", "本線"),
+      station(2, "B", "本線"),
+      station(3, "C", "本線"),
+      station(4, "D", "本線"),
     ]);
     await segment("main", [1, 2, 3, 4]);
-    const repository = new D1StationsRepository(env.DB);
+    const repo = repository();
 
-    const forward = await repository.findRouteCandidates(["B", "D"], 5);
-    const reverse = await repository.findRouteCandidates(["D", "B"], 5);
+    const forward = await repo.findRouteCandidates(["B", "D"], 5);
+    const reverse = await repo.findRouteCandidates(["D", "B"], 5);
 
     expect(names(forward[0]!)).toEqual(["B", "C", "D"]);
     expect(names(reverse[0]!)).toEqual(["D", "C", "B"]);
@@ -102,32 +125,53 @@ describe("D1 ordered station paths", () => {
 
   it("expands paths with one and multiple transfers", async () => {
     await Promise.all([
-      station(1, "A", "L1"), station(2, "乗換1", "L1"),
-      station(3, "乗換1", "L2"), station(4, "中間", "L2"), station(5, "乗換2", "L2"),
-      station(6, "乗換2", "L3"), station(7, "終点", "L3"),
+      station(1, "A", "L1"),
+      station(2, "乗換1", "L1"),
+      station(3, "乗換1", "L2"),
+      station(4, "中間", "L2"),
+      station(5, "乗換2", "L2"),
+      station(6, "乗換2", "L3"),
+      station(7, "終点", "L3"),
     ]);
     await segment("s1", [1, 2]);
     await segment("s2", [3, 4, 5]);
     await segment("s3", [6, 7]);
     await connectBoth("s1", "s2", 2, 3, 1, 0, 1);
     await connectBoth("s2", "s3", 5, 6, 2, 0, 1);
-    const routes = await new D1StationsRepository(env.DB).findRouteCandidates(["A", "中間", "終点"], 5);
+    const routes = await repository().findRouteCandidates(
+      ["A", "中間", "終点"],
+      5,
+    );
 
-    expect(names(routes[0]!)).toEqual(["A", "乗換1", "中間", "乗換2", "終点"]);
-    expect(routes[0]).toMatchObject({ anchorCoverage: 1, orderConsistency: 1, transferCount: 2 });
+    expect(names(routes[0]!)).toEqual([
+      "A",
+      "乗換1",
+      "乗換1",
+      "中間",
+      "乗換2",
+      "乗換2",
+      "終点",
+    ]);
+    expect(routes[0]).toMatchObject({
+      anchorCoverage: 1,
+      orderConsistency: 1,
+      transferCount: 2,
+    });
   });
 
   it("crosses branching route segments without treating the junction as a passenger transfer", async () => {
     await Promise.all([
-      station(1, "A", "分岐線"), station(2, "B", "分岐線"),
-      station(3, "C", "分岐線"), station(4, "D", "分岐線"),
+      station(1, "A", "分岐線"),
+      station(2, "B", "分岐線"),
+      station(3, "C", "分岐線"),
+      station(4, "D", "分岐線"),
     ]);
     await segment("branch-left", [1, 3]);
     await segment("branch-right", [2, 3]);
     await segment("branch-trunk", [3, 4]);
     await connectBoth("branch-left", "branch-trunk", 3, 3, 1, 0, 0);
     await connectBoth("branch-right", "branch-trunk", 3, 3, 1, 0, 0);
-    const routes = await new D1StationsRepository(env.DB).findRouteCandidates(["B", "D"], 5);
+    const routes = await repository().findRouteCandidates(["B", "D"], 5);
 
     expect(names(routes[0]!)).toEqual(["B", "C", "D"]);
     expect(routes[0]?.transferCount).toBe(0);
@@ -135,20 +179,28 @@ describe("D1 ordered station paths", () => {
 
   it("ranks the route matching the complete Whisper anchor order first", async () => {
     await Promise.all([
-      station(1, "A", "共通"), station(2, "X", "短絡線"), station(3, "Z", "共通"),
-      station(4, "B", "案内線"), station(5, "C", "案内線"),
+      station(1, "A", "共通"),
+      station(2, "X", "短絡線"),
+      station(3, "Z", "共通"),
+      station(4, "B", "案内線"),
+      station(5, "C", "案内線"),
     ]);
     await segment("shortcut", [1, 2, 3]);
     await segment("announced", [1, 4, 5, 3]);
     await segment("wrong-order", [1, 5, 4, 3]);
-    const routes = await new D1StationsRepository(env.DB).findRouteCandidates(["A", "B", "C", "Z"], 5);
+    const routes = await repository().findRouteCandidates(
+      ["A", "B", "C", "Z"],
+      5,
+    );
 
     expect(routes.length).toBeGreaterThanOrEqual(3);
     expect(names(routes[0]!)).toEqual(["A", "B", "C", "Z"]);
     expect(routes[0]?.anchorCoverage).toBe(1);
     expect(routes[0]?.orderConsistency).toBe(1);
     expect(routes[0]!.score).toBeGreaterThan(routes[1]!.score);
-    const wrongOrder = routes.find((route) => names(route).join() === "A,C,B,Z");
+    const wrongOrder = routes.find(
+      (route) => names(route).join() === "A,C,B,Z",
+    );
     expect(wrongOrder?.orderConsistency).toBeLessThan(1);
     expect(routes[0]!.score).toBeGreaterThan(wrongOrder!.score);
   });
@@ -166,8 +218,11 @@ describe("D1 ordered station paths", () => {
     await segment("hapi", [2, 3, 4, 5]);
     await segment("unrelated-line-name", [6]);
 
-    const routes = await new D1StationsRepository(env.DB)
-      .findRouteCandidates(["白鷺", "鯖江", "福井", "小浜"], 5, 2);
+    const routes = await repository().findRouteCandidates(
+      ["白鷺", "鯖江", "福井", "小浜"],
+      5,
+      2,
+    );
 
     expect(routes.length).toBeGreaterThan(0);
     expect(names(routes[0]!)).toEqual(["武生", "鯖江", "北鯖江", "福井"]);
@@ -183,13 +238,19 @@ describe("D1 ordered station paths", () => {
     ]);
     await segment("hapi", [1, 2, 3, 4]);
 
-    const diagnostics = await new StationCandidateService(new D1StationsRepository(env.DB))
-      .analyze("竹府、鯖江、福井");
-    const takefu = diagnostics.candidates.find(({ station: value }) => value.name === "武生");
+    const diagnostics = await new StationCandidateService(repository()).analyze(
+      "竹府、鯖江、福井",
+    );
+    const takefu = diagnostics.candidates.find(
+      ({ station: value }) => value.name === "武生",
+    );
 
     expect(diagnostics.anchorNames).toEqual(["鯖江", "福井"]);
-    expect(diagnostics.routeCandidates[0]?.stations.map(({ station: value }) => value.name))
-      .toEqual(["武生", "鯖江", "北鯖江", "福井"]);
+    expect(
+      diagnostics.routeCandidates[0]?.stations.map(
+        ({ station: value }) => value.name,
+      ),
+    ).toEqual(["武生", "鯖江", "北鯖江", "福井"]);
     expect(takefu).toMatchObject({
       routeSupported: true,
       onExactPath: true,
@@ -217,55 +278,305 @@ describe("D1 ordered station paths", () => {
     await segment("unrelated-nara", [20]);
     await segment("unrelated-handa", [21]);
 
-    const mentions = ["神話口", "福岐", "千田竹豊", "上", "青山", "奈良", "千田半田"];
-    const diagnostics = await new StationCandidateService(new D1StationsRepository(env.DB))
-      .analyzeMentions(mentions);
+    const mentions = [
+      "神話口",
+      "福岐",
+      "千田竹豊",
+      "上",
+      "青山",
+      "奈良",
+      "千田半田",
+    ];
+    const diagnostics = await new StationCandidateService(
+      repository(),
+    ).analyzeMentions(mentions);
 
     expect(diagnostics.anchorNames).toEqual(["青山", "奈良", "半田"]);
-    expect(diagnostics.anchorSearchStatus).toBe("inconsistent_anchors");
-    expect(diagnostics.sequenceFallbackAttempted).toBe(true);
-    expect(diagnostics.fallbackSearchStatus).toBe("matched");
+    expect(diagnostics.anchorSearchStatus).toBe("matched");
+    expect(diagnostics.sequenceFallbackAttempted).toBe(false);
+    expect(diagnostics.fallbackSearchStatus).toBe("not_attempted");
     expect(diagnostics.routeSearchStatus).toBe("matched");
-    expect(diagnostics.routeCandidates[0]?.source).toBe("sequence_fallback");
+    expect(diagnostics.routeCandidates[0]?.source).toBe("line_fast_path");
     expect(names(diagnostics.routeCandidates[0]!)).toEqual([
-      "河和口", "富貴", "知多武豊", "上ゲ", "青山", "成岩", "知多半田",
+      "河和口",
+      "富貴",
+      "知多武豊",
+      "上ゲ",
+      "青山",
+      "成岩",
+      "知多半田",
     ]);
     expect(diagnostics.routeCandidates[0]!.score).toBeGreaterThan(0.5);
-    expect(diagnostics.mentionCandidates[5]?.find(({ station: value }) => value.name === "奈良")?.matchStrength)
-      .toBe("hard");
-    expect(diagnostics.mentionCandidates[5]?.find(({ station: value }) => value.name === "成岩")?.matchStrength)
-      .toBe("soft");
-    expect(diagnostics.mentionCandidates.map((candidates) => candidates[0]?.station.name)).toEqual([
-      "河和口", "富貴", "知多武豊", "上ゲ", "青山", "成岩", "知多半田",
+    expect(
+      diagnostics.mentionCandidates[5]?.find(
+        ({ station: value }) => value.name === "奈良",
+      )?.matchStrength,
+    ).toBe("hard");
+    expect(
+      diagnostics.mentionCandidates[5]?.find(
+        ({ station: value }) => value.name === "成岩",
+      )?.matchStrength,
+    ).toBe("soft");
+    expect(
+      diagnostics.mentionCandidates.map(
+        (candidates) => candidates[0]?.station.name,
+      ),
+    ).toEqual([
+      "河和口",
+      "富貴",
+      "知多武豊",
+      "上ゲ",
+      "青山",
+      "成岩",
+      "知多半田",
     ]);
-    expect(diagnostics.mentionCandidates[5]?.find(({ station: value }) => value.name === "成岩")?.finalScore)
-      .toBeGreaterThan(
-        diagnostics.mentionCandidates[5]?.find(({ station: value }) => value.name === "奈良")?.finalScore ?? 0,
-      );
-    expect(diagnostics.mentionCandidates[6]?.find(({ station: value }) => value.name === "知多半田")?.finalScore)
-      .toBeGreaterThan(
-        diagnostics.mentionCandidates[6]?.find(({ station: value }) => value.name === "半田")?.finalScore ?? 0,
-      );
+    expect(
+      diagnostics.mentionCandidates[5]?.find(
+        ({ station: value }) => value.name === "成岩",
+      )?.finalScore,
+    ).toBeGreaterThan(
+      diagnostics.mentionCandidates[5]?.find(
+        ({ station: value }) => value.name === "奈良",
+      )?.finalScore ?? 0,
+    );
+    expect(
+      diagnostics.mentionCandidates[6]?.find(
+        ({ station: value }) => value.name === "知多半田",
+      )?.finalScore,
+    ).toBeGreaterThan(
+      diagnostics.mentionCandidates[6]?.find(
+        ({ station: value }) => value.name === "半田",
+      )?.finalScore ?? 0,
+    );
+  });
+
+  it("keeps a sufficiently resolved raw mention bound across later sequences", async () => {
+    await Promise.all([
+      station(1, "河和口", "名鉄河和線", "愛知県"),
+      station(2, "富貴", "名鉄河和線", "愛知県"),
+      station(3, "知多武豊", "名鉄河和線", "愛知県"),
+      station(4, "上ゲ", "名鉄河和線", "愛知県"),
+      station(5, "青山", "名鉄河和線", "愛知県"),
+      station(6, "成岩", "名鉄河和線", "愛知県"),
+      station(7, "知多半田", "名鉄河和線", "愛知県"),
+      station(20, "松江", "一畑電車北松江線", "島根県"),
+      station(21, "雲州平田", "一畑電車北松江線", "島根県"),
+      station(22, "出雲市", "一畑電車北松江線", "島根県"),
+    ]);
+    await segment("meitetsu-kowa", [1, 2, 3, 4, 5, 6, 7]);
+    await segment("ichibata", [20, 21, 22]);
+    const service = new StationCandidateService(repository());
+    const first = await service.analyzeMentions([
+      "神話口",
+      "福岐",
+      "千田竹豊",
+      "上",
+      "青山",
+      "奈良",
+      "千田半田",
+    ]);
+    const later = await service.analyzeMentions(["松江", "千田半田", "出雲市"]);
+    const bindings = reconcileStationMentionCandidates([first, later]);
+    expect(bindings.get("千田半田")?.name).toBe("知多半田");
+    expect(later.mentionCandidates[1]?.[0]).toMatchObject({
+      station: { name: "知多半田" },
+      bound: true,
+      matchStrength: "hard",
+    });
+    expect(later.mentionCandidates[1]?.[0]?.station.name).not.toBe("雲州平田");
+  });
+
+  it("uses an inferred reading only as route-supported candidate rescue", async () => {
+    await Promise.all([
+      station(1, "篠原", "JR琵琶湖線", "滋賀県", "しのはら"),
+      station(2, "野洲", "JR琵琶湖線", "滋賀県", "やす"),
+      station(3, "守山", "JR琵琶湖線", "滋賀県", "もりやま"),
+    ]);
+    await segment("biwako", [1, 2, 3]);
+
+    const diagnostics = await new StationCandidateService(
+      repository(),
+    ).analyzeMentions(
+      ["篠原", "安雪", "守山"],
+      {},
+      { phoneticHints: [null, "やすゆき", null] },
+    );
+
+    expect(diagnostics.mentionCandidates[1]?.[0]).toMatchObject({
+      station: { name: "野洲" },
+      routeHypothesisIds: [0],
+      bound: false,
+    });
+    expect(diagnostics.mentionCandidates[1]?.[0]?.phoneticSimilarity).toBe(1);
+    expect(diagnostics.mentionCandidates[1]?.[0]?.nameSimilarity).toBeLessThan(
+      0.5,
+    );
+
+    const unrelatedEnding = await new StationCandidateService(
+      repository(),
+    ).analyzeMentions(
+      ["篠原", "安雪", "守山"],
+      {},
+      { phoneticHints: [null, "やすのり", null] },
+    );
+    expect(unrelatedEnding.mentionCandidates[1]?.[0]?.station.name).toBe(
+      "野洲",
+    );
+    expect(
+      unrelatedEnding.mentionCandidates[1]?.[0]?.routeHypothesisIds,
+    ).toEqual([0]);
+  });
+
+  it("does not bind a phonetic-only station when the matched route contradicts it", async () => {
+    await Promise.all([
+      station(1, "始点", "案内線", "テスト県", "してん"),
+      station(2, "中間", "案内線", "テスト県", "ちゅうかん"),
+      station(3, "終点", "案内線", "テスト県", "しゅうてん"),
+      station(20, "野洲", "別路線", "滋賀県", "やす"),
+    ]);
+    await segment("guide", [1, 2, 3]);
+    await segment("unrelated-yasu", [20]);
+    const diagnostics = await new StationCandidateService(
+      repository(),
+    ).analyzeMentions(
+      ["始点", "安雪", "終点"],
+      {},
+      { phoneticHints: [null, "やすゆき", null] },
+    );
+    const yasu = diagnostics.mentionCandidates[1]?.find(
+      ({ station: value }) => value.name === "野洲",
+    );
+    const bindings = reconcileStationMentionCandidates([diagnostics]);
+
+    expect(yasu).toMatchObject({ routeHypothesisIds: [], bound: false });
+    expect(yasu?.phoneticSimilarity).toBe(1);
+    expect(yasu?.finalScore).toBeLessThan(0.2);
+    expect(bindings.has("安雪")).toBe(false);
+  });
+
+  it("bounds candidates, hypotheses and zero D1 reads for a 20-mention sequence", async () => {
+    const stationIds = Array.from({ length: 20 }, (_, index) => index + 1);
+    const suffixes = [..."甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉"];
+    await Promise.all(
+      stationIds.map((id, index) =>
+        station(
+          id,
+          `連続${suffixes[index]}`,
+          "長大線",
+          "テスト県",
+          `れんぞく${index}`,
+        ),
+      ),
+    );
+    await segment("long-line", stationIds);
+
+    const diagnostics = await new StationCandidateService(
+      repository(),
+    ).analyzeMentions(stationIds.map((_id, index) => `連続${suffixes[index]}`));
+
+    expect(diagnostics.mentionCandidates).toHaveLength(20);
+    expect(
+      diagnostics.mentionCandidates.every(
+        (candidates) => candidates.length <= 5,
+      ),
+    ).toBe(true);
+    expect(diagnostics.routeCandidates.length).toBeLessThanOrEqual(5);
+    expect(diagnostics.metrics).toMatchObject({
+      mentions: 20,
+      graphSearchCount: 0,
+      fallbackExecuted: false,
+      d1QueryCount: 0,
+    });
+    expect(diagnostics.metrics.uniqueCandidateCount).toBeLessThanOrEqual(
+      20 * 5,
+    );
+    expect(diagnostics.metrics.routeHypothesesGenerated).toBeLessThanOrEqual(4);
+  });
+
+  it("reuses identical line metadata lookups through the job-local cache", async () => {
+    await Promise.all([
+      station(1, "始点", "本線"),
+      station(2, "中間", "本線"),
+      station(3, "終点", "本線"),
+    ]);
+    await segment("main", [1, 2, 3]);
+    const cache = createStaticRailwayJobCache();
+
+    const first = await new StationCandidateService(
+      repository(cache),
+    ).analyzeMentions(["始点", "中間", "終点"]);
+    const second = await new StationCandidateService(
+      repository(cache),
+    ).analyzeMentions(["始点", "中間", "終点"]);
+
+    expect(first.metrics.d1QueryCount).toBe(0);
+    expect(second.metrics.d1QueryCount).toBe(0);
+    expect(second.metrics.cacheHits).toBeGreaterThan(0);
+    expect(names(second.routeCandidates[0]!)).toEqual(["始点", "中間", "終点"]);
+  });
+
+  it("caps graph fallback seeds and executes graph search only once", async () => {
+    const stationIds = Array.from({ length: 10 }, (_, index) => index + 1);
+    const suffixes = [..."甲乙丙丁戊己庚辛壬癸"];
+    await Promise.all(
+      stationIds.map((id, index) =>
+        station(id, `孤立${suffixes[index]}`, `孤立線${id}`),
+      ),
+    );
+    await Promise.all(stationIds.map((id) => segment(`isolated-${id}`, [id])));
+
+    const diagnostics = await new StationCandidateService(
+      repository(),
+    ).analyzeMentions(stationIds.map((_id, index) => `孤立${suffixes[index]}`));
+
+    expect(diagnostics.metrics.graphSearchCount).toBe(1);
+    expect(diagnostics.metrics.fallbackSeedCount).toBeLessThanOrEqual(4);
+    expect(diagnostics.metrics.routeHypothesesGenerated).toBeLessThanOrEqual(4);
+    expect(diagnostics.routeCandidates.length).toBeLessThanOrEqual(5);
   });
 
   it("uses a direction sequence and destination context to rank 久保川 → 窪川", async () => {
     const routeNames = [
-      "伊野", "枝川", "朝倉", "佐川", "斗賀野", "須崎",
-      "土佐新荘", "安和", "土佐久礼", "影野", "六反地", "仁井田", "窪川",
+      "伊野",
+      "枝川",
+      "朝倉",
+      "佐川",
+      "斗賀野",
+      "須崎",
+      "土佐新荘",
+      "安和",
+      "土佐久礼",
+      "影野",
+      "六反地",
+      "仁井田",
+      "窪川",
     ];
-    await Promise.all(routeNames.map((name, index) => station(index + 1, name, "JR土讃線", "高知県")));
-    await segment("dosan-local", routeNames.map((_name, index) => index + 1));
+    await Promise.all(
+      routeNames.map((name, index) =>
+        station(index + 1, name, "JR土讃線", "高知県"),
+      ),
+    );
+    await segment(
+      "dosan-local",
+      routeNames.map((_name, index) => index + 1),
+    );
 
-    const diagnostics = await new StationCandidateService(new D1StationsRepository(env.DB)).analyzeMentions(
+    const diagnostics = await new StationCandidateService(
+      repository(),
+    ).analyzeMentions(
       ["伊野", "佐川", "須崎", "久保川"],
       {},
       { sequenceRole: "direction", destinationContext: true },
     );
 
-    expect(diagnostics.sequenceFallbackAttempted).toBe(true);
+    expect(diagnostics.sequenceFallbackAttempted).toBe(false);
+    expect(diagnostics.metrics.graphSearchCount).toBe(0);
     expect(diagnostics.routeSearchStatus).toBe("matched");
-    expect(diagnostics.routeCandidates[0]?.mentionMatches?.map(({ station: value }) => value.name))
-      .toEqual(["伊野", "佐川", "須崎", "窪川"]);
+    expect(
+      diagnostics.routeCandidates[0]?.mentionMatches?.map(
+        ({ station: value }) => value.name,
+      ),
+    ).toEqual(["伊野", "佐川", "須崎", "窪川"]);
     const destinationCandidates = diagnostics.mentionCandidates[3] ?? [];
     expect(destinationCandidates[0]?.station.name).toBe("窪川");
     expect(destinationCandidates[0]).toMatchObject({
@@ -283,13 +594,17 @@ describe("D1 ordered station paths", () => {
       station(2, "鯖江", "ハピラインふくい線", "福井県"),
       station(3, "福井", "ハピラインふくい線", "福井県"),
     ]);
-    await env.DB.prepare(
-      "INSERT INTO station_line_positions (line_id, station_id, seq) VALUES ('hapi', 1, 10), ('hapi', 2, 11), ('hapi', 3, 15)",
-    ).run();
-    const repository = new D1StationsRepository(env.DB);
+    await segment("hapi", [1, 2, 3]);
+    const repo = repository();
 
-    const increasing = await repository.findRouteCandidates(["武生", "鯖江", "福井"], 5);
-    const decreasing = await repository.findRouteCandidates(["福井", "鯖江", "武生"], 5);
+    const increasing = await repo.findRouteCandidates(
+      ["武生", "鯖江", "福井"],
+      5,
+    );
+    const decreasing = await repo.findRouteCandidates(
+      ["福井", "鯖江", "武生"],
+      5,
+    );
 
     expect(names(increasing[0]!)).toEqual(["武生", "鯖江", "福井"]);
     expect(increasing[0]?.orderConsistency).toBe(1);
@@ -308,43 +623,182 @@ describe("D1 ordered station paths", () => {
     await segment("fukui", [1, 2]);
     await segment("ishikawa", [3, 4, 5]);
     await connectBoth("fukui", "ishikawa", 2, 3, 1, 0, 1);
-    const repository = new D1StationsRepository(env.DB);
+    const repo = repository();
 
-    const forward = await repository.findRouteCandidates(["福井", "芦原温泉", "加賀温泉", "金沢"], 5);
-    const reverse = await repository.findRouteCandidates(["金沢", "加賀温泉", "芦原温泉", "福井"], 5);
+    const forward = await repo.findRouteCandidates(
+      ["福井", "芦原温泉", "加賀温泉", "金沢"],
+      5,
+    );
+    const reverse = await repo.findRouteCandidates(
+      ["金沢", "加賀温泉", "芦原温泉", "福井"],
+      5,
+    );
 
-    expect(names(forward[0]!)).toEqual(["福井", "芦原温泉", "加賀温泉", "金沢"]);
-    expect(forward[0]).toMatchObject({ anchorCoverage: 1, orderConsistency: 1, transferCount: 1 });
-    expect(names(reverse[0]!)).toEqual(["金沢", "加賀温泉", "芦原温泉", "福井"]);
-    expect(reverse[0]).toMatchObject({ anchorCoverage: 1, orderConsistency: 1, transferCount: 1 });
+    expect(names(forward[0]!)).toEqual([
+      "福井",
+      "芦原温泉",
+      "芦原温泉",
+      "加賀温泉",
+      "金沢",
+    ]);
+    expect(forward[0]).toMatchObject({
+      anchorCoverage: 1,
+      orderConsistency: 1,
+      transferCount: 1,
+    });
+    expect(names(reverse[0]!)).toEqual([
+      "金沢",
+      "加賀温泉",
+      "芦原温泉",
+      "芦原温泉",
+      "福井",
+    ]);
+    expect(reverse[0]).toMatchObject({
+      anchorCoverage: 1,
+      orderConsistency: 1,
+      transferCount: 1,
+    });
   });
 
   it("does not connect same-name stations in different regions without a generated connection", async () => {
     await Promise.all([
-      station(1, "始点", "北線", "北海道"), station(2, "中央", "北線", "北海道"),
-      station(3, "中央", "南線", "沖縄県"), station(4, "終点", "南線", "沖縄県"),
+      station(1, "始点", "北線", "北海道"),
+      station(2, "中央", "北線", "北海道"),
+      station(3, "中央", "南線", "沖縄県"),
+      station(4, "終点", "南線", "沖縄県"),
     ]);
     await segment("north", [1, 2]);
     await segment("south", [3, 4]);
 
-    await expect(new D1StationsRepository(env.DB).findRouteCandidates(["始点", "終点"], 5))
-      .resolves.toEqual([]);
+    await expect(
+      repository().findRouteCandidates(["始点", "終点"], 5),
+    ).resolves.toEqual([]);
   });
 
   it("strongly penalizes a connected 40-station detour against a local route", async () => {
     await Promise.all([
       station(1, "始点", "共通線"),
       station(2, "終点", "共通線"),
-      ...Array.from({ length: 40 }, (_, index) => station(index + 3, `迂回${index + 1}`, "迂回線")),
+      ...Array.from({ length: 40 }, (_, index) =>
+        station(index + 3, `迂回${index + 1}`, "迂回線"),
+      ),
     ]);
     await segment("local", [1, 2]);
-    await segment("detour", [1, ...Array.from({ length: 40 }, (_, index) => index + 3), 2]);
+    await segment("detour", [
+      1,
+      ...Array.from({ length: 40 }, (_, index) => index + 3),
+      2,
+    ]);
 
-    const routes = await new D1StationsRepository(env.DB).findRouteCandidates(["始点", "終点"], 5);
+    const routes = await repository().findRouteCandidates(["始点", "終点"], 5);
     const local = routes.find((route) => route.pathLength === 2);
     const detour = routes.find((route) => route.pathLength === 42);
 
     expect(local?.score).toBeGreaterThan(detour?.score ?? 0);
     expect(detour?.score).toBeLessThanOrEqual(0.35);
   });
+});
+
+describe("multi-line spoken subsequences", () => {
+  beforeEach(() => {
+    data = { stations: [], paths: [], connections: [] };
+  });
+  async function network(passing = 0) {
+    await station(1, "始発", "Line A");
+    await station(2, "接続", "Line A");
+    await station(3, "終着", "Line B");
+    const left = [1],
+      right = [2];
+    for (let i = 0; i < passing; i++) {
+      await station(10 + i, `通過甲${i}`, "Line A");
+      left.push(10 + i);
+      await station(100 + i, `通過乙${i}`, "Line B");
+      right.push(100 + i);
+    }
+    left.push(2);
+    right.push(3);
+    await segment("path-a", left);
+    await segment("path-b", right);
+    await connectBoth("path-a", "path-b", 2, 2, left.length - 1, 0, 0);
+  }
+  for (const passing of [0, 30])
+    for (const reverse of [false, true]) {
+      it(`matches ${passing} passing stations across lines (${reverse ? "reverse" : "forward"})`, async () => {
+        await network(passing);
+        const mentions = reverse
+          ? ["終着", "接続", "始発"]
+          : ["始発", "接続", "終着"];
+        const result = await new StationCandidateService(
+          repository(),
+        ).analyzeMentions(mentions, {}, { sequenceRole: "stops" });
+        expect(result.sequenceFallbackAttempted).toBe(true);
+        expect(result.routeSearchStatus).toBe("matched");
+        const route = result.routeCandidates[0]!;
+        expect(names(route)).toEqual(mentions);
+        expect(route.hardAnchorViolations).toBe(0);
+        expect(route.physicalStations).toHaveLength(3 + passing * 2);
+        expect(route.spokenStopSequence).toHaveLength(3);
+        expect(route.physicalRoute!.segments.map((s) => s.pathId)).toEqual(
+          reverse ? ["path-b", "path-a"] : ["path-a", "path-b"],
+        );
+        expect(route.lineTransitions).toHaveLength(1);
+        expect(route.lineTransitions![0]!.atStationId).toBe(2);
+        expect(route.score).toBeGreaterThan(0.8);
+        expect(result.metrics.d1QueryCount).toBe(0);
+      });
+    }
+  it("uses the same-line fast path even with a large stop gap", async () => {
+    await network(30);
+    const result = await new StationCandidateService(
+      repository(),
+    ).analyzeMentions(["始発", "接続"], {}, { sequenceRole: "stops" });
+    expect(result.sequenceFallbackAttempted).toBe(false);
+    expect(result.routeCandidates[0]!.source).toBe("line_fast_path");
+    expect(result.routeCandidates[0]!.physicalStations).toHaveLength(32);
+  });
+  it("rejects A → D → B on a one-direction physical path", async () => {
+    for (let id = 1; id <= 5; id++) await station(id, `地点${id}`, "one");
+    await segment("one", [1, 2, 3, 4, 5]);
+    const result = await new StationCandidateService(
+      repository(),
+    ).analyzeMentions(["地点1", "地点4", "地点2"]);
+    expect(result.routeCandidates).toEqual([]);
+  });
+  it("keeps separate identities at an explicit transfer instead of deduplicating their names", async () => {
+    await station(1, "始発", "a");
+    await station(2, "接続", "a");
+    await station(3, "接続", "b");
+    await station(4, "終着", "b");
+    await segment("a", [1, 2]);
+    await segment("b", [3, 4]);
+    await connectBoth("a", "b", 2, 3, 1, 0, 1);
+    const routes = await repository().findRouteCandidates(["始発", "終着"], 3);
+    expect(routes[0]!.stations.map((s) => s.station.id)).toEqual([1, 2, 3, 4]);
+    expect(routes[0]!.lineTransitions).toEqual([
+      { fromLineId: "a", toLineId: "b", atStationId: 2, toStationId: 3 },
+    ]);
+  });
+});
+
+it("retains the last anchor when a twenty-stop announcement crosses lines", async () => {
+  data = { stations: [], paths: [], connections: [] };
+  for (let id = 1; id <= 20; id++)
+    await station(id, `停車地点${id}`, id <= 10 ? "A" : "B");
+  await segment(
+    "a",
+    Array.from({ length: 10 }, (_, i) => i + 1),
+  );
+  await segment(
+    "b",
+    Array.from({ length: 11 }, (_, i) => i + 10),
+  );
+  await connectBoth("a", "b", 10, 10, 9, 0, 0);
+  const mentions = Array.from({ length: 20 }, (_, i) => `停車地点${i + 1}`);
+  const result = await new StationCandidateService(
+    repository(),
+  ).analyzeMentions(mentions);
+  expect(result.routeSearchStatus).toBe("matched");
+  expect(names(result.routeCandidates[0]!)).toEqual(mentions);
+  expect(result.metrics.graphSearchCount).toBe(1);
+  expect(result.routeCandidates[0]!.lineTransitions).toHaveLength(1);
 });

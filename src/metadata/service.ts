@@ -12,11 +12,20 @@ export const stationMentionRoles = [
 
 export type StationMentionRole = (typeof stationMentionRoles)[number];
 
-export const sequenceRoles = ["stops", "direction", "destination", "unknown"] as const;
+export const sequenceRoles = [
+  "stops",
+  "direction",
+  "destination",
+  "unknown",
+] as const;
 export type SequenceRole = (typeof sequenceRoles)[number];
 
 export type StationMention = {
+  id?: string;
   text: string;
+  phoneticHint?: string | null;
+  language?: import("../railway/semantic").AnnouncementLanguage | undefined;
+  equivalentEventGroupId?: string | null | undefined;
   start: number | null;
   end: number | null;
   role: StationMentionRole;
@@ -27,6 +36,7 @@ export type AnnouncementAnalysis = {
   isTransitAnnouncement: boolean;
   mentions: StationMention[];
   metadata: RailwayAnnouncementMetadata;
+  semantic?: import("../railway/semantic").RailwayAnnouncement;
 };
 
 export type MetadataResult = {

@@ -1,4 +1,8 @@
-import { DiscordAttachmentSchema, DiscordInteractionSchema, type DiscordAttachment } from "./schemas";
+import {
+  DiscordAttachmentSchema,
+  DiscordInteractionSchema,
+  type DiscordAttachment,
+} from "./schemas";
 
 export const PLATFORM_COMMAND_NAME = "platform-ai-agent";
 export const PLATFORM_ALLOW_COMMAND_NAME = "platform-ai-agent-allow";
@@ -24,25 +28,39 @@ export type ParsedAccessCommand = {
   userId: string | null;
 };
 
-export type ParsedDemoCommand = Omit<ParsedAudioCommand, "kind"> & { kind: "demo" };
+export type ParsedDemoCommand = Omit<ParsedAudioCommand, "kind"> & {
+  kind: "demo";
+};
 
 export type PlatformCommandParseResult =
-  | { ok: true; value: ParsedAudioCommand | ParsedAccessCommand | ParsedDemoCommand }
+  | {
+      ok: true;
+      value: ParsedAudioCommand | ParsedAccessCommand | ParsedDemoCommand;
+    }
   | { ok: false; error: string };
 
-export function parsePlatformCommand(input: unknown): PlatformCommandParseResult {
+export function parsePlatformCommand(
+  input: unknown,
+): PlatformCommandParseResult {
   const parsed = DiscordInteractionSchema.safeParse(input);
-  if (!parsed.success) return { ok: false, error: "Interactionの形式が不正です。" };
+  if (!parsed.success)
+    return { ok: false, error: "Interactionの形式が不正です。" };
   const interaction = parsed.data;
   if (interaction.type !== 2 || interaction.data === undefined) {
     return { ok: false, error: "未対応のコマンドです。" };
   }
-  if (interaction.data.name === PLATFORM_ALLOW_COMMAND_NAME || interaction.data.name === PLATFORM_DENY_COMMAND_NAME) {
+  if (
+    interaction.data.name === PLATFORM_ALLOW_COMMAND_NAME ||
+    interaction.data.name === PLATFORM_DENY_COMMAND_NAME
+  ) {
     return {
       ok: true,
       value: {
         kind: "access",
-        action: interaction.data.name === PLATFORM_ALLOW_COMMAND_NAME ? "allow" : "deny",
+        action:
+          interaction.data.name === PLATFORM_ALLOW_COMMAND_NAME
+            ? "allow"
+            : "deny",
         guildId: interaction.guild_id ?? null,
         userId: interaction.member?.user.id ?? interaction.user?.id ?? null,
       },
@@ -53,12 +71,18 @@ export function parsePlatformCommand(input: unknown): PlatformCommandParseResult
     return { ok: false, error: "未対応のコマンドです。" };
   }
   const option = interaction.data.options?.find(
-    (candidate) => candidate.name === "audio" && candidate.type === attachmentOptionType && candidate.value !== undefined,
+    (candidate) =>
+      candidate.name === "audio" &&
+      candidate.type === attachmentOptionType &&
+      candidate.value !== undefined,
   );
-  if (option?.value === undefined) return { ok: false, error: "audio添付は必須です。" };
-  const attachmentInput = interaction.data.resolved?.attachments?.[option.value];
+  if (option?.value === undefined)
+    return { ok: false, error: "audio添付は必須です。" };
+  const attachmentInput =
+    interaction.data.resolved?.attachments?.[option.value];
   const attachment = DiscordAttachmentSchema.safeParse(attachmentInput);
-  if (!attachment.success) return { ok: false, error: "audio添付を読み取れませんでした。" };
+  if (!attachment.success)
+    return { ok: false, error: "audio添付を読み取れませんでした。" };
   return {
     ok: true,
     value: {
@@ -73,10 +97,20 @@ export function parsePlatformCommand(input: unknown): PlatformCommandParseResult
   };
 }
 
-export const deferredResponse = (): Response =>
-  Response.json({ type: 5 });
+export const queuedResponse = (position?: number | null): Response =>
+  Response.json({
+    type: 4,
+    data: {
+      content:
+        position != null && position > 0
+          ? `順番待ちしています…（待機順の目安：${position}番目）`
+          : "順番待ちしています…",
+      flags: EPHEMERAL_MESSAGE_FLAG,
+    },
+  });
 
 export const ephemeralErrorResponse = (content: string): Response =>
-  Response.json({ type: 4, data: { content, flags: 64 } });
+  Response.json({ type: 4, data: { content, flags: EPHEMERAL_MESSAGE_FLAG } });
 
 export const ephemeralMessageResponse = ephemeralErrorResponse;
+import { EPHEMERAL_MESSAGE_FLAG } from "./message-flags";

@@ -14,5 +14,12 @@
     "noEmit": true,
     "types": ["./worker-configuration.d.ts", "@cloudflare/vitest-pool-workers"]
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "scripts/**/*.ts", "worker-configuration.d.ts", "vitest.config.ts"]
+  "include": [
+    "src/**/*.ts",
+    "tests/**/*.ts",
+    "scripts/**/*.ts",
+    "worker-configuration.d.ts",
+    "vitest.config.ts",
+    "vitest.candidate.config.ts"
+  ]
 }

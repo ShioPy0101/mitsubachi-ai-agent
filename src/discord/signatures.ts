@@ -16,9 +16,21 @@ export async function verifyDiscordSignature(
 ): Promise<boolean> {
   const publicKey = fromHex(publicKeyHex);
   const signature = fromHex(signatureHex);
-  if (publicKey === null || publicKey.length !== 32 || signature === null || signature.length !== 64) return false;
+  if (
+    publicKey === null ||
+    publicKey.length !== 32 ||
+    signature === null ||
+    signature.length !== 64
+  )
+    return false;
   try {
-    const key = await crypto.subtle.importKey("raw", publicKey.buffer, { name: "Ed25519" }, false, ["verify"]);
+    const key = await crypto.subtle.importKey(
+      "raw",
+      publicKey.buffer,
+      { name: "Ed25519" },
+      false,
+      ["verify"],
+    );
     const encodedBody = new TextEncoder().encode(timestamp + body);
     const signedBody = new Uint8Array(new ArrayBuffer(encodedBody.byteLength));
     signedBody.set(encodedBody);

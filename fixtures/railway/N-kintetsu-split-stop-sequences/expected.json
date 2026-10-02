@@ -1,0 +1,13 @@
+{
+  "topCandidates": [
+    "大阪上本町",
+    "桜井",
+    "大和八木",
+    "大和高田",
+    "五位堂",
+    "河内国分",
+    "布施",
+    "鶴橋"
+  ],
+  "annotationStatus": "User-reported text; manually annotated station regression, not real-audio accuracy measurement; reported three-sequence split"
+}

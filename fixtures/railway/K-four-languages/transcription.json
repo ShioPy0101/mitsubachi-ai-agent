@@ -1,0 +1,27 @@
+{
+  "text": "停車駅は福井、芦原温泉、加賀温泉、金沢です。\nThe stops are Fukui, Awara Onsen, Kaga Onsen and Kanazawa.\n停车站为福井、芦原温泉、加贺温泉、金泽。\n정차역은 후쿠이, 아와라온천, 가가온천, 가나자와입니다.",
+  "segments": [
+    {
+      "text": "停車駅は福井、芦原温泉、加賀温泉、金沢です。",
+      "startSec": 0,
+      "endSec": 18
+    },
+    {
+      "text": "The stops are Fukui, Awara Onsen, Kaga Onsen and Kanazawa.",
+      "startSec": 20,
+      "endSec": 38
+    },
+    {
+      "text": "停车站为福井、芦原温泉、加贺温泉、金泽。",
+      "startSec": 40,
+      "endSec": 58
+    },
+    {
+      "text": "정차역은 후쿠이, 아와라온천, 가가온천, 가나자와입니다.",
+      "startSec": 60,
+      "endSec": 78
+    }
+  ],
+  "language": "unknown",
+  "provenance": "Synthetic regression fixture, not a recorded real-audio model output"
+}

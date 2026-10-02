@@ -25,7 +25,8 @@ function wavWithSilence(sampleRate = 8_000): ArrayBuffer {
   const output = new ArrayBuffer(44 + samples.length * 2);
   const view = new DataView(output);
   const ascii = (offset: number, value: string): void => {
-    for (let index = 0; index < value.length; index += 1) view.setUint8(offset + index, value.charCodeAt(index));
+    for (let index = 0; index < value.length; index += 1)
+      view.setUint8(offset + index, value.charCodeAt(index));
   };
   ascii(0, "RIFF");
   view.setUint32(4, output.byteLength - 8, true);
@@ -40,7 +41,9 @@ function wavWithSilence(sampleRate = 8_000): ArrayBuffer {
   view.setUint16(34, 16, true);
   ascii(36, "data");
   view.setUint32(40, samples.length * 2, true);
-  samples.forEach((sample, index) => view.setInt16(44 + index * 2, Math.round(sample * 0x7fff), true));
+  samples.forEach((sample, index) =>
+    view.setInt16(44 + index * 2, Math.round(sample * 0x7fff), true),
+  );
   return output;
 }
 
@@ -52,9 +55,13 @@ describe("Workers AI response adapter", () => {
       segments: [{ start: 0.5, end: 2.5, text: "次は西和田です" }],
     });
     const service = new CloudflareWhisperTranscriptionService(ai);
-    await expect(service.transcribe({
-      audio: new ArrayBuffer(1), contentType: null, filename: "audio.bin",
-    })).resolves.toEqual({
+    await expect(
+      service.transcribe({
+        audio: new ArrayBuffer(1),
+        contentType: null,
+        filename: "audio.bin",
+      }),
+    ).resolves.toEqual({
       language: "ja",
       text: "次は西和田です",
       segments: [{ startSec: 0.5, endSec: 2.5, text: "次は西和田です" }],
@@ -65,19 +72,28 @@ describe("Workers AI response adapter", () => {
         initialDecodeError: null,
       },
     });
-    expect(ai.inputs).toEqual([{
-      audio: "AA==",
-      task: "transcribe",
-      vad_filter: true,
-      initial_prompt: "日本の鉄道駅構内放送。駅名、路線名、列車名、時刻、番線。 Japanese railway station announcement. Station, line, train, time, and platform. 日本語に続いて英語、中国語、韓国語などの案内が含まれる場合があります。",
-    }]);
+    expect(ai.inputs).toEqual([
+      {
+        audio: "AA==",
+        task: "transcribe",
+        vad_filter: true,
+        initial_prompt:
+          "日本の鉄道駅構内放送。駅名、路線名、列車名、時刻、番線。 Japanese railway station announcement. Station, line, train, time, and platform. 日本語に続いて英語、中国語、韓国語などの案内が含まれる場合があります。",
+      },
+    ]);
   });
 
   it("rejects an invalid provider response", async () => {
-    const service = new CloudflareWhisperTranscriptionService(new FakeAi({ text: 42 }));
-    await expect(service.transcribe({
-      audio: new ArrayBuffer(1), contentType: null, filename: "audio.bin",
-    })).rejects.toThrow();
+    const service = new CloudflareWhisperTranscriptionService(
+      new FakeAi({ text: 42 }),
+    );
+    await expect(
+      service.transcribe({
+        audio: new ArrayBuffer(1),
+        contentType: null,
+        filename: "audio.bin",
+      }),
+    ).rejects.toThrow();
   });
 
   it("sends the complete audio in one request", async () => {
@@ -86,8 +102,12 @@ describe("Workers AI response adapter", () => {
       text: "announcement",
       segments: [{ start: 0, end: 1, text: "announcement" }],
     });
-    const result = await new CloudflareWhisperTranscriptionService(ai).transcribe({
-      audio: wavWithSilence(), contentType: "audio/wav", filename: "announcement.wav",
+    const result = await new CloudflareWhisperTranscriptionService(
+      ai,
+    ).transcribe({
+      audio: wavWithSilence(),
+      contentType: "audio/wav",
+      filename: "announcement.wav",
     });
 
     expect(ai.inputs).toHaveLength(1);
@@ -106,7 +126,9 @@ describe("Workers AI response adapter", () => {
     };
 
     await new CloudflareWhisperTranscriptionService(ai).transcribe({
-      audio: wavWithSilence(), contentType: "audio/wav", filename: "announcement.wav",
+      audio: wavWithSilence(),
+      contentType: "audio/wav",
+      filename: "announcement.wav",
       signal: controller.signal,
     });
 
@@ -115,7 +137,10 @@ describe("Workers AI response adapter", () => {
 
   it("fails explicitly when both the original and rebuilt MP3 are rejected", async () => {
     const inputs: Ai_Cf_Openai_Whisper_Large_V3_Turbo_Input[] = [];
-    const decodeError = Object.assign(new Error("3030: Failed to decode audio file"), { code: 3030 });
+    const decodeError = Object.assign(
+      new Error("3030: Failed to decode audio file"),
+      { code: 3030 },
+    );
     const ai: WhisperAiRunner = {
       run: async (_model, input) => {
         inputs.push(input);
@@ -127,7 +152,9 @@ describe("Workers AI response adapter", () => {
 
     const promise = new CloudflareWhisperTranscriptionService(
       ai,
-      async ({ phase }) => { progress.push(phase); },
+      async ({ phase }) => {
+        progress.push(phase);
+      },
       () => new Uint8Array([9, 9]).buffer,
     ).transcribe({
       audio: new Uint8Array([1, 2, 3]).buffer,
@@ -141,12 +168,20 @@ describe("Workers AI response adapter", () => {
   });
 
   it("submits a compatible MP3 directly without invoking the local decoder", async () => {
-    const ai = new FakeAi({ transcription_info: { language: "ja" }, text: "直接成功", segments: [] });
-    let rebuildCalls = 0;
-    const service = new CloudflareWhisperTranscriptionService(ai, undefined, () => {
-      rebuildCalls += 1;
-      return new ArrayBuffer(1);
+    const ai = new FakeAi({
+      transcription_info: { language: "ja" },
+      text: "直接成功",
+      segments: [],
     });
+    let rebuildCalls = 0;
+    const service = new CloudflareWhisperTranscriptionService(
+      ai,
+      undefined,
+      () => {
+        rebuildCalls += 1;
+        return new ArrayBuffer(1);
+      },
+    );
 
     const result = await service.transcribe({
       audio: new Uint8Array([1, 2, 3]).buffer,
@@ -156,23 +191,35 @@ describe("Workers AI response adapter", () => {
 
     expect(ai.inputs).toHaveLength(1);
     expect(rebuildCalls).toBe(0);
-    expect(result.audioPreparation).toMatchObject({ strategy: "original", submittedBytes: 3 });
+    expect(result.audioPreparation).toMatchObject({
+      strategy: "original",
+      submittedBytes: 3,
+    });
   });
 
   it("rebuilds MP3 frames without invoking a WAV transcoder", async () => {
     const inputs: Ai_Cf_Openai_Whisper_Large_V3_Turbo_Input[] = [];
-    const decodeError = Object.assign(new Error("3030: Failed to decode audio file"), { code: 3030 });
+    const decodeError = Object.assign(
+      new Error("3030: Failed to decode audio file"),
+      { code: 3030 },
+    );
     const ai: WhisperAiRunner = {
       run: async (_model, input) => {
         inputs.push(input);
         if (inputs.length === 1) throw decodeError;
-        return { transcription_info: { language: "ja" }, text: "再構成で成功", segments: [] };
+        return {
+          transcription_info: { language: "ja" },
+          text: "再構成で成功",
+          segments: [],
+        };
       },
     };
     const progress: string[] = [];
     const service = new CloudflareWhisperTranscriptionService(
       ai,
-      async ({ phase }) => { progress.push(phase); },
+      async ({ phase }) => {
+        progress.push(phase);
+      },
       () => new Uint8Array([4, 5, 6]).buffer,
     );
 
@@ -199,15 +246,27 @@ describe("Workers AI response adapter", () => {
   it("does not retry decode errors for non-MP3 input", async () => {
     const decodeError = new Error("3030: Failed to decode audio file");
     let rebuildCalls = 0;
-    const ai: WhisperAiRunner = { run: async () => { throw decodeError; } };
-    const service = new CloudflareWhisperTranscriptionService(ai, undefined, () => {
-      rebuildCalls += 1;
-      return new ArrayBuffer(1);
-    });
+    const ai: WhisperAiRunner = {
+      run: async () => {
+        throw decodeError;
+      },
+    };
+    const service = new CloudflareWhisperTranscriptionService(
+      ai,
+      undefined,
+      () => {
+        rebuildCalls += 1;
+        return new ArrayBuffer(1);
+      },
+    );
 
-    await expect(service.transcribe({
-      audio: new ArrayBuffer(1), contentType: "audio/wav", filename: "audio.wav",
-    })).rejects.toBe(decodeError);
+    await expect(
+      service.transcribe({
+        audio: new ArrayBuffer(1),
+        contentType: "audio/wav",
+        filename: "audio.wav",
+      }),
+    ).rejects.toBe(decodeError);
     expect(rebuildCalls).toBe(0);
     expect(isWorkersAiAudioDecodeError(decodeError)).toBe(true);
   });

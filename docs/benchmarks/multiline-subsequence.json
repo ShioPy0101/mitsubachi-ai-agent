@@ -1,0 +1,57 @@
+{
+  "method": "Node local, seven warm fixture evaluations; before is an earlier stored measurement, not a controlled same-process comparison; no external APIs",
+  "cases": [
+    {
+      "case": "A-exact",
+      "beforeMedianStationMs": 1.858871000000022,
+      "afterMedianStationMs": 1.8936939999999822,
+      "stationD1Queries": 0,
+      "stationD1RowsRead": 0,
+      "stationD1Writes": 0,
+      "alignmentComparisons": 264,
+      "graphSearches": 0
+    },
+    {
+      "case": "B-meitetsu",
+      "beforeMedianStationMs": 13.02306299999998,
+      "afterMedianStationMs": 11.457342999999923,
+      "stationD1Queries": 0,
+      "stationD1RowsRead": 0,
+      "stationD1Writes": 0,
+      "alignmentComparisons": 1332,
+      "graphSearches": 0
+    },
+    {
+      "case": "C-long",
+      "beforeMedianStationMs": 21.69687799999997,
+      "afterMedianStationMs": 24.656045999999947,
+      "stationD1Queries": 0,
+      "stationD1RowsRead": 0,
+      "stationD1Writes": 0,
+      "alignmentComparisons": 7011,
+      "graphSearches": 1
+    },
+    {
+      "case": "D-transfer",
+      "beforeMedianStationMs": 2.364475999999968,
+      "afterMedianStationMs": 6.33876500000008,
+      "stationD1Queries": 0,
+      "stationD1RowsRead": 0,
+      "stationD1Writes": 0,
+      "alignmentComparisons": 888,
+      "graphSearches": 1
+    },
+    {
+      "case": "K-four-languages",
+      "beforeMedianStationMs": null,
+      "afterMedianStationMs": 48.01228100000003,
+      "stationD1Queries": 0,
+      "stationD1RowsRead": 0,
+      "stationD1Writes": 0,
+      "alignmentComparisons": 5616,
+      "graphSearches": 0
+    }
+  ],
+  "productionLatency": null,
+  "accuracy": null
+}

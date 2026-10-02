@@ -1,6 +1,7 @@
 export type Station = {
   id: number;
   name: string;
+  englishName?: string;
   kana: string | null;
   kanaSource: string | null;
   operatorName: string | null;
@@ -28,14 +29,37 @@ export type RoutePathStation = {
   routeIndex: number;
 };
 
+export type PhysicalRouteSegment = {
+  lineId: string;
+  pathId: string;
+  stationIds: readonly number[];
+  direction: "forward" | "reverse";
+};
+export type PhysicalRoute = { segments: readonly PhysicalRouteSegment[] };
+export type LineTransition = {
+  fromLineId: string;
+  toLineId: string;
+  atStationId: number;
+  toStationId: number;
+};
+
 export type RoutePathCandidate = {
+  physicalRoute?: PhysicalRoute;
+  lineTransitions?: readonly LineTransition[];
+  direction?: "forward" | "reverse";
+  directionReversals?: number;
+  detourRatio?: number;
   stations: RoutePathStation[];
+  /** Ordered physical path including unspoken intermediate stations. */
+  physicalStations?: RoutePathStation[];
+  /** Existing spoken mentions aligned as an ordered subsequence. */
+  spokenStopSequence?: RoutePathStation[];
   anchorCoverage: number;
   orderConsistency: number;
   transferCount: number;
   pathLength: number;
   score: number;
-  source?: "anchor" | "sequence_fallback";
+  source?: "line_fast_path" | "graph_fallback";
   mentionMatches?: MentionRouteMatch[];
   exactAnchorCoverage?: number;
   hardAnchorViolations?: number;
@@ -48,6 +72,7 @@ export type MentionRouteMatch = {
   routeIndex: number;
   nameSimilarity: number;
   kanaSimilarity: number;
+  phoneticSimilarity: number;
   lexicalSimilarity: number;
 };
 
@@ -59,11 +84,24 @@ export type MentionStationCandidate = {
   station: Station;
   nameSimilarity: number;
   kanaSimilarity: number;
+  phoneticSimilarity: number;
+  bound: boolean;
+  correctionEligible?: boolean;
   lexicalScore: number;
   matchStrength: StationMatchStrength;
   routeHypothesisIds: number[];
   bestRouteScore: number | null;
   finalScore: number;
+  crossLanguageEvidence?: CrossLanguageEvidence[];
+};
+
+export type CrossLanguageEvidence = {
+  groupId: string;
+  peerMentionId: string;
+  peerLanguage: import("../railway/semantic").AnnouncementLanguage;
+  peerSequenceId: number;
+  stationId: number;
+  routeScore: number;
 };
 
 export type RouteSearchStatus =

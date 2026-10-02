@@ -9,24 +9,7 @@ export const jobStatuses = [
 ] as const;
 export type JobStatus = (typeof jobStatuses)[number];
 
-export type DemoAudioJobMessage = {
-  kind: "demo";
-  interactionId: string;
-  interactionToken: string;
-  userId: string;
-  attachment: {
-    id: string;
-    filename: string;
-    size: number;
-    url: string;
-    contentType: string | null;
-    durationSecs: number | null;
-  };
-};
-
-export type PersistedAudioJobMessage = { kind?: "persisted"; jobId: string };
-
-export type AudioJobMessage = PersistedAudioJobMessage | DemoAudioJobMessage;
+export type AudioJobMessage = { kind?: "persisted"; jobId: string };
 
 export type InteractionAudioSource = {
   type: "interaction";
@@ -49,11 +32,19 @@ export type AudioJob = {
   errorMessage: string | null;
   transcriptionText: string | null;
   createdAt: string;
+  /** Legacy transcription start, never the job clock. */
   startedAt: string | null;
+  processingStartedAt?: string | null;
+  deadlineAt?: string | null;
+  stage?: string | null;
+  stageStartedAt?: string | null;
+  failureCode?: string | null;
+  presentationMode?: "public" | "demo";
   completedAt: string | null;
 };
 
 export type NewAudioJob = {
+  presentationMode?: "public" | "demo";
   source: InteractionAudioSource;
   interactionCallback?: {
     token: string;

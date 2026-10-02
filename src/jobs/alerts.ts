@@ -8,17 +8,26 @@ export type AudioJobAlert = {
   filename?: string;
   stage: string;
   attempt?: number;
+  severity?: "error" | "warning";
   errorName: string;
   errorMessage: string;
 };
 
 export function formatAudioJobAlert(alert: AudioJobAlert): string {
   const header = [
-    "🚨 audio job error",
+    alert.severity === "warning"
+      ? "⚠️ audio job warning"
+      : "🚨 audio job error",
     ...(alert.jobId === undefined ? [] : [`job: ${alert.jobId}`]),
-    ...(alert.interactionId === undefined ? [] : [`interaction: ${alert.interactionId}`]),
-    ...(alert.guildId === undefined ? [] : [`guild: ${alert.guildId ?? "none"}`]),
-    ...(alert.attachmentId === undefined ? [] : [`attachment: ${alert.attachmentId}`]),
+    ...(alert.interactionId === undefined
+      ? []
+      : [`interaction: ${alert.interactionId}`]),
+    ...(alert.guildId === undefined
+      ? []
+      : [`guild: ${alert.guildId ?? "none"}`]),
+    ...(alert.attachmentId === undefined
+      ? []
+      : [`attachment: ${alert.attachmentId}`]),
     ...(alert.filename === undefined ? [] : [`file: ${alert.filename}`]),
     `stage: ${alert.stage}`,
     ...(alert.attempt === undefined ? [] : [`attempt: ${alert.attempt}`]),
@@ -28,12 +37,21 @@ export function formatAudioJobAlert(alert: AudioJobAlert): string {
   return `${header}\n${alert.errorMessage.slice(0, maximumMessageLength)}`;
 }
 
-export async function sendAudioJobAlert(env: Env, alert: AudioJobAlert): Promise<void> {
+export async function sendAudioJobAlert(
+  env: Env,
+  alert: AudioJobAlert,
+): Promise<void> {
   const channelId = env.DISCORD_ALERT_CHANNEL_ID?.trim();
   if (!channelId) return;
   try {
-    const discord = new DiscordRestClient(env.DISCORD_BOT_TOKEN, env.DISCORD_APPLICATION_ID);
-    const result = await discord.sendChannelMessage(channelId, formatAudioJobAlert(alert));
+    const discord = new DiscordRestClient(
+      env.DISCORD_BOT_TOKEN,
+      env.DISCORD_APPLICATION_ID,
+    );
+    const result = await discord.sendChannelMessage(
+      channelId,
+      formatAudioJobAlert(alert),
+    );
     if (!result.ok) {
       console.error("audio_job_alert_failed", {
         stage: alert.stage,

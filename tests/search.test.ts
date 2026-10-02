@@ -9,11 +9,20 @@ describe("search", () => {
   });
 
   it("formats at most repository-provided results", () => {
-    const output = formatSearchResults([{
-      station: "五十鈴ヶ丘", line: "JR参宮線", trainType: "普通", trainName: null,
-      destination: "鳥羽", departureTime: "13:25", nextStation: "二見浦", summary: "次は二見浦",
-      rawTranscription: "次は二見浦です", generatedFilename: "001.mp3",
-    }]);
+    const output = formatSearchResults([
+      {
+        station: "五十鈴ヶ丘",
+        line: "JR参宮線",
+        trainType: "普通",
+        trainName: null,
+        destination: "鳥羽",
+        departureTime: "13:25",
+        nextStation: "二見浦",
+        summary: "次は二見浦",
+        rawTranscription: "次は二見浦です",
+        generatedFilename: "001.mp3",
+      },
+    ]);
     expect(output).toContain("1. 五十鈴ヶ丘 / JR参宮線 / 普通 / 鳥羽行き");
     expect(output).toContain("13:25発");
   });
@@ -22,7 +31,9 @@ describe("search", () => {
     const all = vi.fn().mockResolvedValue({ results: [] });
     const bind = vi.fn().mockReturnValue({ all });
     const prepare = vi.fn().mockReturnValue({ bind });
-    const repository = new ClipsRepository({ prepare } as unknown as D1Database);
+    const repository = new ClipsRepository({
+      prepare,
+    } as unknown as D1Database);
 
     await repository.search("敦賀", "guild-123");
 

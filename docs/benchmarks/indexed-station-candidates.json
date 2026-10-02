@@ -1,0 +1,240 @@
+{
+  "environment": "Node local operation counts. Indexed static postings supply the same IDs as D1; no production Worker CPU-ms claim.",
+  "stationCount": 10390,
+  "d1LocalSample": {
+    "reading": "ふせ",
+    "queries": 2,
+    "rowsRead": 357,
+    "returnedIds": 4
+  },
+  "cases": [
+    {
+      "reading": "やすゆき",
+      "original": {
+        "stationComparisons": 10390,
+        "editDistanceCalls": 66075,
+        "editDistanceCells": 850838
+      },
+      "indexed": {
+        "rowsReturned": 2,
+        "d1RowsRead": 0,
+        "lineRouteLoadingMs": 0,
+        "cacheHits": 0,
+        "cacheMisses": 0,
+        "sequencePreRankComparisons": 0,
+        "work": {
+          "candidateIdsRetrieved": 33,
+          "candidatePrefilterChecks": 33,
+          "candidateSimilarityPairs": 24,
+          "editDistanceCalls": 94,
+          "editDistanceCells": 649,
+          "phoneticCacheHits": 0,
+          "normalizedReadingCacheHits": 0,
+          "routeLexicalPairs": 0,
+          "routeSimilarityCacheHits": 0,
+          "graphStatesExpanded": 0,
+          "normalizationComputations": 1,
+          "normalizationCacheHits": 0,
+          "similarityCacheHits": 8
+        },
+        "candidateSource": {
+          "queries": 0,
+          "rowsRead": 0,
+          "postingRows": 3553,
+          "returnedIds": 33
+        }
+      },
+      "topIds": [7103, 10085]
+    },
+    {
+      "reading": "しんわぐち",
+      "original": {
+        "stationComparisons": 10390,
+        "editDistanceCalls": 96760,
+        "editDistanceCells": 1414842
+      },
+      "indexed": {
+        "rowsReturned": 2,
+        "d1RowsRead": 0,
+        "lineRouteLoadingMs": 0,
+        "cacheHits": 0,
+        "cacheMisses": 0,
+        "sequencePreRankComparisons": 0,
+        "work": {
+          "candidateIdsRetrieved": 73,
+          "candidatePrefilterChecks": 73,
+          "candidateSimilarityPairs": 67,
+          "editDistanceCalls": 340,
+          "editDistanceCells": 4016,
+          "phoneticCacheHits": 0,
+          "normalizedReadingCacheHits": 0,
+          "routeLexicalPairs": 0,
+          "routeSimilarityCacheHits": 0,
+          "graphStatesExpanded": 0,
+          "normalizationComputations": 1,
+          "normalizationCacheHits": 0,
+          "similarityCacheHits": 19
+        },
+        "candidateSource": {
+          "queries": 0,
+          "rowsRead": 0,
+          "postingRows": 7821,
+          "returnedIds": 73
+        }
+      },
+      "topIds": [377, 1244]
+    },
+    {
+      "reading": "ふくき",
+      "original": {
+        "stationComparisons": 10390,
+        "editDistanceCalls": 44109,
+        "editDistanceCells": 487909
+      },
+      "indexed": {
+        "rowsReturned": 2,
+        "d1RowsRead": 0,
+        "lineRouteLoadingMs": 0,
+        "cacheHits": 0,
+        "cacheMisses": 0,
+        "sequencePreRankComparisons": 0,
+        "work": {
+          "candidateIdsRetrieved": 33,
+          "candidatePrefilterChecks": 33,
+          "candidateSimilarityPairs": 33,
+          "editDistanceCalls": 32,
+          "editDistanceCells": 270,
+          "phoneticCacheHits": 0,
+          "normalizedReadingCacheHits": 0,
+          "routeLexicalPairs": 0,
+          "routeSimilarityCacheHits": 0,
+          "graphStatesExpanded": 0,
+          "normalizationComputations": 1,
+          "normalizationCacheHits": 0,
+          "similarityCacheHits": 10
+        },
+        "candidateSource": {
+          "queries": 0,
+          "rowsRead": 0,
+          "postingRows": 3009,
+          "returnedIds": 33
+        }
+      },
+      "topIds": [2970, 31]
+    },
+    {
+      "reading": "ちだたけとよ",
+      "original": {
+        "stationComparisons": 10390,
+        "editDistanceCalls": 134738,
+        "editDistanceCells": 2212406
+      },
+      "indexed": {
+        "rowsReturned": 2,
+        "d1RowsRead": 0,
+        "lineRouteLoadingMs": 0,
+        "cacheHits": 0,
+        "cacheMisses": 0,
+        "sequencePreRankComparisons": 0,
+        "work": {
+          "candidateIdsRetrieved": 114,
+          "candidatePrefilterChecks": 114,
+          "candidateSimilarityPairs": 84,
+          "editDistanceCalls": 781,
+          "editDistanceCells": 8901,
+          "phoneticCacheHits": 0,
+          "normalizedReadingCacheHits": 0,
+          "routeLexicalPairs": 0,
+          "routeSimilarityCacheHits": 0,
+          "graphStatesExpanded": 0,
+          "normalizationComputations": 1,
+          "normalizationCacheHits": 0,
+          "similarityCacheHits": 24
+        },
+        "candidateSource": {
+          "queries": 0,
+          "rowsRead": 0,
+          "postingRows": 6555,
+          "returnedIds": 114
+        }
+      },
+      "topIds": [5226, 5546]
+    },
+    {
+      "reading": "なら",
+      "original": {
+        "stationComparisons": 10390,
+        "editDistanceCalls": 30256,
+        "editDistanceCells": 262828
+      },
+      "indexed": {
+        "rowsReturned": 2,
+        "d1RowsRead": 0,
+        "lineRouteLoadingMs": 0,
+        "cacheHits": 0,
+        "cacheMisses": 0,
+        "sequencePreRankComparisons": 0,
+        "work": {
+          "candidateIdsRetrieved": 6,
+          "candidatePrefilterChecks": 6,
+          "candidateSimilarityPairs": 6,
+          "editDistanceCalls": 2,
+          "editDistanceCells": 12,
+          "phoneticCacheHits": 0,
+          "normalizedReadingCacheHits": 0,
+          "routeLexicalPairs": 0,
+          "routeSimilarityCacheHits": 0,
+          "graphStatesExpanded": 0,
+          "normalizationComputations": 1,
+          "normalizationCacheHits": 0,
+          "similarityCacheHits": 3
+        },
+        "candidateSource": {
+          "queries": 0,
+          "rowsRead": 0,
+          "postingRows": 2364,
+          "returnedIds": 6
+        }
+      },
+      "topIds": [2994, 2999]
+    },
+    {
+      "reading": "ふせ",
+      "original": {
+        "stationComparisons": 10390,
+        "editDistanceCalls": 30264,
+        "editDistanceCells": 262852
+      },
+      "indexed": {
+        "rowsReturned": 2,
+        "d1RowsRead": 0,
+        "lineRouteLoadingMs": 0,
+        "cacheHits": 0,
+        "cacheMisses": 0,
+        "sequencePreRankComparisons": 0,
+        "work": {
+          "candidateIdsRetrieved": 4,
+          "candidatePrefilterChecks": 4,
+          "candidateSimilarityPairs": 4,
+          "editDistanceCalls": 3,
+          "editDistanceCells": 15,
+          "phoneticCacheHits": 0,
+          "normalizedReadingCacheHits": 0,
+          "routeLexicalPairs": 0,
+          "routeSimilarityCacheHits": 0,
+          "graphStatesExpanded": 0,
+          "normalizationComputations": 1,
+          "normalizationCacheHits": 0,
+          "similarityCacheHits": 1
+        },
+        "candidateSource": {
+          "queries": 0,
+          "rowsRead": 0,
+          "postingRows": 955,
+          "returnedIds": 4
+        }
+      },
+      "topIds": [2836, 2850]
+    }
+  ]
+}
