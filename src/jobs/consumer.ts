@@ -137,6 +137,23 @@ export async function consumeAudioJobs(
     }
 
     if (job.presentationMode === "demo") context.presentationMode = "demo";
+    if (message.attempts > 1) {
+      // A platform termination may bypass catch/finally. Capture durable
+      // previous progress before the next attempt overwrites the stage.
+      console.warn("audio_job_redelivered", {
+        jobId: job.id,
+        queueMessageId: message.id,
+        attempt: message.attempts,
+        previousStatus: job.status,
+        previousStage: job.stage ?? null,
+        previousStageStartedAt: job.stageStartedAt ?? null,
+        previousFailureCode: job.failureCode ?? null,
+        previousErrorMessage: job.errorMessage,
+        hasTranscriptionCheckpoint: job.transcriptionText !== null,
+        deadlineAt: job.deadlineAt ?? null,
+        interruptionCause: "unknown",
+      });
+    }
     try {
       const now = new Date().toISOString();
       const deadline = new Date(

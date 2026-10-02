@@ -12,6 +12,7 @@ const stageLabels: Record<string, string> = {
   attachment_download: "音声ファイル取得",
   whisper_transcription: "Whisper文字起こし",
   transcription_checkpoint: "文字起こし中間保存",
+  transcription_provenance: "保存済み文字起こし・segment情報の確認",
   gemini_analysis: "Gemini #1 放送構造解析",
   gemini_normalization: "Gemini #2 文字起こし補正",
   station_candidates_sequences: "駅・経路候補一括探索",
