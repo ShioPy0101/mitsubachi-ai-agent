@@ -15,6 +15,7 @@ import m7 from "../migrations/0007_job_monitor_messages.sql?raw";
 import m8 from "../migrations/0008_job_monitor_observations.sql?raw";
 import m9 from "../migrations/0009_pipeline_deadlines.sql?raw";
 import m10 from "../migrations/0010_static_railway.sql?raw";
+import m11 from "../migrations/0011_indexed_station_candidates.sql?raw";
 const migrate = async (sql: string) => {
   for (const statement of sql
     .split(";")
@@ -23,7 +24,7 @@ const migrate = async (sql: string) => {
     await env.DB.prepare(statement).run();
 };
 beforeEach(async () => {
-  for (const sql of [m1, m2, m3, m4, m5, m6, m7, m8, m9, m10])
+  for (const sql of [m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11])
     await migrate(sql);
 });
 afterEach(() => {

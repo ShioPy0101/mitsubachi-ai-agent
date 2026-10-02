@@ -4,6 +4,7 @@ import type { SequenceRole, StationMention } from "../metadata/service";
 import {
   StationCandidateService,
   reconcileStationMentionCandidates,
+  createReconciliationWork,
   type StationCandidateDiagnostics,
   type StationRepository,
 } from "./candidate-service";
@@ -54,6 +55,21 @@ export type StationCorrectionResult = {
     totalMs: number;
     reconciliationMs: number;
     sequences: StationCandidateDiagnostics["metrics"][];
+    work?: {
+      candidateGeneration: ReturnType<
+        NonNullable<StationRepository["getCostMetrics"]>
+      >["candidateSource"];
+      repository: ReturnType<
+        NonNullable<StationRepository["getCostMetrics"]>
+      >["work"];
+      candidateScoring: {
+        computations: number;
+        cacheHits: number;
+        similarityWork: import("./work-metrics").RailwayWorkMetrics;
+      };
+      routeResolution: { alignmentComparisons: number; graphSearches: number };
+      sequenceReconciliation: ReturnType<typeof createReconciliationWork>;
+    };
   };
   candidates: StationCandidate[];
   bindings: Map<string, Station>;
@@ -85,6 +101,8 @@ export class StationCorrectionEngine {
     signal?: AbortSignal,
   ): Promise<StationCorrectionResult> {
     const startedAt = Date.now();
+    const repository = this.repositoryFactory();
+    const service = new StationCandidateService(repository);
     const sequences = groupStationSequences([...input.mentions]).filter(
       ({ role }) => role !== "unknown",
     );
@@ -94,9 +112,7 @@ export class StationCorrectionEngine {
       async ({ id, role, mentions, contextMentions }) => {
         signal?.throwIfAborted();
         const searchMentions = [...mentions, ...contextMentions];
-        const stationSearch = await new StationCandidateService(
-          this.repositoryFactory(),
-        ).analyzeMentions(
+        const stationSearch = await service.analyzeMentions(
           searchMentions.map(({ text }) => text),
           input.context,
           {
@@ -123,9 +139,7 @@ export class StationCorrectionEngine {
         ...sequence.mentions,
         ...sequence.contextMentions,
       ];
-      const updated = await new StationCandidateService(
-        this.repositoryFactory(),
-      ).analyzeMentions(
+      const updated = await service.analyzeMentions(
         searchMentions.map((m) => m.text),
         input.context,
         {
@@ -165,9 +179,16 @@ export class StationCorrectionEngine {
       signal?.throwIfAborted();
     });
     const reconciliationStartedAt = Date.now();
+    const reconciliationWork = createReconciliationWork();
     const bindings = reconcileStationMentionCandidates(
       sequenceSearches.map(({ stationSearch }) => stationSearch),
+      reconciliationWork,
+      service.similarityCache,
     );
+    console.info("station_search_work", {
+      phase: "sequence reconciliation",
+      ...reconciliationWork,
+    });
     const reconciliationMs = Date.now() - reconciliationStartedAt;
     const byMention = new Map<string, StationMentionEvidence>(
       input.mentions.map((mention) => [
@@ -249,6 +270,18 @@ export class StationCorrectionEngine {
         totalMs: Date.now() - startedAt,
         reconciliationMs,
         sequences: sequenceSearches.map((s) => s.stationSearch.metrics),
+        work: {
+          candidateGeneration: repository.getCostMetrics?.().candidateSource,
+          repository: repository.getCostMetrics?.().work,
+          candidateScoring: {
+            ...service.scoringWork,
+            similarityWork: { ...service.similarityCache.work },
+          },
+          // Job counters avoid counting overlapping repository deltas twice
+          // when independent sequences share one in-flight lookup.
+          routeResolution: { ...service.routeWork },
+          sequenceReconciliation: { ...reconciliationWork },
+        },
       },
     };
   }

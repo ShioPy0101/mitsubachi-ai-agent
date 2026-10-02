@@ -5,6 +5,7 @@ import type {
 } from "./static-schema";
 import { indexRouteGraph } from "./route-algorithms";
 import type { LineMembership } from "./line-routes";
+import { readingCounts } from "./phonetic-source";
 import {
   stationNameInLanguage,
   normalizeLocalizedStationName,
@@ -19,6 +20,8 @@ export function buildRailwayIndexes(data: RailwayStaticData) {
     byName = new Map<string, StaticStation[]>(),
     byKana = new Map<string, StaticStation[]>();
   const byLocalizedName = new Map<string, StaticStation[]>();
+  let kanaPostings:
+    Map<string, { stationId: number; frequency: number }[]> | undefined;
   const nameGrams = new Map<string, StaticStation[]>(),
     kanaGrams = new Map<string, StaticStation[]>(),
     byAdjacent = new Map<string, StaticStation[]>();
@@ -64,6 +67,20 @@ export function buildRailwayIndexes(data: RailwayStaticData) {
     byId,
     byName,
     byKana,
+    // Production uses D1 postings. Build local postings only for an explicitly
+    // selected in-memory source, avoiding unused cold-start allocations.
+    get kanaPostings() {
+      if (!kanaPostings) {
+        kanaPostings = new Map();
+        for (const station of byId.values())
+          if (station.normalizedKana)
+            for (const [token, frequency] of readingCounts(
+              station.normalizedKana,
+            ))
+              add(kanaPostings, token, { stationId: station.id, frequency });
+      }
+      return kanaPostings;
+    },
     byLocalizedName,
     nameGrams,
     kanaGrams,

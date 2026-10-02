@@ -4,6 +4,7 @@ export default defineConfig({
     setupFiles: ["tests/no-network.ts"],
     environment: "node",
     include: [
+      "tests/indexed-phonetic.test.ts",
       "tests/correction-evidence.test.ts",
       "tests/stations.test.ts",
       "tests/stations-paths.integration.test.ts",

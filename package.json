@@ -8,10 +8,11 @@
     "deploy": "wrangler deploy",
     "deploy:dry-run": "wrangler deploy --dry-run --outdir .wrangler-dist",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --config vitest.unit.config.ts && vitest run",
+    "test": "vitest run --config vitest.unit.config.ts && vitest run && vitest run --config vitest.candidate.config.ts",
     "test:watch": "vitest",
     "discord:register": "node --env-file-if-exists=.dev.vars --import tsx scripts/register-discord-commands.ts",
     "generate:railway-data": "node --import tsx scripts/generate-railway-data.ts",
+    "generate:candidate-index": "node --import tsx scripts/generate-candidate-index.ts",
     "benchmark:stations": "node --import tsx scripts/benchmark-static.ts",
     "test:station": "vitest run --config vitest.unit.config.ts",
     "eval:station": "node --import tsx scripts/eval-station.ts",
@@ -25,7 +26,8 @@
     "eval:accuracy": "node --import tsx scripts/eval-accuracy.ts",
     "benchmark:static": "node --import tsx scripts/benchmark-static.ts",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "test:station:d1": "vitest run --config vitest.candidate.config.ts"
   },
   "dependencies": {
     "codec-parser": "^2.5.0",

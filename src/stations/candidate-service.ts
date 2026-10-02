@@ -3,7 +3,7 @@ import {
   localizedStationSimilarity,
   normalizeLocalizedStationName,
 } from "./language";
-import { stringSimilarity } from "./similarity";
+import { StationSimilarityCache, stringSimilarity } from "./similarity";
 import type { SequenceRole } from "../metadata/service";
 import {
   extractStationSearchText,
@@ -35,6 +35,13 @@ export interface StationRepository {
     cacheMisses: number;
     lineRouteLoadingMs?: number;
     sequencePreRankComparisons?: number;
+    work?: import("./work-metrics").RailwayWorkMetrics;
+    candidateSource?: {
+      queries: number;
+      rowsRead?: number;
+      postingRows: number;
+      returnedIds: number;
+    };
   };
   findCandidatePool(
     searchText: string,
@@ -185,12 +192,23 @@ export function scoreStation(
   station: Station,
   transcription: string,
   context: StationContext,
+  cache?: StationSimilarityCache,
 ): StationCandidate {
-  const nameSimilarity = bestContainedSimilarity(
-    normalizeStationName(transcription),
-    normalizeStationName(station.name),
+  const nameSimilarity = cache
+    ? cache.similarity(
+        cache.normalize(transcription, "name"),
+        cache.normalize(station.name, "name"),
+        true,
+      )
+    : bestContainedSimilarity(
+        normalizeStationName(transcription),
+        normalizeStationName(station.name),
+      );
+  const kanaSimilarity = stationKanaSimilarity(
+    transcription,
+    station.kana,
+    cache,
   );
-  const kanaSimilarity = stationKanaSimilarity(transcription, station.kana);
   const lineBonus =
     context.lineName != null && station.lineName === context.lineName ? 1 : 0;
   const prefectureBonus =
@@ -245,6 +263,7 @@ export function lexicalSimilarities(
   mention: string,
   station: Station,
   inferredReading?: string | null,
+  cache?: StationSimilarityCache,
 ): {
   nameSimilarity: number;
   kanaSimilarity: number;
@@ -253,16 +272,21 @@ export function lexicalSimilarities(
 } {
   const localized = localizedStationSimilarity(mention, station);
   const nameSimilarity = localized
-    ? stringSimilarity(
-        normalizeLocalizedStationName(mention),
-        normalizeLocalizedStationName(localized),
-      )
-    : stationNameMentionSimilarity(mention, station.name);
-  const kanaSimilarity = stationKanaSimilarity(mention, station.kana);
+    ? cache
+      ? cache.similarity(
+          cache.normalize(mention, "localized"),
+          cache.normalize(localized, "localized"),
+        )
+      : stringSimilarity(
+          normalizeLocalizedStationName(mention),
+          normalizeLocalizedStationName(localized),
+        )
+    : stationNameMentionSimilarity(mention, station.name, cache);
+  const kanaSimilarity = stationKanaSimilarity(mention, station.kana, cache);
   const phoneticSimilarity =
     inferredReading == null
       ? 0
-      : stationKanaSimilarity(inferredReading, station.kana);
+      : stationKanaSimilarity(inferredReading, station.kana, cache);
   return {
     nameSimilarity,
     kanaSimilarity,
@@ -290,6 +314,7 @@ function alignMentionsToRoute(
   boundNamesByMention: readonly (string | null)[],
   onComparison?: () => void,
   similaritiesFor = lexicalSimilarities,
+  similarityCache?: StationSimilarityCache,
 ): RoutePathCandidate | null {
   if (
     mentionTexts.length < 2 ||
@@ -309,9 +334,10 @@ function alignMentionsToRoute(
       phoneticHints[mentionIndex],
     );
     const lexical =
-      stringSimilarity(
-        normalizeStationName(mentionTexts[mentionIndex] ?? ""),
-        normalizeStationName(station.name),
+      stationNameMentionSimilarity(
+        mentionTexts[mentionIndex] ?? "",
+        station.name,
+        similarityCache,
       ) *
         0.15 +
       similarities.nameSimilarity * 0.75 +
@@ -388,6 +414,7 @@ function alignMentionsToRoute(
       mentionTexts[i]!,
       route.stations[refinedIndexes[i]!]!.station,
       hint,
+      similarityCache,
     );
     if (Math.max(current.nameSimilarity, current.kanaSimilarity) >= 0.85)
       continue;
@@ -402,6 +429,8 @@ function alignMentionsToRoute(
         const evidence = lexicalSimilarities(
           mentionTexts[j]!,
           route.stations[refinedIndexes[j]!]!.station,
+          null,
+          similarityCache,
         );
         return (
           Math.max(evidence.nameSimilarity, evidence.kanaSimilarity) >= 0.65
@@ -412,9 +441,19 @@ function alignMentionsToRoute(
     for (let index = left + 1; index < right; index++) {
       onComparison?.();
       const station = route.stations[index]!.station;
-      if (!station.kana || normalizeKana(hint) !== normalizeKana(station.kana))
+      if (
+        !station.kana ||
+        (similarityCache?.normalize(hint, "kana") ?? normalizeKana(hint)) !==
+          (similarityCache?.normalize(station.kana, "kana") ??
+            normalizeKana(station.kana))
+      )
         continue;
-      const evidence = lexicalSimilarities(mentionTexts[i]!, station, hint);
+      const evidence = lexicalSimilarities(
+        mentionTexts[i]!,
+        station,
+        hint,
+        similarityCache,
+      );
       if (
         Math.abs(evidence.lexicalSimilarity - current.lexicalSimilarity) <
           1e-9 &&
@@ -552,6 +591,13 @@ function deduplicateRoutes(
 }
 
 export class StationCandidateService {
+  private lexicalCache = new Map<
+    string,
+    ReturnType<typeof lexicalSimilarities>
+  >();
+  readonly scoringWork = { computations: 0, cacheHits: 0 };
+  readonly similarityCache = new StationSimilarityCache();
+  readonly routeWork = { alignmentComparisons: 0, graphSearches: 0 };
   private graphLoads = new Map<string, Promise<RoutePathCandidate[]>>();
   private candidatePools = new Map<
     string,
@@ -615,6 +661,7 @@ export class StationCandidateService {
             m.mentionText,
             m.station,
             options.phoneticHints?.[m.mentionIndex],
+            this.similarityCache,
           ).lexicalSimilarity,
       );
       return [
@@ -694,28 +741,32 @@ export class StationCandidateService {
     context: StationContext,
     options: SequenceSearchOptions = {},
   ): Promise<StationCandidateDiagnostics> {
-    const lexicalCache = new Map<
-      string,
-      ReturnType<typeof lexicalSimilarities>
-    >();
+    const lexicalCache = this.lexicalCache;
     const cachedLexical = (
       mention: string,
       station: Station,
       hint?: string | null,
     ) => {
-      const key = `${mention}\u0000${station.id}\u0000${hint ?? ""}`;
+      const key = `${options.matchingStrategy ?? "strict"}\u0000${mention}\u0000${station.id}\u0000${hint ?? ""}`;
       let value = lexicalCache.get(key);
       if (!value) {
-        value = lexicalSimilarities(mention, station, hint);
+        this.scoringWork.computations++;
+        value = lexicalSimilarities(
+          mention,
+          station,
+          hint,
+          this.similarityCache,
+        );
         if (
           options.matchingStrategy === "contained" &&
           !localizedStationSimilarity(mention, station)
         ) {
           value = {
             ...value,
-            nameSimilarity: bestContainedSimilarity(
-              normalizeStationName(mention),
-              normalizeStationName(station.name),
+            nameSimilarity: this.similarityCache.similarity(
+              this.similarityCache.normalize(mention, "name"),
+              this.similarityCache.normalize(station.name, "name"),
+              true,
             ),
           };
           value.lexicalSimilarity = Math.max(
@@ -725,7 +776,7 @@ export class StationCandidateService {
           );
         }
         lexicalCache.set(key, value);
-      }
+      } else this.scoringWork.cacheHits++;
       return value;
     };
     const totalStartedAt = Date.now();
@@ -830,8 +881,16 @@ export class StationCandidateService {
       [...stations]
         .sort(
           (left, right) =>
-            stationKanaSimilarity(phoneticHints[index] ?? "", right.kana) -
-            stationKanaSimilarity(phoneticHints[index] ?? "", left.kana),
+            stationKanaSimilarity(
+              phoneticHints[index] ?? "",
+              right.kana,
+              this.similarityCache,
+            ) -
+            stationKanaSimilarity(
+              phoneticHints[index] ?? "",
+              left.kana,
+              this.similarityCache,
+            ),
         )
         .slice(0, STATION_SEQUENCE_LIMITS.phoneticCandidatesPerMention),
     );
@@ -867,11 +926,24 @@ export class StationCandidateService {
       (this.repository.getCostMetrics?.().rowsReturned ?? pool.length) -
       (initialCost?.rowsReturned ?? 0);
     const candidateGenerationMs = Date.now() - candidateGenerationStartedAt;
+    console.info("station_search_work", {
+      phase: "station candidate generation",
+      scope: "job_cumulative",
+      source: this.repository.getCostMetrics?.().candidateSource,
+      idsRetrieved:
+        this.repository.getCostMetrics?.().work?.candidateIdsRetrieved,
+      prefilterChecks:
+        this.repository.getCostMetrics?.().work?.candidatePrefilterChecks,
+      phoneticScoringPairs:
+        this.repository.getCostMetrics?.().work?.candidateSimilarityPairs,
+      phoneticCacheHits:
+        this.repository.getCostMetrics?.().work?.phoneticCacheHits,
+    });
     const eligiblePool = pool.filter((station) =>
       isEligibleStationMention(station, transcription),
     );
     const initial = eligiblePool.map((station) =>
-      scoreStation(station, transcription, context),
+      scoreStation(station, transcription, context, this.similarityCache),
     );
     const hardAnchorNamesByMention = (mentionTexts ?? []).map(
       (mention, index) => {
@@ -881,7 +953,12 @@ export class StationCandidateService {
         return new Set(
           (perMentionPools[index] ?? [])
             .filter((station) => {
-              const similarities = lexicalSimilarities(mention, station);
+              const similarities = lexicalSimilarities(
+                mention,
+                station,
+                null,
+                this.similarityCache,
+              );
               return (
                 similarities.nameSimilarity === 1 ||
                 similarities.kanaSimilarity === 1
@@ -921,6 +998,7 @@ export class StationCandidateService {
     let alignmentComparisonCount = 0;
     const countComparison = (): void => {
       alignmentComparisonCount += 1;
+      this.routeWork.alignmentComparisons++;
     };
     const lineLookupStartedAt = Date.now();
     const lineCandidateSeeds: LineCandidateSeed[] = perMentionPools.flatMap(
@@ -977,6 +1055,7 @@ export class StationCandidateService {
                     boundNamesByMention,
                     countComparison,
                     cachedLexical,
+                    this.similarityCache,
                   ),
             )
             .filter((route): route is RoutePathCandidate => route !== null);
@@ -997,6 +1076,7 @@ export class StationCandidateService {
                   mention,
                   station,
                   phoneticHints[mentionIndex],
+                  this.similarityCache,
                 ),
               }))
               .filter((c) => c.lexicalSimilarity >= 0.5)
@@ -1071,6 +1151,7 @@ export class StationCandidateService {
                     boundNamesByMention,
                     countComparison,
                     cachedLexical,
+                    this.similarityCache,
                   ),
             )
             .filter((route): route is RoutePathCandidate => route !== null);
@@ -1144,7 +1225,9 @@ export class StationCandidateService {
       boundNamesByMention.filter((name): name is string => name !== null),
     );
     const candidates = [...combined.values()]
-      .map((station) => scoreStation(station, transcription, context))
+      .map((station) =>
+        scoreStation(station, transcription, context, this.similarityCache),
+      )
       .map((candidate): StationCandidate => {
         const route = routeById.get(candidate.station.id);
         if (route === undefined) {
@@ -1269,6 +1352,7 @@ export class StationCandidateService {
             mentionText,
             station,
             phoneticHints[mentionIndex],
+            this.similarityCache,
           );
           const bound = boundNamesByMention[mentionIndex] === station.name;
           const supportingRoutes = routeMatches.filter(
@@ -1387,6 +1471,33 @@ export class StationCandidateService {
       reconciliationMs: 0,
       totalMs,
     };
+    this.routeWork.graphSearches += graphSearchCount;
+    console.info("station_search_work", {
+      phase: "station candidate scoring",
+      scope: "job_cumulative",
+      ...this.scoringWork,
+      editDistanceCalls: this.similarityCache.work.editDistanceCalls,
+      editDistanceCells: this.similarityCache.work.editDistanceCells,
+      normalizationComputations:
+        this.similarityCache.work.normalizationComputations,
+      normalizationCacheHits: this.similarityCache.work.normalizationCacheHits,
+      similarityCacheHits: this.similarityCache.work.similarityCacheHits,
+      repositoryEditDistanceCells:
+        this.repository.getCostMetrics?.().work?.editDistanceCells,
+    });
+    console.info("station_search_work", {
+      phase: "route resolution / path search",
+      scope: "job_cumulative",
+      ...this.routeWork,
+      graphStatesExpanded:
+        this.repository.getCostMetrics?.().work?.graphStatesExpanded,
+      routeLexicalPairs:
+        this.repository.getCostMetrics?.().work?.routeLexicalPairs,
+      routeSimilarityCacheHits:
+        this.repository.getCostMetrics?.().work?.routeSimilarityCacheHits,
+      sequencePreRankComparisons:
+        this.repository.getCostMetrics?.().sequencePreRankComparisons,
+    });
     return {
       searchText,
       context,
@@ -1405,16 +1516,24 @@ export class StationCandidateService {
   }
 }
 
+export const createReconciliationWork = () => ({
+  occurrenceLists: 0,
+  candidatesExamined: 0,
+  routeMatchesExamined: 0,
+});
 export function reconcileStationMentionCandidates(
   sequenceDiagnostics: readonly StationCandidateDiagnostics[],
+  work = createReconciliationWork(),
+  similarityCache = new StationSimilarityCache(),
 ): Map<string, Station> {
   const startedAt = Date.now();
   const occurrences = new Map<string, MentionStationCandidate[][]>();
   for (const diagnostics of sequenceDiagnostics) {
     for (const candidates of diagnostics.mentionCandidates) {
+      work.occurrenceLists++;
       const rawMention = candidates[0]?.mentionText;
       if (rawMention === undefined) continue;
-      const key = stationMentionBindingKey(rawMention);
+      const key = similarityCache.normalize(rawMention, "name");
       const values = occurrences.get(key) ?? [];
       values.push(candidates);
       occurrences.set(key, values);
@@ -1425,9 +1544,10 @@ export function reconcileStationMentionCandidates(
     if (candidateLists.length === 1) {
       const candidates = candidateLists[0]!;
       const winner = candidates[0];
-      const runner = candidates.find(
-        (c) => c.station.name !== winner?.station.name,
-      );
+      const runner = candidates.find((c) => {
+        work.candidatesExamined++;
+        return c.station.name !== winner?.station.name;
+      });
       const strongRoute = sequenceDiagnostics.some(
         (d) =>
           d.routeCandidates.length <= 2 &&
@@ -1436,11 +1556,13 @@ export function reconcileStationMentionCandidates(
               r.score >= 0.85 &&
               r.orderConsistency === 1 &&
               (r.hardAnchorViolations ?? 0) === 0 &&
-              r.mentionMatches?.some(
-                (m) =>
+              r.mentionMatches?.some((m) => {
+                work.routeMatchesExamined++;
+                return (
                   m.mentionText === winner?.mentionText &&
-                  m.station.id === winner.station.id,
-              ),
+                  m.station.id === winner.station.id
+                );
+              }),
           ),
       );
       if (
@@ -1464,6 +1586,7 @@ export function reconcileStationMentionCandidates(
     >();
     for (const candidates of candidateLists) {
       for (const candidate of candidates.slice(0, 3)) {
+        work.candidatesExamined++;
         const routeEvidence =
           candidate.bestRouteScore !== null &&
           candidate.bestRouteScore >= 0.55 &&
@@ -1502,22 +1625,31 @@ export function reconcileStationMentionCandidates(
     )
       continue;
     bindings.set(key, winner.station);
+    const global = candidateLists.flat().find((c) => {
+      work.candidatesExamined++;
+      return c.station.name === winner.station.name;
+    });
     for (const candidates of candidateLists) {
       const mentionIndex = candidates[0]?.mentionIndex ?? 0;
       const mentionText = candidates[0]?.mentionText ?? key;
-      const local = candidates.find(
-        ({ station }) => station.name === winner.station.name,
+      const local = candidates.find(({ station }) => {
+        work.candidatesExamined++;
+        return station.name === winner.station.name;
+      });
+      const similarity = lexicalSimilarities(
+        mentionText,
+        winner.station,
+        null,
+        similarityCache,
       );
-      const global = candidateLists
-        .flat()
-        .find((c) => c.station.name === winner.station.name);
-      const similarity = lexicalSimilarities(mentionText, winner.station);
-      const localContradiction = candidates.some(
-        (c) =>
+      const localContradiction = candidates.some((c) => {
+        work.candidatesExamined++;
+        return (
           c.station.name !== winner.station.name &&
           (c.bestRouteScore ?? 0) >= 0.8 &&
-          Math.max(c.nameSimilarity, c.kanaSimilarity) >= 0.85,
-      );
+          Math.max(c.nameSimilarity, c.kanaSimilarity) >= 0.85
+        );
+      });
       if (
         localContradiction ||
         Math.max(similarity.nameSimilarity, similarity.kanaSimilarity) < 0.35
@@ -1538,7 +1670,10 @@ export function reconcileStationMentionCandidates(
         finalScore: Math.max(0.95, template.finalScore),
       };
       const remaining = candidates
-        .filter(({ station }) => station.name !== winner.station.name)
+        .filter(({ station }) => {
+          work.candidatesExamined++;
+          return station.name !== winner.station.name;
+        })
         .map((candidate) => ({ ...candidate, bound: false }));
       candidates.splice(0, candidates.length, reconciled, ...remaining);
     }

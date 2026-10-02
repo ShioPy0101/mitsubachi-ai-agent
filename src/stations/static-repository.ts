@@ -6,7 +6,7 @@ import {
   normalizeKana,
 } from "./normalization";
 import { rankLineEvidence, materializeLineRoutes } from "./line-routes";
-import { bestContainedSimilarity, stringSimilarity } from "./similarity";
+import { StationSimilarityCache } from "./similarity";
 import {
   comparePathCost,
   enumerateSegmentPaths,
@@ -26,40 +26,68 @@ import type {
 } from "./types";
 import type { RailwayIndexes } from "./static-indexes";
 import { normalizeLocalizedStationName } from "./language";
+import {
+  IndexedStaticPhoneticSource,
+  canReachPhoneticThreshold,
+  type PhoneticCandidateSource,
+} from "./phonetic-source";
+import { createRailwayWorkMetrics } from "./work-metrics";
 
 export type StaticRailwayJobCache = {
   positions: Map<string, PositionedStation[]>;
   lineRoutes: Map<string, Promise<RoutePathCandidate[]>>;
   graphRoutes: Map<string, Promise<RoutePathCandidate[]>>;
   sequenceRoutes: Map<string, Promise<RoutePathCandidate[]>>;
+  phoneticPools: Map<string, Promise<Station[]>>;
+  normalizedReadings: Map<string, string>;
+  routeSimilarities: Map<string, number>;
+  similarities: StationSimilarityCache;
+  work: ReturnType<typeof createRailwayWorkMetrics>;
 };
-export const createStaticRailwayJobCache = (): StaticRailwayJobCache => ({
-  positions: new Map(),
-  lineRoutes: new Map(),
-  graphRoutes: new Map(),
-  sequenceRoutes: new Map(),
-});
+export const createStaticRailwayJobCache = (): StaticRailwayJobCache => {
+  const work = createRailwayWorkMetrics();
+  return {
+    positions: new Map(),
+    lineRoutes: new Map(),
+    graphRoutes: new Map(),
+    sequenceRoutes: new Map(),
+    phoneticPools: new Map(),
+    normalizedReadings: new Map(),
+    routeSimilarities: new Map(),
+    similarities: new StationSimilarityCache(work),
+    work,
+  };
+};
 export class StaticRailwayRepository implements StationRepository {
   private rowsReturned = 0;
   private routeLoadingMs = 0;
   private hits = 0;
   private misses = 0;
   private sequencePreRankComparisons = 0;
+  private readonly phoneticSource: PhoneticCandidateSource;
   constructor(
     private readonly indexes: RailwayIndexes,
     private readonly cache = createStaticRailwayJobCache(),
-  ) {}
+    phoneticSource?: PhoneticCandidateSource,
+  ) {
+    this.phoneticSource =
+      phoneticSource ?? new IndexedStaticPhoneticSource(indexes);
+  }
   getQueryCount() {
-    return 0;
+    return this.phoneticSource.getCostMetrics().queries;
   }
   getCostMetrics() {
     return {
       rowsReturned: this.rowsReturned,
-      d1RowsRead: 0,
+      ...(this.phoneticSource.getCostMetrics().rowsRead === undefined
+        ? {}
+        : { d1RowsRead: this.phoneticSource.getCostMetrics().rowsRead }),
       lineRouteLoadingMs: this.routeLoadingMs,
       cacheHits: this.hits,
       cacheMisses: this.misses,
       sequencePreRankComparisons: this.sequencePreRankComparisons,
+      work: { ...this.cache.work },
+      candidateSource: this.phoneticSource.getCostMetrics(),
     };
   }
   private containing(text: string, kind: "name" | "kana"): Station[] {
@@ -115,7 +143,9 @@ export class StaticRailwayRepository implements StationRepository {
       const text = extractStationSearchText(rawText);
 
       const exact =
-        this.indexes.byName.get(normalizeStationName(rawText)) ??
+        this.indexes.byName.get(
+          this.cache.similarities.normalize(rawText, "name"),
+        ) ??
         this.indexes.byLocalizedName.get(
           normalizeLocalizedStationName(rawText),
         ) ??
@@ -207,42 +237,62 @@ export class StaticRailwayRepository implements StationRepository {
         continue;
       }
 
-      const reading = normalizeKana(extractStationSearchText(hint));
-
-      const phoneticCandidates = [...this.indexes.byId.values()]
-        .map((station) => {
-          const kana = station.normalizedKana;
-
-          return {
-            station,
-            // At equal similarity, retain the leading reading before a suffix
-            // (やすゆき → やす ahead of ゆき) within the bounded pool.
-            readingPrefix:
-              kana != null &&
-              kana.length > 0 &&
-              reading.startsWith(normalizeKana(kana)),
-            similarity:
-              kana == null
-                ? 0
-                : Math.max(
-                    stringSimilarity(reading, normalizeKana(kana)),
-                    bestContainedSimilarity(reading, normalizeKana(kana)),
-                  ),
-          };
-        })
-        .filter(({ similarity }) => similarity >= 0.6)
-        .sort(
-          (a, b) =>
-            b.similarity - a.similarity ||
-            Number(b.readingPrefix) - Number(a.readingPrefix) ||
-            Math.abs((a.station.normalizedKana?.length ?? 0) - reading.length) -
-              Math.abs(
-                (b.station.normalizedKana?.length ?? 0) - reading.length,
-              ) ||
-            a.station.id - b.station.id,
-        )
-        .slice(0, phoneticLimit)
-        .map(({ station }) => station);
+      let reading = this.cache.normalizedReadings.get(hint);
+      if (reading === undefined) {
+        reading = normalizeKana(extractStationSearchText(hint));
+        this.cache.normalizedReadings.set(hint, reading);
+      } else this.cache.work.normalizedReadingCacheHits++;
+      const key = reading;
+      let load = this.cache.phoneticPools.get(key);
+      if (!load) {
+        const normalizedReading = reading;
+        load = (async () => {
+          const ids = await this.phoneticSource.findIds(normalizedReading);
+          this.cache.work.candidateIdsRetrieved += ids.length;
+          const ranked = [];
+          for (const id of ids) {
+            const station = this.indexes.byId.get(id);
+            if (!station)
+              throw new Error(
+                "Candidate index references a different static snapshot",
+              );
+            const kana = station.normalizedKana;
+            if (!kana) continue;
+            this.cache.work.candidatePrefilterChecks++;
+            if (!canReachPhoneticThreshold(normalizedReading, kana)) continue;
+            this.cache.work.candidateSimilarityPairs++;
+            // bestContainedSimilarity already includes full stringSimilarity.
+            const similarity = this.cache.similarities.similarity(
+              normalizedReading,
+              kana,
+              true,
+            );
+            if (similarity >= 0.6)
+              ranked.push({
+                station,
+                similarity,
+                readingPrefix: normalizedReading.startsWith(kana),
+              });
+          }
+          return ranked
+            .sort(
+              (a, b) =>
+                b.similarity - a.similarity ||
+                Number(b.readingPrefix) - Number(a.readingPrefix) ||
+                Math.abs(
+                  a.station.normalizedKana!.length - normalizedReading.length,
+                ) -
+                  Math.abs(
+                    b.station.normalizedKana!.length - normalizedReading.length,
+                  ) ||
+                a.station.id - b.station.id,
+            )
+            .map(({ station }) => station);
+        })();
+        this.cache.phoneticPools.set(key, load);
+        load.catch(() => this.cache.phoneticPools.delete(key));
+      } else this.cache.work.phoneticCacheHits++;
+      const phoneticCandidates = (await load).slice(0, phoneticLimit);
 
       phonetic.push(phoneticCandidates);
     }
@@ -347,8 +397,12 @@ export class StaticRailwayRepository implements StationRepository {
     const load = Promise.resolve().then(() => {
       // Score each station/mention once; shared paths reuse the same evidence.
       // This is a separate lexical co-occurrence hypothesis, never a binding.
-      const normalizedMentions = mentions.map(normalizeStationName);
-      const normalizedHints = hints.map((h) => (h ? normalizeKana(h) : null));
+      const normalizedMentions = mentions.map((m) =>
+        this.cache.similarities.normalize(m, "name"),
+      );
+      const normalizedHints = hints.map((h) =>
+        h ? this.cache.similarities.normalize(h, "kana") : null,
+      );
       const exactPathIds = new Set(
         normalizedMentions.flatMap((m) =>
           (this.indexes.byName.get(m) ?? []).flatMap((station) =>
@@ -359,26 +413,51 @@ export class StaticRailwayRepository implements StationRepository {
         ),
       );
       if (!exactPathIds.size) return []; // No anchor: retain the independent strict/graph result.
-      const paths = [...exactPathIds].map((id) =>
-        this.indexes.pathsById.get(id)!,
-      );
+      let budget = 0;
+      const paths = [...exactPathIds]
+        .map((id) => this.indexes.pathsById.get(id)!)
+        .filter((path) => {
+          const cost = 2 * mentions.length * path.stationIds.length;
+          if (
+            path.stationIds.length > STATION_SEQUENCE_LIMITS.routeLength ||
+            budget + cost > 20_000
+          )
+            return false;
+          budget += cost;
+          return true;
+        });
       let comparisons = 0;
       const scores = new Map<number, number[]>();
       for (const id of new Set(paths.flatMap((path) => path.stationIds))) {
         const station = this.indexes.byId.get(id)!;
         scores.set(
           station.id,
-          normalizedMentions.map((mention, i) =>
-            Math.max(
-              bestContainedSimilarity(mention, station.normalizedName),
-              normalizedHints[i] && station.normalizedKana
-                ? bestContainedSimilarity(
-                    normalizedHints[i]!,
+          normalizedMentions.map((mention, i) => {
+            const hint = normalizedHints[i];
+            const key = `${mention.length}:${mention}:${hint ?? ""}:${id}`;
+            const old = this.cache.routeSimilarities.get(key);
+            if (old !== undefined) {
+              this.cache.work.routeSimilarityCacheHits++;
+              return old;
+            }
+            this.cache.work.routeLexicalPairs++;
+            const score = Math.max(
+              this.cache.similarities.similarity(
+                mention,
+                station.normalizedName,
+                true,
+              ),
+              hint && station.normalizedKana
+                ? this.cache.similarities.similarity(
+                    hint,
                     station.normalizedKana,
+                    true,
                   ) * 0.5
                 : 0,
-            ),
-          ),
+            );
+            this.cache.routeSimilarities.set(key, score);
+            return score;
+          }),
         );
       }
       const lines = paths
@@ -585,6 +664,7 @@ export class StaticRailwayRepository implements StationRepository {
         goals,
         graph,
         maxCandidates * 2,
+        () => this.cache.work.graphStatesExpanded++,
       );
       for (const path of found)
         endpointPriority.set(

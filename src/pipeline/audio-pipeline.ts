@@ -1,10 +1,6 @@
 import { classifyFailure } from "./failures";
 import railwayManifest from "../../data/generated/manifest.json";
-import {
-  StaticRailwayRepository,
-  createStaticRailwayJobCache,
-} from "../stations/static-repository";
-import { railwayIndexes } from "../stations/static-data";
+import { createRailwayRepository } from "../db/railway-repository";
 import { newExecutionContext, type ExecutionContext } from "./modes";
 import {
   stationNameOccurrences,
@@ -519,9 +515,9 @@ export async function processJob(
     showDemoProgress,
   );
 
-  const railwayCache = createStaticRailwayJobCache();
+  const railwayRepository = createRailwayRepository(env.DB);
   const correctionKey =
-    `static:${railwayManifest.sourceSha256}:engine-v6-boundary-reading-ties:` +
+    `indexed:${railwayManifest.sourceSha256}:engine-v7-indexed-phonetic:` +
     transcriptionText +
     "\n" +
     analysis.mentions
@@ -540,7 +536,7 @@ export async function processJob(
       "station_candidates_sequences",
       (signal) =>
         new StationCorrectionEngine(
-          () => new StaticRailwayRepository(railwayIndexes, railwayCache),
+          () => railwayRepository,
         ).run(
           {
             transcription: transcriptionText,

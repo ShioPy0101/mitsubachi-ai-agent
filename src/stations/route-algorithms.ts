@@ -102,6 +102,7 @@ export function enumerateSegmentPaths(
   goals: readonly PositionedStation[],
   graph: CachedRouteGraph,
   limit: number,
+  onExpand?: () => void,
 ): SegmentPath[] {
   const connectionsBySegment = graph.byFromSegment;
   const frontier: SearchState[] = [];
@@ -127,6 +128,7 @@ export function enumerateSegmentPaths(
     const current = heapPop(frontier);
     if (current === undefined) break;
     expanded += 1;
+    onExpand?.();
 
     for (const goal of goals) {
       if (goal.lineId !== current.lineId) continue;

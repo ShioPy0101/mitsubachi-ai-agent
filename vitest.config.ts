@@ -5,6 +5,8 @@ export default defineWorkersConfig({
     setupFiles: ["tests/no-network.ts"],
     include: ["tests/**/*.test.ts"],
     exclude: [
+      "tests/d1-candidate-index.integration.test.ts",
+      "tests/indexed-phonetic.test.ts",
       "tests/correction-evidence.test.ts",
       "tests/local-railway.test.ts",
       "tests/local-policies.test.ts",
